@@ -1,30 +1,64 @@
 import numpy as np
 
-num_agents = 1000
-agent_thetas = np.zeros(num_agents) + 0.0
+learning_rules = ["policy_gradient", "q_learning"]
+learning_rule = learning_rules[1]
 
-fix_all_but_one = True
-agent_thetas[0] = 0.2
 
-# Btw and the initialization matters then too
+num_agents = 10000
 
-# Does it push all theta toward 0.5 when num agents is high because your action basically makes no difference
-# ie either 0 or 1 doesn't really affect the reward
-# No in fact it just leaves your thing where it was before - because no push or pull in either direction.
-# Why does it push to 0.5 with higher lr?
-# No it does push upwards in the right direction, just really, really slowly
+# fix_all_but_one = True
+fix_all_but_one = False
 
-print(agent_thetas)
 
-lr = 0.0001 # Note: low lr can take long to converge. But higher lr can lead to instability/convergence toward 0 (as policy action becomes less likely it is less and less explored... but it can make a sudden jump from 0.01 to 0.99 or so if it actually makes that exploration step.
+if learning_rule == "policy_gradient":
+    agent_thetas = np.zeros(num_agents) + 0.5
 
-# eps = 1e-3
-eps = 1e-3
+    if fix_all_but_one:
+        agent_thetas[0] = 0.5
 
-train_iters = 10000
+    # Btw and the initialization matters then too
+
+    # Does it push all theta toward 0.5 when num agents is high because your action basically makes no difference
+    # ie either 0 or 1 doesn't really affect the reward
+    # No in fact it just leaves your thing where it was before - because no push or pull in either direction.
+    # Why does it push to 0.5 with higher lr?
+    # No it does push upwards in the right direction, just really, really slowly
+
+    print(agent_thetas)
+
+elif learning_rule == "q_learning":
+    agent_q_vals = np.random.uniform(-0.5, 0.5, (num_agents, 2))  + num_agents #optimistic start for explore # Note can't just use np.zeros because argmax starts picking the first option more. This can lead to faster or slower learning
+
+
+
+
+lr = 0.001 # Note: low lr can take long to converge. But higher lr can lead to instability/convergence toward 0 (as policy action becomes less likely it is less and less explored... but it can make a sudden jump from 0.01 to 0.99 or so if it actually makes that exploration step.
+
+exploration_eps = 0.1
+num_stable_eps = 1e-3
+
+
+train_iters = 50000
 for iter in range(train_iters):
 
-    actions = np.random.binomial(np.ones(num_agents, dtype='int32'), agent_thetas)
+
+    # Get actions
+    if learning_rule == "policy_gradient":
+        actions = np.random.binomial(np.ones(num_agents, dtype='int32'), agent_thetas)
+    elif learning_rule == "q_learning":
+        rand_actions = np.random.binomial(np.ones(num_agents, dtype='int32'), np.zeros(num_agents, dtype='int32') + 0.5)
+        do_rand = np.random.uniform(0.0, 1.0, num_agents) < exploration_eps
+        do_act = 1 - do_rand
+        actions = do_act * np.argmax(agent_q_vals, axis=1) + do_rand * rand_actions
+        # print(do_rand * 1)
+        # actions = np.argmax(agent_q_vals, axis=1)
+        # print(actions)
+
+    # Yeh q learning is fine when you fix all the rest of the agents. Not finicky regarding the positive reward scaling.
+
+
+
+
     # print(actions)
     # common_reward = actions.sum() / num_agents # right now a float, a single value, but we can certainly make it an array and use element wise *
     common_reward = actions.sum() # with this formulation you don't have the diminishing scale of reward problem, though relative reward (or reward:noise ratio) is still diminishing
@@ -32,28 +66,61 @@ for iter in range(train_iters):
     # that's why init others to 0.0 works super well but init all others to 1.0 results in oscillation because gradient too big
     # but doesn't affect theoretical convergence as long as you throw stuff into a constant/scaling learning rate hyperparam
 
-    # does this +/- make a difference? Basically an advantage estimate. Not really
-    # common_reward = common_reward * 2 - 1
 
-    policy_gradients = common_reward * ((actions / agent_thetas) - (1 - actions) / (1 - agent_thetas))
+    # does this +/- make a difference? Basically an advantage estimate. Yes it does. Can help greatly with avoiding instability.
+    # common_reward = common_reward * 2 - num_agents
+
+    if learning_rule == "policy_gradient":
+
+        policy_gradients = common_reward * ((actions / agent_thetas) - (1 - actions) / (1 - agent_thetas))
+
+        if fix_all_but_one:
+            agent_thetas[0] += lr * policy_gradients[0]
+            agent_thetas[0] = np.minimum(agent_thetas[0], 1.0 - num_stable_eps)
+            agent_thetas[0] = np.maximum(agent_thetas[0], 0.0 + num_stable_eps)
+        else:
+            agent_thetas += lr * policy_gradients
+
+            # clipping to avoid numerical instability
+            agent_thetas = np.minimum(agent_thetas, 1.0 - num_stable_eps)
+            agent_thetas = np.maximum(agent_thetas, 0.0 + num_stable_eps)
+
+    elif learning_rule == "q_learning":
+        rews = common_reward * np.ones(num_agents)
+        # print(agent_q_vals)
+        # print(actions)
+        # print(np.take(agent_q_vals, indices=actions))
+        if fix_all_but_one:
+            agent_q_vals[0, 0] += (lr * (rews - agent_q_vals[:, 0]) * (
+                        1 - actions))[0]
+            agent_q_vals[0, 1] += (lr * (rews - agent_q_vals[:,
+                                               1]) * actions)[0]  # only update if we did the action
+        else:
+            agent_q_vals[:,0] += lr * (rews - agent_q_vals[:,0]) * (1-actions)
+            agent_q_vals[:,1] += lr * (rews - agent_q_vals[:,1]) * actions # only update if we did the action
 
 
     if iter % 1000 == 0:
         print("Iter: {}".format(iter))
         print(common_reward)
         # print(policy_gradients)
-        # print(agent_thetas)
+        if learning_rule == "policy_gradient":
+            if fix_all_but_one:
+                print(agent_thetas[0])
+        elif learning_rule == "q_learning":
+            if fix_all_but_one:
+                print(agent_q_vals[0])
 
+
+
+if learning_rule == "policy_gradient":
     if fix_all_but_one:
-        agent_thetas[0] += lr * policy_gradients[0]
-        agent_thetas[0] = np.minimum(agent_thetas[0], 1.0 - eps)
-        agent_thetas[0] = np.maximum(agent_thetas[0], 0.0 + eps)
+        print(agent_thetas[0])
     else:
-        agent_thetas += lr * policy_gradients
+        print(agent_thetas)
 
-        # clipping to avoid numerical instability
-        agent_thetas = np.minimum(agent_thetas, 1.0 - eps)
-        agent_thetas = np.maximum(agent_thetas, 0.0 + eps)
-
-
-print(agent_thetas)
+elif learning_rule == "q_learning":
+    if fix_all_but_one:
+        print(agent_q_vals[0])
+    else:
+        print(agent_q_vals)
