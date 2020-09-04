@@ -4,7 +4,7 @@ learning_rules = ["policy_gradient", "q_learning"]
 learning_rule = learning_rules[1]
 
 envs = ["choose1withgradient", "simplecoop"]
-env = envs[1]
+env = envs[0]
 
 # for simplecoop env
 defect_reward_proportion = 0.59
