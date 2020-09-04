@@ -3,11 +3,19 @@ import numpy as np
 learning_rules = ["policy_gradient", "q_learning"]
 learning_rule = learning_rules[1]
 
+envs = ["choose1withgradient", "simplecoop"]
+env = envs[1]
 
-num_agents = 10000
+# for simplecoop env
+defect_reward_proportion = 0.59
+
+num_agents = 10000 #10000
 
 # fix_all_but_one = True
 fix_all_but_one = False
+
+def average(l):
+    return (sum(l) / len(l))
 
 
 if learning_rule == "policy_gradient":
@@ -57,22 +65,40 @@ for iter in range(train_iters):
     # Yeh q learning is fine when you fix all the rest of the agents. Not finicky regarding the positive reward scaling.
 
 
+    # Let's try now the simple coord problem where 0 is defect and gets constant 1 reward, 1 is coord and reward depends on num agents coordinating
+    # or if you want to do the sum formulation... no need, we can just increase the learning rate.
+    # No maybe there is a need because of numerical precision/stability issues
+    # Then we can do coord = sum of num coords reward, and defect = num agents / 2 reward always. in this case defect is 50% of max coord reward.
+    # We can try diff thresholds like 50%, 30% (easier), 70% (harder), in between, and see what happens as num agents increases.
 
 
-    # print(actions)
-    # common_reward = actions.sum() / num_agents # right now a float, a single value, but we can certainly make it an array and use element wise *
-    common_reward = actions.sum() # with this formulation you don't have the diminishing scale of reward problem, though relative reward (or reward:noise ratio) is still diminishing
-    # yeah and then you have a problem of massive gradients because of the total reward being big, and thus drastic changes in policy
-    # that's why init others to 0.0 works super well but init all others to 1.0 results in oscillation because gradient too big
-    # but doesn't affect theoretical convergence as long as you throw stuff into a constant/scaling learning rate hyperparam
 
 
-    # does this +/- make a difference? Basically an advantage estimate. Yes it does. Can help greatly with avoiding instability.
-    # common_reward = common_reward * 2 - num_agents
+    if env == "choose1withgradient":
+        # print(actions)
+        # common_reward = actions.sum() / num_agents # right now a float, a single value, but we can certainly make it an array and use element wise *
+        common_reward = actions.sum() # with this formulation you don't have the diminishing scale of reward problem, though relative reward (or reward:noise ratio) is still diminishing
+        # yeah and then you have a problem of massive gradients because of the total reward being big, and thus drastic changes in policy
+        # that's why init others to 0.0 works super well but init all others to 1.0 results in oscillation because gradient too big
+        # but doesn't affect theoretical convergence as long as you throw stuff into a constant/scaling learning rate hyperparam
+
+        # does this +/- make a difference? Basically an advantage estimate. Yes it does. Can help greatly with avoiding instability.
+        # common_reward = common_reward * 2 - num_agents
+
+        rewards = common_reward * np.ones(num_agents)
+    elif env == "simplecoop":
+        # only cooperators get the cooperation reward here. So not a social dilemma, more of a coordination problem, the challenge
+        # being you only realize cooperation is optimal when you get a bunch of agents who happen to cooperate
+        num_cooperators = actions.sum()
+        coop_reward = num_cooperators
+        defect_reward = num_agents * defect_reward_proportion
+
+        rewards = defect_reward * (1-actions) + coop_reward * actions # depends on action choice and num cooperators
+
 
     if learning_rule == "policy_gradient":
 
-        policy_gradients = common_reward * ((actions / agent_thetas) - (1 - actions) / (1 - agent_thetas))
+        policy_gradients = rewards * ((actions / agent_thetas) - (1 - actions) / (1 - agent_thetas))
 
         if fix_all_but_one:
             agent_thetas[0] += lr * policy_gradients[0]
@@ -86,7 +112,8 @@ for iter in range(train_iters):
             agent_thetas = np.maximum(agent_thetas, 0.0 + num_stable_eps)
 
     elif learning_rule == "q_learning":
-        rews = common_reward * np.ones(num_agents)
+        # rews = reward * np.ones(num_agents)
+        rews = rewards
         # print(agent_q_vals)
         # print(actions)
         # print(np.take(agent_q_vals, indices=actions))
@@ -102,7 +129,8 @@ for iter in range(train_iters):
 
     if iter % 1000 == 0:
         print("Iter: {}".format(iter))
-        print(common_reward)
+        print("Average Reward: {}".format(average(rewards)))
+        print("Average Action: {}".format(average(actions)))
         # print(policy_gradients)
         if learning_rule == "policy_gradient":
             if fix_all_but_one:
@@ -110,7 +138,6 @@ for iter in range(train_iters):
         elif learning_rule == "q_learning":
             if fix_all_but_one:
                 print(agent_q_vals[0])
-
 
 
 if learning_rule == "policy_gradient":
