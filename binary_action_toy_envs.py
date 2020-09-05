@@ -1,7 +1,7 @@
 import numpy as np
 
 learning_rules = ["policy_gradient", "q_learning"]
-learning_rule = learning_rules[1]
+learning_rule = learning_rules[0]
 
 envs = ["choose1withgradient", "simplecoop"]
 env = envs[0]
@@ -41,12 +41,13 @@ elif learning_rule == "q_learning":
 
 
 lr = 0.001 # Note: low lr can take long to converge. But higher lr can lead to instability/convergence toward 0 (as policy action becomes less likely it is less and less explored... but it can make a sudden jump from 0.01 to 0.99 or so if it actually makes that exploration step.
+#  Also generally need lower lr for policy gradient
 
 exploration_eps = 0.1
 num_stable_eps = 1e-3
 
 
-train_iters = 50000
+train_iters = 500000
 for iter in range(train_iters):
 
 
@@ -82,8 +83,11 @@ for iter in range(train_iters):
         # that's why init others to 0.0 works super well but init all others to 1.0 results in oscillation because gradient too big
         # but doesn't affect theoretical convergence as long as you throw stuff into a constant/scaling learning rate hyperparam
 
-        # does this +/- make a difference? Basically an advantage estimate. Yes it does. Can help greatly with avoiding instability.
-        # common_reward = common_reward * 2 - num_agents
+        # does this +/- make a difference? Basically an advantage estimate. Yes it does. Can help greatly with avoiding instability for policy grad because of way policy grad works
+        common_reward = common_reward * 2 - num_agents
+        # Q learning seems to do better without this
+
+        common_reward /= num_agents # average reward formulation
 
         rewards = common_reward * np.ones(num_agents)
     elif env == "simplecoop":

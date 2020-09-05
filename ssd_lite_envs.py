@@ -9,8 +9,16 @@ from DQN import DQNAgent, NeuralNet
 envs = ["harvestlite", "cleanuplite"]
 env = envs[0]
 
-num_dqn_agents = 4
+num_dqn_agents = 100
 
+altruism = True
+# Yeh we can learn in this env with altruism. With game length 50 on harvest 2 agents getting 25 avg which I think is optimal
+# with 0.3 regrowth ~20 optimal
+# 0.2 we getting around just under 15? Needs like 300 epochs or so. And not very stable. Should be able to get around 16 optimal
+
+# I think avg formulation is the right way to go so you avoid tweaking the lr. It still preserves signal-noise ratio
+
+# lol we need an initialization where random action is not optimal.
 
 def average(lst):
     return sum(lst) / len(lst)
@@ -29,7 +37,7 @@ def average(lst):
 
 
 class ResourceGame:
-    def __init__(self, agents, states_actions_dims, game_length:int, regrowth_rate=0.5,
+    def __init__(self, agents, states_actions_dims, game_length:int, regrowth_rate=0.2,
                  resource_cap_multiplier=2.0):
         self.agents = agents
         self.states_actions_dims = states_actions_dims
@@ -68,6 +76,9 @@ class ResourceGame:
             rewards = actions # 1 reward for everyone who consumed
         else:
             rewards = actions * (self.resource / resource_consumed)
+
+        if altruism:
+            rewards = average(rewards) * np.ones_like(rewards)
 
         self.resource -= resource_consumed
         self.resource = max(self.resource, 0)
@@ -113,8 +124,10 @@ class ResourceGame:
                 print(actions)
                 print(rewards)
 
-        print(self.agent_episode_rewards)
-
+        if altruism:
+            print(average(self.agent_episode_rewards))
+        else:
+            print(self.agent_episode_rewards)
 
         # self.agent1.episode_reward_history.append(self.agent1.episode_reward)
         # self.agent2.episode_reward_history.append(self.agent2.episode_reward)
@@ -166,6 +179,9 @@ class CleanupGame:
             rewards = actions # 1 reward for everyone who consumed
         else:
             rewards = actions * (self.resource / resource_consumed)
+
+        if altruism:
+            rewards = average(rewards) * np.ones_like(rewards)
 
         self.resource -= resource_consumed
         self.resource = max(self.resource, 0)
@@ -227,8 +243,10 @@ class CleanupGame:
 
             state = new_state
 
-
-        print(self.agent_episode_rewards)
+        if altruism:
+            print(average(self.agent_episode_rewards))
+        else:
+            print(self.agent_episode_rewards)
 
 
 if env == "harvestlite":
@@ -245,9 +263,9 @@ agents = []
 #     agent_pool.append(Agent(states_actions_dims))
 for _ in range(num_dqn_agents):
     neural_net = NeuralNet(input_size= states_actions_dims[0],#len(states_actions_dims)-1,
-                           hidden_size=64,
+                           hidden_size=8,
                            output_size=states_actions_dims[-1])
-    agents.append(DQNAgent(0, 1, neural_net))
+    agents.append(DQNAgent(0, 1, neural_net, lr=0.01))
 
 epochs = 5000
 
