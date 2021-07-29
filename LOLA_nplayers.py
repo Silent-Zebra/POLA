@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-init_state_representation = 2 # Change here if you want different number to represent the initial state
+init_state_representation = 2  # Change here if you want different number to represent the initial state
 rollout_len = 50
+
 
 def bin_inttensor_from_int(x, n):
     return torch.Tensor([int(d) for d in (str(bin(x))[2:]).zfill(n)])
@@ -22,17 +22,16 @@ def build_bin_matrix(n, size):
     return bin_mat
 
 
-
 def build_p_vector(n, size, pc, bin_mat):
     pc = pc.repeat(size).reshape(size, n)
     pd = 1 - pc
     # p = torch.zeros(size)
-    p = torch.prod(bin_mat * pc + (1-bin_mat) * pd, dim=1)
+    p = torch.prod(bin_mat * pc + (1 - bin_mat) * pd, dim=1)
     return p
 
 
 def ipdn(n=2, gamma=0.96, contribution_factor=0.6, contribution_scale=False):
-    dims = [2**n + 1 for _ in range(n)]
+    dims = [2 ** n + 1 for _ in range(n)]
     state_space = dims[0]
     # print(dims)
 
@@ -43,14 +42,16 @@ def ipdn(n=2, gamma=0.96, contribution_factor=0.6, contribution_scale=False):
     # contribution_factor = 1.7
     # contribution_factor = 0.6 * n
 
-    bin_mat = build_bin_matrix(n, size=state_space-1)
+    bin_mat = build_bin_matrix(n, size=state_space - 1)
 
-    payout_vectors = torch.zeros((n, state_space-1)) # one vector for each player, each player has n dim vector for payouts in each of the n states
+    payout_vectors = torch.zeros((n,
+                                  state_space - 1))  # one vector for each player, each player has n dim vector for payouts in each of the n states
     for agent in range(n):
-        for state in range(state_space-1):
+        for state in range(state_space - 1):
             l = bin_inttensor_from_int(state, n)
             total_contrib = sum(l)
-            agent_payout = total_contrib * contribution_factor / n - l[agent] # if agent contributed 1, subtract 1
+            agent_payout = total_contrib * contribution_factor / n - l[
+                agent]  # if agent contributed 1, subtract 1
             agent_payout -= adjustment_to_make_rewards_negative
             payout_vectors[agent][state] = agent_payout
 
@@ -62,7 +63,8 @@ def ipdn(n=2, gamma=0.96, contribution_factor=0.6, contribution_scale=False):
         init_pc = torch.zeros(n)
         for i in range(n):
             # p_i_0 = torch.sigmoid(th[i][0:1])
-            p_i_0 = torch.sigmoid(th[i][-1]) # so start state is at the end, different from the 2p ipd formulation
+            p_i_0 = torch.sigmoid(th[i][
+                                      -1])  # so start state is at the end, different from the 2p ipd formulation
             # Why did I do it this way? It's inconsistent with the 2p ipd setup
             # print(torch.sigmoid(th[i][-1]))
             init_pc[i] = p_i_0
@@ -76,36 +78,34 @@ def ipdn(n=2, gamma=0.96, contribution_factor=0.6, contribution_scale=False):
         # Then the last state which is 1000...000 is the start state
         # So we're kinda working backwards here... CCCC...CCC is the second last table/matrix/vector entry
 
-        p = build_p_vector(n, state_space-1, init_pc, bin_mat)
+        p = build_p_vector(n, state_space - 1, init_pc, bin_mat)
         # p = build_p_vector(n=n, size=state_space-1, pc=init_pc)
-
 
         # TODO this part can almost certainly be optimized
         # Probabilities in the states other than the start state
-        all_p_is = torch.zeros((n, state_space-1))
+        all_p_is = torch.zeros((n, state_space - 1))
         for i in range(n):
             p_i = torch.sigmoid(th[i][0:-1])
             # p_i = torch.reshape(torch.sigmoid(th[i][0:-1]), (-1, 1)) # or just -1 instead of -1,1
             all_p_is[i] = p_i
         # print(all_p_is.shape)
 
-
         # TODO is there a way to optimize this part and remove the loop?
         # Transition Matrix
         # Remember now our transition matrix top left is DDD...D to DDD...D
         # 0 is defect in this formulation, 1 is contributing a resource value of 1
         # if you want to think of it that way
-        P = torch.zeros((state_space-1, state_space-1))
+        P = torch.zeros((state_space - 1, state_space - 1))
         for curr_state in range(state_space - 1):
             i = curr_state
             # pc = all_p_is[:, i, :]
             pc = all_p_is[:, i]
-            p_new = build_p_vector(n, state_space-1, pc, bin_mat)
+            p_new = build_p_vector(n, state_space - 1, pc, bin_mat)
             # p_new = build_p_vector(n, state_space-1, pc)
             P[i] = p_new
 
-
-        M = torch.matmul(p, torch.inverse(torch.eye(state_space-1) - gamma * P))
+        M = torch.matmul(p,
+                         torch.inverse(torch.eye(state_space - 1) - gamma * P))
 
         # Remember M is just the steady state probabilities for each of the states
         # It is a vector, not a matrix.
@@ -124,7 +124,8 @@ def ipdn(n=2, gamma=0.96, contribution_factor=0.6, contribution_scale=False):
 # Of course these updates assume we have access to the reward model.
 
 def ipd2_with_func_approx(gamma=0.96):
-    dims = [2, 2] # now each agent gets a vector observation, a 2 dimensional vector
+    dims = [2,
+            2]  # now each agent gets a vector observation, a 2 dimensional vector
     # imagine something like [0,1] instead of CD which previously was just a 1D value such as 2
 
     # Instead of theta just being a tabular policy, we will use a neural net
@@ -134,18 +135,19 @@ def ipd2_with_func_approx(gamma=0.96):
     payout_mat_2 = torch.t(payout_mat_1)
 
     def Ls(th):
-
         # Now theta needs to be neural net parameters which we'll optimize
         # Neural net will have output dim 1 to be consistent, it just outputs a prob of coop
         # to get the normalized probability of action C or D
         # Which means theta needs to be a list of NN params (one set of params for each agent)
 
-        init_state = torch.Tensor([[init_state_representation, init_state_representation]]) # repeat -1 n times, where n is num agents
+        init_state = torch.Tensor([[init_state_representation,
+                                    init_state_representation]])  # repeat -1 n times, where n is num agents
         # Every agent sees same state; P1 [action, P2 action, P3 action ...]
         # State 2 is start state
 
         # Action prob at start of the game (higher val = more likely to coop)
-        p_1_0 = th[0](init_state) # take theta 0 and pass init_state through it to get the action probs
+        p_1_0 = th[0](
+            init_state)  # take theta 0 and pass init_state through it to get the action probs
         # Do we need sigmoid? Depends how you set up the NN
         p_2_0 = th[1](init_state)
 
@@ -176,14 +178,11 @@ def ipd2_with_func_approx(gamma=0.96):
     return dims, Ls
 
 
-
-
-
-
-
-def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
+def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
+                                  contribution_scale=False):
     # Contribution game
-    dims = [n] * n # now each agent gets a vector observation, a n dimensional vector where each element is the action
+    dims = [
+               n] * n  # now each agent gets a vector observation, a n dimensional vector where each element is the action
     # of an agent, either 0 (defect) or 1 (coop) or 2 at the start of the game
     # print(dims)
 
@@ -201,13 +200,13 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
     else:
         assert contribution_factor > 1
 
-
     def Ls(th, num_iters=rollout_len):
 
         # In n player case we have to do stochastic rollout instead of matrix inversion
         # for expectation because the transition matrix blows up exponentially
 
-        init_state = torch.Tensor([[init_state_representation] * n]) # repeat -1 n times, where n is num agents
+        init_state = torch.Tensor([[
+                                       init_state_representation] * n])  # repeat -1 n times, where n is num agents
         # print(init_state)
         # Every agent sees same state; P1 [action, P2 action, P3 action ...]
 
@@ -220,7 +219,6 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         discounts = np.ones(num_iters)
         for i in range(num_iters):
             discounts[i] *= gamma ** i
-
 
         # First use contrib factor, keep everything exact, but make it contrib factor game.
         # Then once that working, do rollouts still with 2 players.
@@ -246,20 +244,18 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
                         policy = torch.sigmoid(th[i])[-1]
                     else:
 
-                        policy = torch.sigmoid(th[i])[int((state[0] * 2 + state[1]).item())]
+                        policy = torch.sigmoid(th[i])[
+                            int((state[0] * 2 + state[1]).item())]
                 else:
                     policy = th[i](state)
                 # single state policy, so just a prob of coop between 0 and 1
                 # print(policy)
                 policies[i] = policy
 
-
             policy_history[iter] = policies
 
-
-            actions = np.random.binomial(np.ones(n_agents, dtype=int), policies.detach().numpy())
-
-
+            actions = np.random.binomial(np.ones(n_agents, dtype=int),
+                                         policies.detach().numpy())
 
             state = torch.Tensor(actions)
 
@@ -289,31 +285,31 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
 
-
-
         G_ts = torch.zeros((num_iters, n_agents))
         for i in range(len(rewards)):
-            G_t = torch.FloatTensor((rewards[i:] * discounts[i:].reshape(-1,1)).sum(axis=0))
+            G_t = torch.FloatTensor(
+                (rewards[i:] * discounts[i:].reshape(-1, 1)).sum(axis=0))
 
             G_ts[i] = G_t
 
-
         # Discounted rewards, not sum of rewards which G_t is
-        gamma_t_r_ts = rewards * discounts.reshape(-1, 1) # implicit broadcasting done by numpy
+        gamma_t_r_ts = rewards * discounts.reshape(-1,
+                                                   1)  # implicit broadcasting done by numpy
 
-
-
-        p_act_given_state = trajectory.float() * policy_history + (1 - trajectory.float()) * (1 - policy_history)  # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
+        p_act_given_state = trajectory.float() * policy_history + (
+                    1 - trajectory.float()) * (
+                                        1 - policy_history)  # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
         # and when defect 0 is taken, we take 1-policy = prob of defect
 
         log_p_act = torch.log(p_act_given_state)
 
         # These are basically grad_i E[R_0^i] - naive learning loss
         # no LOLA loss here yet
-        losses_nl = (log_p_act * G_ts).sum(dim=0) # Negative because the formulation is a loss (in this codebase), not a reward
+        losses_nl = (log_p_act * G_ts).sum(
+            dim=0)  # Negative because the formulation is a loss (in this codebase), not a reward
         # G_ts gives you the inner sum of discounted rewards
 
-        log_p_times_G_t_matrix = torch.zeros((n_agents,n_agents))
+        log_p_times_G_t_matrix = torch.zeros((n_agents, n_agents))
         # so entry 0,0 is - (log_p_act[:,0] * G_ts[:,0]).sum(dim=0)
         # entry 1,1 is - (log_p_act[:,1] * G_ts[:,1]).sum(dim=0)
         # and so on
@@ -322,11 +318,11 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         # Be careful with dimensions/not to mix them up
         for i in range(n_agents):
             for j in range(n_agents):
-                log_p_times_G_t_matrix[i][j] = (log_p_act[:,i] * G_ts[:,j]).sum(dim=0)
+                log_p_times_G_t_matrix[i][j] = (
+                            log_p_act[:, i] * G_ts[:, j]).sum(dim=0)
         # Remember that the grad corresponds to the log_p and the R_t corresponds to the G_t
         # We can switch the log_p and G_t (swap log_p i to j and vice versa) if we want to change order
         # maybe to be more consistent with other term
-
 
         # For lola let's try just sum of y^t r_t
         # No I think we do need to do the two separate terms
@@ -343,7 +339,6 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         # But maybe just get 2p working first. Once 2p actually learns LOLA/TFT
         # Then scale/generalize.
 
-
         # For the grad_1 grad_2 term:
         log_p_act_sums_0_to_t = torch.zeros((num_iters, n_agents))
         # the way this will work is that the ith entry (row) in this log_p_act_sums_0_to_t
@@ -352,10 +347,9 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         # for each agent
         # later we will product them (but in pairwise combinations!)
         for i in range(num_iters):
-            single_sum = log_p_act[:i+1].sum(dim=0)
+            single_sum = log_p_act[:i + 1].sum(dim=0)
             # print(single_sum)
             log_p_act_sums_0_to_t[i] = single_sum
-
 
         # TODO: pairwise products instead of product of everything, which is not correct
         # TODO write out the formal math derivation (well the SOS paper already did it, no?)
@@ -369,23 +363,54 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         # So then you also want grad_1 grad_3 of R_3
         # and so on
 
-
         grad_1_grad_2_matrix = torch.zeros((n_agents, n_agents))
         for i in range(n_agents):
             for j in range(n_agents):
                 # This negative formulation of rewards is ridiculous
                 # TODO refactor the codebase without any negative rewards, redo the whole thing
                 # gradient ascent instead of descent
-                grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,j] * log_p_act_sums_0_to_t[:,i] * log_p_act_sums_0_to_t[:,j]).sum(dim=0)
+                grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,
+                                              j] * log_p_act_sums_0_to_t[:,
+                                                   i] * log_p_act_sums_0_to_t[:,
+                                                        j]).sum(dim=0)
         # Here entry i j is grad_i grad_j E[R_j]
 
         losses = losses_nl
 
-        return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act
+        grad_log_p_act = []
+        for i in range(n_agents):
+            example_grad = get_gradient(log_p_act[0, i], th[i]) if isinstance(
+                th[i], torch.Tensor) else torch.cat(
+                [get_gradient(log_p_act[0, i], param).flatten() for
+                 param in
+                 th[i].parameters()])
+            # print(example_grad)
+            grad_len = len(example_grad)
+            # print(grad_len  )
+            grad_log_p_act.append(torch.zeros((rollout_len, grad_len)))
+            # grad_log_p_act.append([0] * rollout_len)
 
+        for i in range(n_agents):
 
+            for t in range(rollout_len):
 
+                grad_t = get_gradient(log_p_act[t, i], th[i]) if isinstance(
+                    th[i], torch.Tensor) else torch.cat(
+                    [get_gradient(log_p_act[t, i], param).flatten() for
+                     param in
+                     th[i].parameters()])
 
+                # get_gradient(log_p_act_sums_0_to_t[:, j][t],
+                #                                        th[j]) if isinstance(
+                #    th[j], torch.Tensor) else torch.cat(
+                #    [get_gradient(log_p_act_sums_0_to_t[:, j][t], param).flatten() for
+                #     param in
+                #     th[j].parameters()])
+                # print(grad_t)
+
+                grad_log_p_act[i][t] = grad_t
+
+        return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
 
         # TODO May 2021
         # you're gonna have to change the output/return format here... returning something like the actions taken instead
@@ -401,7 +426,6 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         # Get this working for 2 players w func approx and rollouts first, before moving on to more agents and before optimizing for speed
         # And using GPUs (e.g. colab)
 
-
         # Then multiply by the gradient of the log policy
 
         # Only at end of episode then collect discounted sum reward for all agents and do policy updates
@@ -416,8 +440,6 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6, contri
         # We could try actor critic or even only value function (basically DQN?) methods later or separately too
         # But for now just accumulate all the trajectories and apply PG update
 
-
-
     return dims, Ls
 
 
@@ -429,7 +451,6 @@ def ipd(gamma=0.96):
     payout_mat_2 = torch.t(payout_mat_1)
 
     def Ls(th):
-
         # Theta denotes (unnormalized) action probabilities at each of the states:
         # start CC CD DC DD
 
@@ -464,7 +485,6 @@ def ipd(gamma=0.96):
                        p_1 * (1 - p_2),
                        (1 - p_1) * p_2,
                        (1 - p_1) * (1 - p_2)], dim=1)
-
 
         # Now this is the matrix inversion for calculating the value function
         # (solving the bellman equation)
@@ -514,8 +534,8 @@ def init_th_tft(dims, std, logit_shift=3):
     # Dims [5,5] or something, len is num agents
     # And each num represents the dim of the policy for that agent (equal to state space size with binary action/bernoulli dist)
 
-
     return th
+
 
 # TODO try again with NL too.
 # Also shift the logits so all others more likely to defect, ie minus the init, but then increase the coop inits by 2x. And maybe scale the logit down to 3 or so.
@@ -526,18 +546,29 @@ def init_th_tft(dims, std, logit_shift=3):
 
 
 class NeuralNet(nn.Module):
-    def __init__(self, input_size, hidden_size, hidden_layers, output_size):
+    def __init__(self, input_size, hidden_size, extra_hidden_layers,
+                 output_size):
         super(NeuralNet, self).__init__()
         layers = []
-        layers.append(torch.nn.Linear(input_size, hidden_size))
-        layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-        for i in range(hidden_layers):
-            layers.append(nn.Linear(hidden_size, hidden_size))
-            layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-        layers.append(nn.Linear(hidden_size, output_size))
+
+        layers.append(torch.nn.Linear(input_size, output_size))
+
+
+        # layers.append(torch.nn.Linear(input_size, hidden_size))
+        # # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
+        # # layers.append(torch.nn.Tanh())
+        # for i in range(extra_hidden_layers):
+        #     layers.append(nn.Linear(hidden_size, hidden_size))
+        #     # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
+        #     # layers.append(torch.nn.Tanh())
+        # layers.append(nn.Linear(hidden_size, output_size))
         layers.append(nn.Sigmoid())
 
+
         self.net = nn.Sequential(*layers)
+
+
+
 
         # self.layer1 = nn.Linear(input_size, hidden_size)
         # self.layer2 = nn.Linear(hidden_size, hidden_size)
@@ -577,9 +608,11 @@ class NeuralNet(nn.Module):
 def init_custom(dims):
     th = []
 
-    # th.append(NeuralNet(input_size=dims[0], hidden_size=32, hidden_layers=1, output_size=1))
+    # th.append(
+    #     NeuralNet(input_size=dims[0], hidden_size=2, extra_hidden_layers=0,
+    #               output_size=1))
     th.append(
-        torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
+    torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
     th.append(
         torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
 
@@ -599,24 +632,30 @@ def get_gradient(function, param):
     grad = torch.autograd.grad(function, param, create_graph=True)[0]
     return grad
 
-def get_jacobian(l, param):
-    out = []
-    print(l)
-    for thing in l:
-        print(thing)
-        grad = torch.autograd.grad(thing, param, create_graph=True)[0]
-        out.append(grad)
-    return torch.stack(out)
+
+# def get_jacobian(func, param):
+#     jac = torch.autograd.functional.jacobian(func, param, create_graph=True,
+#                                        strict=True, vectorize=True)
+#     return jac
 
 
+# def get_jacobian(l, param):
+#     out = []
+#     print(l)
+#     for thing in l:
+#         print(thing)
+#         grad = torch.autograd.grad(thing, param, create_graph=True)[0]
+#         out.append(grad)
+#     return torch.stack(out)
 
 
-
-def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_nn=False, beta=1):
+def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch,
+              a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_nn=False, beta=1):
     n = len(th)
 
     if using_nn:
-        losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act = Ls(th)
+        losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = Ls(
+            th)
     else:
         losses = Ls(th)
 
@@ -628,7 +667,10 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
 
     if using_nn:
 
-        state_batch = torch.cat((build_bin_matrix(n_agents, n_agents**2), torch.Tensor([init_state_representation] * n_agents).reshape(1,-1)))
+        state_batch = torch.cat((build_bin_matrix(n_agents, n_agents ** 2),
+                                 torch.Tensor([
+                                                  init_state_representation] * n_agents).reshape(
+                                     1, -1)))
 
         # state_batch = torch.Tensor([[0, 0], [0, 1], [1, 0], [1, 1], [-1, -1]])
         # print(state_batch)
@@ -642,21 +684,29 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
 
             if epoch % print_every == 0:
                 print("Policy {}".format(i))
-                print("(Probabilities are for cooperation/contribution, for states 00 (no contrib, no contrib), 01 (p1 no contrib, p2 contrib), 10 (p1 contrib, p2 no contrib), 11 (contrib, contrib), start)")
+                print(
+                    "(Probabilities are for cooperation/contribution, for states 00 (no contrib, no contrib), 01 (p1 no contrib, p2 contrib), 10 (p1 contrib, p2 no contrib), 11 (contrib, contrib), start)")
 
                 print(policy)
 
-                print("Discounted Sum Rewards in this episode (removing negative adjustment): ")
-                print(G_ts[0] + discounted_sum_of_adjustments)
-                print("Max Avg Coop Payout: {:.3f}".format(coop_payout))
+                if i==0:
+                    # layers = th[0].net
+                    # for param in layers[0].parameters():
+                    #     print(param)
 
+                    print(
+                        "Discounted Sum Rewards in this episode (removing negative adjustment): ")
+                    print(G_ts[0] + discounted_sum_of_adjustments)
+                    print("Max Avg Coop Payout: {:.3f}".format(coop_payout))
 
             policies.append(policy)
 
-        grad_L = [[(get_gradient(losses[j], th[i]) if isinstance(th[i], torch.Tensor) else
-            [get_gradient(losses[j], param) for param in th[i].parameters()])
-                   for j in range(n)]
-                  for i in range(n)]
+        # grad_L = [[(get_gradient(losses[j], th[i]) if isinstance(th[i], torch.Tensor) else
+        #     [get_gradient(losses[j], param) for param in th[i].parameters()])
+        #            for j in range(n)]
+        #           for i in range(n)]
+
+
 
 
     else:
@@ -666,11 +716,10 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
                 print("Policy {}".format(i))
                 print(policy)
         grad_L = [[get_gradient(losses[j], th[i]) for j in range(n)] for i in
-              range(n)]
+                  range(n)]
 
     # calculate grad_L as the gradient of loss for player j with respect to parameters for player i
     # Therefore grad_L[i][i] is simply the naive learning loss for player i
-
 
     # if algo == 'lola':
     if 'lola' in algos:
@@ -698,7 +747,6 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             #     range(n)]
             #
 
-
             # TODO IMPORTANT REALLY THINK ABOUT WHAT ORDER IS CORRECT HERE
 
             # TODO aren't only the diagonal terms here used too? E.g. when i == j
@@ -709,37 +757,50 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             #      for j in range(n)]
             #     for i in range(n)]
 
-            grad_1_grad_2_return_2 = []
+            grad_1_grad_2_return_2_new = []
             for i in range(n_agents):
-                grad_1_grad_2_return_2.append([0] * n_agents)
-            # print(grad_1_grad_2_return_2)
+                grad_1_grad_2_return_2_new.append([0] * n_agents)
+
             for i in range(n_agents):
                 for j in range(n_agents):
                     if i != j:
                         for t in range(rollout_len):
-                            # a = get_gradient(log_p_act_sums_0_to_t[:,i][t], th[i]) if isinstance(
-                            # th[i], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,i][t], param).flatten() for param in
-                            #   th[i].parameters()])
-                            # b = get_gradient(log_p_act_sums_0_to_t[:,j][t], th[j]) if isinstance(
-                            # th[j], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,j][t], param).flatten() for param in
-                            #   th[j].parameters()])
-                            # print(a.shape)
-                            # print(b.shape)
-                            # 1/0
+                            # print(grad_log_p_act)
+                            # print(grad_log_p_act[:t+1])
 
-                            grad_t = torch.FloatTensor(gamma_t_r_ts)[:,j][t] * \
-                                                           torch.outer(get_gradient(log_p_act_sums_0_to_t[:,i][t], th[i]) if isinstance(
-                            th[i], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,i][t], param).flatten() for param in
-                              th[i].parameters()]), get_gradient(log_p_act_sums_0_to_t[:,j][t], th[j]) if isinstance(
-                            th[j], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,j][t], param).flatten() for param in
-                              th[j].parameters()]))
+                            grad_t = torch.FloatTensor(gamma_t_r_ts)[:, j][t] * \
+                                     torch.outer(
+                                         grad_log_p_act[i][:t + 1].sum(dim=0),
+                                         grad_log_p_act[j][:t + 1].sum(dim=0))
 
                             if t == 0:
-                                grad_1_grad_2_return_2[i][j] = grad_t
+                                grad_1_grad_2_return_2_new[i][j] = grad_t
                             else:
-                                grad_1_grad_2_return_2[i][j] += grad_t
+                                grad_1_grad_2_return_2_new[i][j] += grad_t
 
-
+            # grad_1_grad_2_return_2 = []
+            # for i in range(n_agents):
+            #     grad_1_grad_2_return_2.append([0] * n_agents)
+            # for i in range(n_agents):
+            #     for j in range(n_agents):
+            #         if i != j:
+            #             for t in range(rollout_len):
+            #                 grad_t = torch.FloatTensor(gamma_t_r_ts)[:,j][t] * \
+            #                                                torch.outer(get_gradient(log_p_act_sums_0_to_t[:,i][t], th[i]) if isinstance(
+            #                 th[i], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,i][t], param).flatten() for param in
+            #                   th[i].parameters()]), get_gradient(log_p_act_sums_0_to_t[:,j][t], th[j]) if isinstance(
+            #                 th[j], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,j][t], param).flatten() for param in
+            #                   th[j].parameters()]))
+            #
+            #                 if t == 0:
+            #                     grad_1_grad_2_return_2[i][j] = grad_t
+            #                 else:
+            #                     grad_1_grad_2_return_2[i][j] += grad_t
+            # print(grad_1_grad_2_return_2_new)
+            # print(grad_1_grad_2_return_2)
+            # 1/0
+            #
+            grad_1_grad_2_return_2 = grad_1_grad_2_return_2_new
 
             # When we take the j i entry of the log_p_times_G_t_matrix
             # what we get is the log probs of player j and the return of player i
@@ -751,13 +812,16 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             # TODO CHECK THIS IS OK. CHECK EVERYTHING.
 
             grad_2_return_1 = [
-                [get_gradient(log_p_times_G_t_matrix[j][i], th[j]) if isinstance(th[j], torch.Tensor) else
-                torch.cat([get_gradient(log_p_times_G_t_matrix[j][i], param).flatten() for param in
-                  th[j].parameters()])
+                [get_gradient(log_p_times_G_t_matrix[j][i],
+                              th[j]) if isinstance(th[j], torch.Tensor) else
+                 torch.cat([get_gradient(log_p_times_G_t_matrix[j][i],
+                                         param).flatten() for param in
+                            th[j].parameters()])
                  for j in range(n)]
                 for i in range(n)]
 
-
+            # print(grad_L)
+            # print(grad_2_return_1)
 
             # By the way these matrix names I came up with suck because they don't actually have the grad
             # We will actually take the grad here
@@ -770,14 +834,10 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             # is approximated by sample, so after that, we have no p1 term showing up anywhere anymore)
             # Then this will work and we will get what we want.
 
-
-
-
             # TODO given that only the i i terms are used here (only the diagonal)
             # why do we bother calculating the whole matrix?
             # Could be a potential speedup.
             # Or alternatively reuse this matrix instead of calculating the separate grad_2_return_1 matrix
-
 
             # The reason we use alpha * eta here is because
             # alpha is the learning step of the opponent (in this case we assume same amount)
@@ -785,30 +845,47 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             # Otherwise it becomes way too large relative to our gradient
             # TODO Actually think about this, is this true? Maybe it's not true.
 
-
             # IMPORTANT NOTE: the way these grad return matrices are set up is that you should always call i j here
             # because the j i switch was done during the construction of the matrix
-            lola_terms = [sum([ eta * grad_2_return_1[i][j].t() @ grad_1_grad_2_return_2[i][j].t() for j in range(n) if j != i]) for i in range(n)]
+            lola_terms = [sum([eta * grad_2_return_1[i][j].t() @
+                               grad_1_grad_2_return_2[i][j].t() for j in
+                               range(n) if j != i]) for i in range(n)]
+
 
             grads = []
             for i in range(n):
                 if isinstance(th[i], torch.Tensor):
-                    grads.append((grad_L[i][i] + lola_terms[i]) if algos[i] == 'lola' else grad_L[i][i])
+                    grads.append(
+                        (grad_2_return_1[i][i] + lola_terms[i]) if algos[
+                                                                       i] == 'lola' else
+                        grad_2_return_1[i][i])
                 else:
                     if algos[i] == 'lola':
                         grad = []
                         start_pos = 0
 
-
                         for (k, param) in enumerate(th[i].parameters()):
+
 
                             param_len = len(param.flatten())
 
-                            grad.append(grad_L[i][i][k] + lola_terms[i][start_pos:start_pos+param_len].reshape(param.size()))
+                            # print(k)
+                            #
+                            # print(grad_2_return_1[i][i][
+                            #       start_pos:start_pos + param_len])
+                            # print(grad_2_return_1)
+
+                            grad.append(
+                                grad_2_return_1[i][i][start_pos:start_pos + param_len] + lola_terms[i][
+                                                           start_pos:start_pos + param_len].reshape(
+                                    param.size()))
                             start_pos += param_len
+
+                        # print(grad)
+
                         grads.append(grad)
                     else:
-                        grads.append(grad_L[i][i])
+                        grads.append(grad_2_return_1[i][i])
 
 
 
@@ -828,7 +905,7 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             lola_terms = [
                 # alphas[i] *
                 eta * get_gradient(terms[i], th[i])
-                     for i in range(n)]
+                for i in range(n)]
 
             if lola_terms_sum is None:
                 lola_terms_sum = lola_terms
@@ -837,14 +914,13 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
                     lola_terms_sum[i] += lola_terms[i]
 
             nl_terms = [grad_L[i][i]
-                     for i in range(n)]
+                        for i in range(n)]
 
             if nl_terms_sum is None:
                 nl_terms_sum = nl_terms
             else:
                 for i in range(n):
                     nl_terms_sum[i] += nl_terms[i]
-
 
             grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
 
@@ -864,9 +940,7 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch, a
             else:
 
                 th[i] += alphas[i] * grads[i]
-    return th, losses, lola_terms_sum, nl_terms_sum, G_ts
-
-
+    return th, losses, lola_terms_sum, nl_terms_sum, G_ts, lola_terms, grad_2_return_1
 
 
 # TODO DEC 13
@@ -884,21 +958,21 @@ theta_init_mode = 'standard'
 # theta_init_mode = 'tft'
 
 
-
 # REPEAT some x times and store the percent coop
 
 # repeats = 10
-repeats = 2
+repeats = 1
 
 # For each repeat/run:
-num_epochs = 2000
-print_every = max(1, num_epochs / 200)
+num_epochs = 5000
+print_every = max(1, num_epochs / 500)
+# print_every = 1
 
-gamma=0.96
+gamma = 0.96
 
 # n_agents = 3
-contribution_factor=1.7
-contribution_scale=False
+contribution_factor = 1.7
+contribution_scale = False
 # contribution_factor=0.6
 # contribution_scale=True
 
@@ -908,14 +982,19 @@ contribution_scale=False
 
 using_nn = False
 
-
 # For nn simple func approx in 2p eta ~5 seems to work reasonably well. Look into why
 # one agent is defecting at the start state though.
 # 1 TFT and 1 coop agent emerging makes sense. But why is defect at the start happening for the TFT agent?
 # Compare vs tabular - do you get TFT on both or 1 coop?
 # etas = [5] # TODO Try different etas under LOLA. Check that the gradient calc still makes sense with PG formulation.
-# etas = [0.005]
-etas = [.005 * 5] # / 5
+etas = [0.005]
+# etas = [0.005 * 20]
+# etas = [1]
+# NOTE: eta should not be a hyperparameter. Eta should be equal to the alpha of the other players
+# TODO replace this formulation, remove the eta loop, make eta equal to sum of other alphas.
+# etas = []
+# But somehow we do require scaling it up?
+# Doesn't this break mathematical properties?
 
 # etas = [0,1,2,3,4,5,6,7,8,9,10]
 # etas = [0, 1, 3, 5]
@@ -942,26 +1021,28 @@ for n_agents in n_agents_list:
     if not contribution_scale:
         # coop_payout = 1 / (1 - gamma) * (contribution_factor - 1)
         coop_payout = 1 / (1 - gamma) * (contribution_factor - 1) * \
-                      (1 - gamma ** rollout_len) # This last term here accounts for the fact that we don't go to infinity
-        max_payout = 1 / (1 - gamma) * (contribution_factor * (n_agents-1) / n_agents) * \
-                      (1 - gamma ** rollout_len)
+                      (
+                                  1 - gamma ** rollout_len)  # This last term here accounts for the fact that we don't go to infinity
+        max_payout = 1 / (1 - gamma) * (
+                    contribution_factor * (n_agents - 1) / n_agents) * \
+                     (1 - gamma ** rollout_len)
     else:
         coop_payout = 1 / (1 - gamma) * (contribution_factor * n_agents - 1) * \
                       (1 - gamma ** rollout_len)
-        max_payout = 1 / (1 - gamma) * (contribution_factor * (n_agents-1)) * \
+        max_payout = 1 / (1 - gamma) * (contribution_factor * (n_agents - 1)) * \
                      (1 - gamma ** rollout_len)
 
-    max_single_step_return = (contribution_factor * (n_agents-1) / n_agents)
+    max_single_step_return = (contribution_factor * (n_agents - 1) / n_agents)
 
-    # adjustment_to_make_rewards_negative = 0
-    adjustment_to_make_rewards_negative = max_single_step_return
+    adjustment_to_make_rewards_negative = 0
+    # adjustment_to_make_rewards_negative = max_single_step_return
     # With adjustment and 20k steps seems LOLA vs NL does learn a TFT like strategy
     # But the problem is NL hasn't learned to coop at the start
     # which results in DD behaviour throughout.
 
-    discounted_sum_of_adjustments = 1 / (1 - gamma) * adjustment_to_make_rewards_negative * \
+    discounted_sum_of_adjustments = 1 / (
+                1 - gamma) * adjustment_to_make_rewards_negative * \
                                     (1 - gamma ** rollout_len)
-
 
     # print(coop_payout)
     # print(max_payout)
@@ -976,7 +1057,9 @@ for n_agents in n_agents_list:
                 # Initialise theta ~ Normal(0, std)
                 # Select game
 
-                dims, Ls = ipdn(n=n_agents, gamma=gamma, contribution_factor=contribution_factor, contribution_scale=contribution_scale)
+                dims, Ls = ipdn(n=n_agents, gamma=gamma,
+                                contribution_factor=contribution_factor,
+                                contribution_scale=contribution_scale)
 
                 # n=4 already seems to break down... maybe it needs more epochs?
                 # Also there's the question of contribution/reward scaling. With scaling it seems to work for 4... but again a bit more shaky
@@ -1000,7 +1083,7 @@ for n_agents in n_agents_list:
                 else:
                     th = init_th(dims, std)
             elif theta_mode == 'nn':
-                using_nn=True
+                using_nn = True
 
                 # dims, Ls = ipd2_with_func_approx()
                 dims, Ls = contrib_game_with_func_approx(n=n_agents)
@@ -1009,7 +1092,7 @@ for n_agents in n_agents_list:
 
                 th = init_custom(dims)
 
-                #TODO Try TFT mode again with some variance...
+                # TODO Try TFT mode again with some variance...
 
                 # th, optims = init_nn(dims)
             else:
@@ -1027,9 +1110,10 @@ for n_agents in n_agents_list:
                 # alpha = 0.0005
                 # alphas = [0.0001, 0.001]
                 # alphas = [0.001, 0.005]
-                alphas = [0.005, 0.005]
+                # alphas = [0.01, 0.005]
 
-                # alphas = [0.0005, 0.005] # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
+                alphas = [0.005,
+                          0.005]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
                 # So maybe never use relus lol. If this actually fixes the problem, I resolve to never use relus ever again.
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
@@ -1055,8 +1139,8 @@ for n_agents in n_agents_list:
                 alpha = 1
             # algo = 'lola'  # ('sos', 'lola', 'la', 'sga', 'co', 'eg', 'cgd', 'lss' or 'nl')
             # algos = ['lola', 'lola']
-            algos = ['nl', 'lola']
-
+            # algos = ['nl', 'lola']
+            algos = ['lola', 'nl']
 
 
             lola_terms_sum = None
@@ -1065,51 +1149,81 @@ for n_agents in n_agents_list:
             # Run
             losses_out = np.zeros((num_epochs, n_agents))
             G_ts_record = np.zeros((num_epochs, n_agents))
+            lola_terms_running_total = []
+            nl_terms_running_total = []
+
 
             # th_out = []
             for k in range(num_epochs):
-                if k % print_every == 0:
-                    print("Epoch: " + str(k))
-                    print("Eta: " + str(eta))
-                    print("Algos: {}".format(algos))
-                    print("Alphas: {}".format(alphas))
-                th, losses, lola_terms_sum, nl_terms_sum, G_ts = update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, using_nn=using_nn, epoch=k)
+                th, losses, lola_terms_sum, nl_terms_sum, G_ts, lola_terms, grad_2_return_1 = \
+                    update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, using_nn=using_nn, epoch=k)
                 # th_out.append([th[i].data.numpy() for i in range(len(th))])
                 losses_out[k] = [loss.data.numpy() for loss in losses]
                 G_ts_record[k] = G_ts[0]
 
 
+
+                if lola_terms_running_total == []:
+                    for i in range(n_agents):
+                        lola_terms_running_total.append(alphas[i] * lola_terms[i].detach())
+                else:
+                    for i in range(n_agents):
+                        lola_terms_running_total[i] += alphas[i] * lola_terms[i].detach()
+                if nl_terms_running_total == []:
+                    for i in range(n_agents):
+                        nl_terms_running_total.append(alphas[i] * grad_2_return_1[i][i].detach())
+                else:
+                    for i in range(n_agents):
+                        # print("hi")
+                        # print(grad_2_return_1[i][i])
+                        nl_terms_running_total[i] += alphas[i] * grad_2_return_1[i][i].detach()
+                        # 1/0
+
+
+
+                if k % print_every == 0:
+                    print("Epoch: " + str(k))
+                    print("Eta: " + str(eta))
+                    print("Algos: {}".format(algos))
+                    print("Alphas: {}".format(alphas))
+                    print("LOLA Terms: ")
+                    print(lola_terms_running_total)
+                    print("NL Terms: ")
+                    print(nl_terms_running_total)
+
             # Below is a measure across the gradient (so first, abs value/magnitude of gradient, and then average over the number of terms in it)
             # This lets us see approximately in each state, how much influence the LOLA term has
             # (but we should also compare to the regular gradient?)
             # Doing just for agent 0 right now
-            print_gradients = False
-            if print_gradients:
-                if lola_terms_sum is not None:
-                    print("LOLA terms:")
-                    print(torch.abs(lola_terms_sum[0]) / num_epochs)
-                    print((lola_terms_sum[0]) / num_epochs)
-                if nl_terms_sum is not None:
-                    print("NL terms:")
-                    print(torch.abs(nl_terms_sum[0]) / num_epochs)
-                    print((nl_terms_sum[0]) / num_epochs)
-                if lola_terms_sum is not None:
-                    print(torch.mean(torch.abs(lola_terms_sum[0])) / num_epochs)
-                    total_lola = torch.zeros(1)
-                    for i in range(len(th)):
-                        total_lola += torch.mean((torch.abs(lola_terms_sum[0])) / num_epochs)
-                    avg_lola = total_lola / len(th)
-                    print("Avg LOLA abs gradient: {0:.5f}".format(avg_lola.item()))
-                if nl_terms_sum is not None:
-                    print(torch.mean(torch.abs(nl_terms_sum[0])) / num_epochs)
-                    total_nl = torch.zeros(1)
-                    for i in range(len(th)):
-                        total_nl += torch.mean((torch.abs(nl_terms_sum[0])) / num_epochs)
-                    avg_nl = total_nl / len(th)
-                    print("Avg NL abs gradient: {0:.5f}".format(avg_nl.item()))
+            # print_gradients = False
+            # if print_gradients:
+            #     if lola_terms_sum is not None:
+            #         print("LOLA terms:")
+            #         print(torch.abs(lola_terms_sum[0]) / num_epochs)
+            #         print((lola_terms_sum[0]) / num_epochs)
+            #     if nl_terms_sum is not None:
+            #         print("NL terms:")
+            #         print(torch.abs(nl_terms_sum[0]) / num_epochs)
+            #         print((nl_terms_sum[0]) / num_epochs)
+            #     if lola_terms_sum is not None:
+            #         print(torch.mean(torch.abs(lola_terms_sum[0])) / num_epochs)
+            #         total_lola = torch.zeros(1)
+            #         for i in range(len(th)):
+            #             total_lola += torch.mean(
+            #                 (torch.abs(lola_terms_sum[0])) / num_epochs)
+            #         avg_lola = total_lola / len(th)
+            #         print("Avg LOLA abs gradient: {0:.5f}".format(
+            #             avg_lola.item()))
+            #     if nl_terms_sum is not None:
+            #         print(torch.mean(torch.abs(nl_terms_sum[0])) / num_epochs)
+            #         total_nl = torch.zeros(1)
+            #         for i in range(len(th)):
+            #             total_nl += torch.mean(
+            #                 (torch.abs(nl_terms_sum[0])) / num_epochs)
+            #         avg_nl = total_nl / len(th)
+            #         print("Avg NL abs gradient: {0:.5f}".format(avg_nl.item()))
 
             # print(losses_out.mean(axis=1))
-
 
             # stability_threshold = 0.95
 
@@ -1119,11 +1233,11 @@ for n_agents in n_agents_list:
             # percent_stable_coop = total_stable_coop_epochs / num_epochs
             # print(percent_stable_coop)
 
-
             # % comparison of average individual reward to max average individual reward
             # This gives us a rough idea of how close to optimal (how close to full cooperation) we are.
             # max_avg_indiv_reward = coop_payout # well actually a loss, not a reward
-            reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_payout)
+            reward_percent_of_max.append((
+                                                     G_ts_record.mean() + discounted_sum_of_adjustments) / coop_payout)
             # print(-losses_out.mean() / max_avg_indiv_reward)
 
             plot_results = True
@@ -1139,4 +1253,5 @@ for n_agents in n_agents_list:
         print("Eta: {}".format(eta))
         # print(reward_percent_of_max)
         # Average over all runs
-        print("Average reward as % of max: {:.1%}".format(sum(reward_percent_of_max) / repeats))
+        print("Average reward as % of max: {:.1%}".format(
+            sum(reward_percent_of_max) / repeats))
