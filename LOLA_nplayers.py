@@ -558,17 +558,17 @@ class NeuralNet(nn.Module):
         super(NeuralNet, self).__init__()
         layers = []
 
-        layers.append(torch.nn.Linear(input_size, output_size))
+        # layers.append(torch.nn.Linear(input_size, output_size))
 
 
-        # layers.append(torch.nn.Linear(input_size, hidden_size))
-        # # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-        # # layers.append(torch.nn.Tanh())
-        # for i in range(extra_hidden_layers):
-        #     layers.append(nn.Linear(hidden_size, hidden_size))
-        #     # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-        #     # layers.append(torch.nn.Tanh())
-        # layers.append(nn.Linear(hidden_size, output_size))
+        layers.append(torch.nn.Linear(input_size, hidden_size))
+        layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
+        # layers.append(torch.nn.Tanh())
+        for i in range(extra_hidden_layers):
+            layers.append(nn.Linear(hidden_size, hidden_size))
+            layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
+            # layers.append(torch.nn.Tanh())
+        layers.append(nn.Linear(hidden_size, output_size))
         layers.append(nn.Sigmoid())
 
 
@@ -615,10 +615,9 @@ class NeuralNet(nn.Module):
 def init_custom(dims):
     th = []
 
-    # th.append(
-    #     NeuralNet(input_size=dims[0], hidden_size=2, extra_hidden_layers=0,
-    #               output_size=1))
-    th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
+    th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
+                  output_size=1))
+    # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
     th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
 
     # TFT init
@@ -886,10 +885,14 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
                             #       start_pos:start_pos + param_len])
                             # print(grad_2_return_1)
 
+                            # print(grad_2_return_1[i][i])
+                            # print(lola_terms[i])
+                            # print(param.size())
+
                             grad.append(
-                                grad_2_return_1[i][i][start_pos:start_pos + param_len] + lola_terms[i][
-                                                           start_pos:start_pos + param_len].reshape(
-                                    param.size()))
+                                (grad_2_return_1[i][i][start_pos:start_pos + param_len] + lola_terms[i][
+                                                           start_pos:start_pos + param_len]).reshape(param.size())
+                            )
                             start_pos += param_len
 
                         # print(grad)
@@ -990,8 +993,7 @@ using_nn = False
 # 1 TFT and 1 coop agent emerging makes sense. But why is defect at the start happening for the TFT agent?
 # Compare vs tabular - do you get TFT on both or 1 coop?
 # etas = [5] # TODO Try different etas under LOLA. Check that the gradient calc still makes sense with PG formulation.
-etas = [0.05 * 5]
-# etas = [0.005 * 20]
+etas = [0.05 * 1]
 # etas = [1]
 # NOTE: eta should not be a hyperparameter. Eta should be equal to the alpha of the other players
 # TODO replace this formulation, remove the eta loop, make eta equal to sum of other alphas.
@@ -1117,8 +1119,8 @@ for n_agents in n_agents_list:
                 # alphas = [0.001, 0.005]
                 # alphas = [0.01, 0.005]
 
-                # alphas = [0.005, 0.005]
-                alphas = [0.05, 0.05]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
+                alphas = [0.005, 0.05]
+                # alphas = [0.05, 0.05]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
                 # So maybe never use relus lol. If this actually fixes the problem, I resolve to never use relus ever again.
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
