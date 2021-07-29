@@ -30,7 +30,7 @@ def build_p_vector(n, size, pc, bin_mat):
     return p
 
 
-def ipdn(n=2, gamma=0.96, contribution_factor=0.6, contribution_scale=False):
+def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
     dims = [2 ** n + 1 for _ in range(n)]
     state_space = dims[0]
     # print(dims)
@@ -181,8 +181,7 @@ def ipd2_with_func_approx(gamma=0.96):
 def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
                                   contribution_scale=False):
     # Contribution game
-    dims = [
-               n] * n  # now each agent gets a vector observation, a n dimensional vector where each element is the action
+    dims = [n] * n  # now each agent gets a vector observation, a n dimensional vector where each element is the action
     # of an agent, either 0 (defect) or 1 (coop) or 2 at the start of the game
     # print(dims)
 
@@ -205,8 +204,7 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         # In n player case we have to do stochastic rollout instead of matrix inversion
         # for expectation because the transition matrix blows up exponentially
 
-        init_state = torch.Tensor([[
-                                       init_state_representation] * n])  # repeat -1 n times, where n is num agents
+        init_state = torch.Tensor([[init_state_representation] * n])  # repeat -1 n times, where n is num agents
         # print(init_state)
         # Every agent sees same state; P1 [action, P2 action, P3 action ...]
 
@@ -219,6 +217,10 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         discounts = np.ones(num_iters)
         for i in range(num_iters):
             discounts[i] *= gamma ** i
+
+
+        # TODO: rollout can be refactored as a function
+        # Lots of this code can be refactored as functions
 
         # First use contrib factor, keep everything exact, but make it contrib factor game.
         # Then once that working, do rollouts still with 2 players.
@@ -284,6 +286,11 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
             agent_rewards = -actions + payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
+
+            # print(actions)
+            # print(agent_rewards)
+
+        # print(rewards)
 
         G_ts = torch.zeros((num_iters, n_agents))
         for i in range(len(rewards)):
@@ -611,10 +618,8 @@ def init_custom(dims):
     # th.append(
     #     NeuralNet(input_size=dims[0], hidden_size=2, extra_hidden_layers=0,
     #               output_size=1))
-    th.append(
-    torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
-    th.append(
-        torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
+    th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
+    th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
 
     # TFT init
     # logit_shift = 2
@@ -649,9 +654,13 @@ def get_gradient(function, param):
 #     return torch.stack(out)
 
 
-def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch,
+def update_th(th, Ls, alphas, eta, algos, epoch,
               a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_nn=False, beta=1):
     n = len(th)
+
+    G_ts = None
+    grad_2_return_1 = None
+    nl_terms = None
 
     if using_nn:
         losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = Ls(
@@ -847,6 +856,8 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch,
 
             # IMPORTANT NOTE: the way these grad return matrices are set up is that you should always call i j here
             # because the j i switch was done during the construction of the matrix
+            # TODO we should allow different eta/learning rates across other agents
+            # And then account for that here.
             lola_terms = [sum([eta * grad_2_return_1[i][j].t() @
                                grad_1_grad_2_return_2[i][j].t() for j in
                                range(n) if j != i]) for i in range(n)]
@@ -907,20 +918,12 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch,
                 eta * get_gradient(terms[i], th[i])
                 for i in range(n)]
 
-            if lola_terms_sum is None:
-                lola_terms_sum = lola_terms
-            else:
-                for i in range(n):
-                    lola_terms_sum[i] += lola_terms[i]
+
 
             nl_terms = [grad_L[i][i]
                         for i in range(n)]
 
-            if nl_terms_sum is None:
-                nl_terms_sum = nl_terms
-            else:
-                for i in range(n):
-                    nl_terms_sum[i] += nl_terms[i]
+
 
             grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
 
@@ -940,7 +943,7 @@ def update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, epoch,
             else:
 
                 th[i] += alphas[i] * grads[i]
-    return th, losses, lola_terms_sum, nl_terms_sum, G_ts, lola_terms, grad_2_return_1
+    return th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1
 
 
 # TODO DEC 13
@@ -965,13 +968,13 @@ repeats = 1
 
 # For each repeat/run:
 num_epochs = 5000
-print_every = max(1, num_epochs / 500)
+print_every = max(1, num_epochs / 50)
 # print_every = 1
 
 gamma = 0.96
 
 # n_agents = 3
-contribution_factor = 1.7
+contribution_factor = 1.6
 contribution_scale = False
 # contribution_factor=0.6
 # contribution_scale=True
@@ -987,7 +990,7 @@ using_nn = False
 # 1 TFT and 1 coop agent emerging makes sense. But why is defect at the start happening for the TFT agent?
 # Compare vs tabular - do you get TFT on both or 1 coop?
 # etas = [5] # TODO Try different etas under LOLA. Check that the gradient calc still makes sense with PG formulation.
-etas = [0.005]
+etas = [0.05 * 5]
 # etas = [0.005 * 20]
 # etas = [1]
 # NOTE: eta should not be a hyperparameter. Eta should be equal to the alpha of the other players
@@ -1086,7 +1089,9 @@ for n_agents in n_agents_list:
                 using_nn = True
 
                 # dims, Ls = ipd2_with_func_approx()
-                dims, Ls = contrib_game_with_func_approx(n=n_agents)
+                dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
+                                                         contribution_factor=contribution_factor,
+                                                         contribution_scale=contribution_scale)
 
                 # th = init_nn(dims)
 
@@ -1112,8 +1117,8 @@ for n_agents in n_agents_list:
                 # alphas = [0.001, 0.005]
                 # alphas = [0.01, 0.005]
 
-                alphas = [0.005,
-                          0.005]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
+                # alphas = [0.005, 0.005]
+                alphas = [0.05, 0.05]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
                 # So maybe never use relus lol. If this actually fixes the problem, I resolve to never use relus ever again.
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
@@ -1135,16 +1140,14 @@ for n_agents in n_agents_list:
                 # Perhaps the higher lr just makes
                 # t easier to escape the local optima/local equilibrium
                 # And get to TFT/better equilibrium
-                # alpha = 0.1
-                alpha = 1
+                # alpha = 1
+                alphas = [1,1]
+                alphas = [0.05,0.05]
             # algo = 'lola'  # ('sos', 'lola', 'la', 'sga', 'co', 'eg', 'cgd', 'lss' or 'nl')
             # algos = ['lola', 'lola']
             # algos = ['nl', 'lola']
             algos = ['lola', 'nl']
 
-
-            lola_terms_sum = None
-            nl_terms_sum = None
 
             # Run
             losses_out = np.zeros((num_epochs, n_agents))
@@ -1155,12 +1158,17 @@ for n_agents in n_agents_list:
 
             # th_out = []
             for k in range(num_epochs):
-                th, losses, lola_terms_sum, nl_terms_sum, G_ts, lola_terms, grad_2_return_1 = \
-                    update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, using_nn=using_nn, epoch=k)
-                # th_out.append([th[i].data.numpy() for i in range(len(th))])
-                losses_out[k] = [loss.data.numpy() for loss in losses]
-                G_ts_record[k] = G_ts[0]
 
+                # print(update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, using_nn=using_nn, epoch=k))
+
+                # th, losses, lola_terms_sum, nl_terms_sum, G_ts, lola_terms, grad_2_return_1 = \
+                th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
+                    update_th(th, Ls, alphas, eta, algos, using_nn=using_nn, epoch=k)
+
+                losses_out[k] = [loss.data.numpy() for loss in losses]
+
+                if G_ts is not None:
+                    G_ts_record[k] = G_ts[0]
 
 
                 if lola_terms_running_total == []:
@@ -1169,15 +1177,32 @@ for n_agents in n_agents_list:
                 else:
                     for i in range(n_agents):
                         lola_terms_running_total[i] += alphas[i] * lola_terms[i].detach()
-                if nl_terms_running_total == []:
-                    for i in range(n_agents):
-                        nl_terms_running_total.append(alphas[i] * grad_2_return_1[i][i].detach())
-                else:
-                    for i in range(n_agents):
-                        # print("hi")
-                        # print(grad_2_return_1[i][i])
-                        nl_terms_running_total[i] += alphas[i] * grad_2_return_1[i][i].detach()
-                        # 1/0
+
+                for i in range(n_agents):
+                    if grad_2_return_1 is None:
+                        nl_term = nl_terms[i].detach()
+                    else:
+                        nl_term = grad_2_return_1[i][i].detach()
+
+                    if len(nl_terms_running_total) < n_agents:
+                        nl_terms_running_total.append(alphas[i] * nl_term)
+                    else:
+                        nl_terms_running_total[i] += alphas[i] * nl_term
+
+
+                # if nl_terms_running_total == []:
+                #     for i in range(n_agents):
+                #         if grad_2_return_1 is None:
+                #             nl_term = nl_terms[i].detach()
+                #         else:
+                #             nl_term = grad_2_return_1[i][i].detach()
+                #         nl_terms_running_total.append(alphas[i] * nl_term)
+                # else:
+                #     for i in range(n_agents):
+                #         # print("hi")
+                #         # print(grad_2_return_1[i][i])
+                #         nl_terms_running_total[i] += alphas[i] * grad_2_return_1[i][i].detach()
+                #         # 1/0
 
 
 
@@ -1236,8 +1261,7 @@ for n_agents in n_agents_list:
             # % comparison of average individual reward to max average individual reward
             # This gives us a rough idea of how close to optimal (how close to full cooperation) we are.
             # max_avg_indiv_reward = coop_payout # well actually a loss, not a reward
-            reward_percent_of_max.append((
-                                                     G_ts_record.mean() + discounted_sum_of_adjustments) / coop_payout)
+            reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_payout)
             # print(-losses_out.mean() / max_avg_indiv_reward)
 
             plot_results = True
