@@ -562,12 +562,12 @@ class NeuralNet(nn.Module):
 
 
         layers.append(torch.nn.Linear(input_size, hidden_size))
-        layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-        # layers.append(torch.nn.Tanh())
+        # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
+        layers.append(torch.nn.Tanh())
         for i in range(extra_hidden_layers):
             layers.append(nn.Linear(hidden_size, hidden_size))
-            layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-            # layers.append(torch.nn.Tanh())
+            # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
+            layers.append(torch.nn.Tanh())
         layers.append(nn.Linear(hidden_size, output_size))
         layers.append(nn.Sigmoid())
 
@@ -617,8 +617,10 @@ def init_custom(dims):
 
     th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
                   output_size=1))
+    th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
+                  output_size=1))
     # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
-    th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
+    # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
 
     # TFT init
     # logit_shift = 2
@@ -969,10 +971,13 @@ theta_init_mode = 'standard'
 # repeats = 10
 repeats = 1
 
+
+# If this works, tanh instead of relu or lrelu is key.
+
 # For each repeat/run:
-num_epochs = 5000
+num_epochs = 8000
 print_every = max(1, num_epochs / 50)
-# print_every = 1
+print_every = 20
 
 gamma = 0.96
 
@@ -993,7 +998,7 @@ using_nn = False
 # 1 TFT and 1 coop agent emerging makes sense. But why is defect at the start happening for the TFT agent?
 # Compare vs tabular - do you get TFT on both or 1 coop?
 # etas = [5] # TODO Try different etas under LOLA. Check that the gradient calc still makes sense with PG formulation.
-etas = [0.05 * 1]
+etas = [0.001 * 15]
 # etas = [1]
 # NOTE: eta should not be a hyperparameter. Eta should be equal to the alpha of the other players
 # TODO replace this formulation, remove the eta loop, make eta equal to sum of other alphas.
@@ -1119,7 +1124,7 @@ for n_agents in n_agents_list:
                 # alphas = [0.001, 0.005]
                 # alphas = [0.01, 0.005]
 
-                alphas = [0.005, 0.05]
+                alphas = [0.001, 0.001]
                 # alphas = [0.05, 0.05]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
                 # So maybe never use relus lol. If this actually fixes the problem, I resolve to never use relus ever again.
 
@@ -1146,9 +1151,9 @@ for n_agents in n_agents_list:
                 alphas = [1,1]
                 alphas = [0.05,0.05]
             # algo = 'lola'  # ('sos', 'lola', 'la', 'sga', 'co', 'eg', 'cgd', 'lss' or 'nl')
-            # algos = ['lola', 'lola']
+            algos = ['lola', 'lola']
             # algos = ['nl', 'lola']
-            algos = ['lola', 'nl']
+            # algos = ['lola', 'nl']
 
 
             # Run
@@ -1213,10 +1218,10 @@ for n_agents in n_agents_list:
                     print("Eta: " + str(eta))
                     print("Algos: {}".format(algos))
                     print("Alphas: {}".format(alphas))
-                    print("LOLA Terms: ")
-                    print(lola_terms_running_total)
-                    print("NL Terms: ")
-                    print(nl_terms_running_total)
+                    # print("LOLA Terms: ")
+                    # print(lola_terms_running_total)
+                    # print("NL Terms: ")
+                    # print(nl_terms_running_total)
 
             # Below is a measure across the gradient (so first, abs value/magnitude of gradient, and then average over the number of terms in it)
             # This lets us see approximately in each state, how much influence the LOLA term has
