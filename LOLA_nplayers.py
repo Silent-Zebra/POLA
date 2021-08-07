@@ -13,6 +13,15 @@ def bin_inttensor_from_int(x, n):
     return torch.Tensor([int(d) for d in (str(bin(x))[2:]).zfill(n)])
     # return [int(d) for d in str(bin(x))[2:]]
 
+def int_from_bin_inttensor(bin_tens):
+    index = 0
+    for i in range(len(bin_tens)):
+        index += 2**i * bin_tens[-i-1]
+    return int(index.item())
+
+# bin_tens = torch.tensor([0,1,0])
+# print(int_from_bin_inttensor(bin_tens))
+# 1/0
 
 def build_bin_matrix(n, size):
     bin_mat = torch.zeros((size, n))
@@ -236,15 +245,14 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
             policies = torch.zeros(n_agents)
 
             for i in range(n_agents):
-                # Below only works for 2 players
                 if isinstance(th[i], torch.Tensor):
+
 
                     if (state - init_state).sum() == 0:
                         policy = torch.sigmoid(th[i])[-1]
                     else:
 
-                        policy = torch.sigmoid(th[i])[
-                            int((state[0] * 2 + state[1]).item())]
+                        policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
                 else:
                     policy = th[i](state)
                 # single state policy, so just a prob of coop between 0 and 1
@@ -612,10 +620,16 @@ class NeuralNet(nn.Module):
 def init_custom(dims):
     th = []
 
+    # for i in range(len(dims)):
+    #     th.append(
+    #         NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
+    #                   output_size=1))
+    #
     for i in range(len(dims)):
-        th.append(
-            NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
-                      output_size=1))
+        # DONT FORGET THIS +1
+        # Right now if you omit the +1 we get a bug where the first state is the prob in the all contrib state
+        th.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=0.1))
+
 
     # th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
     #               output_size=1))
@@ -699,7 +713,7 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
             if epoch % print_every == 0:
                 print("Policy {}".format(i))
                 print(
-                    "(Probabilities are for cooperation/contribution, for states 00 (no contrib, no contrib), 01 (p1 no contrib, p2 contrib), 10 (p1 contrib, p2 no contrib), 11 (contrib, contrib), start)")
+                    "(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
 
                 print(policy)
 
@@ -969,14 +983,11 @@ theta_init_modes = ['standard', 'tft']
 theta_init_mode = 'standard'
 # theta_init_mode = 'tft'
 
-
-# REPEAT some x times and store the percent coop
-
+# Repeats for each hyperparam setting
 # repeats = 10
 repeats = 1
 
-
-# If this works, tanh instead of relu or lrelu is key.
+# tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
 num_epochs = 8000
@@ -997,45 +1008,20 @@ contribution_scale=True
 
 using_nn = False
 
-# For nn simple func approx in 2p eta ~5 seems to work reasonably well. Look into why
-# one agent is defecting at the start state though.
-# 1 TFT and 1 coop agent emerging makes sense. But why is defect at the start happening for the TFT agent?
-# Compare vs tabular - do you get TFT on both or 1 coop?
-# etas = [5] # TODO Try different etas under LOLA. Check that the gradient calc still makes sense with PG formulation.
-# etas = [0.001 * 15]
-etas = [0.001 * 13]
+# Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
+etas = [0.01 * 5]
 
-# etas = [1]
-# NOTE: eta should not be a hyperparameter. Eta should be equal to the alpha of the other players
-# TODO replace this formulation, remove the eta loop, make eta equal to sum of other alphas.
-# etas = []
-# But somehow we do require scaling it up?
-# Doesn't this break mathematical properties?
+# TODO consider making etas scale based on alphas
 
 # etas = [0,1,2,3,4,5,6,7,8,9,10]
 # etas = [0, 1, 3, 5]
-# 2 layer NN with 5 eta and 64 hidden units sort of works. Sort of because you get 1 coop and 1 TFT
-# (well actually as long as you have a TFT agent, means it is working). Should look into underlying dynamics
-# to figure out what the issues are (am I even using the right updates? Why is it working at all?)
-# May need to print gradients and hand calculate to see if it makes sense.
-# It makes sense that you need network capacity, otherwise it will have trouble differentiating between states and learning an appropriate policy
-# You also need higher etas for neural networks, at least 3; 5 works better. Why? This is on exact 2p ipd btw.
 
-
-# Later do 2 p as well but with maybe 1.2 contrib factor? Not directly comparable.
-
-# Well can do 2p with 1.8. Maybe even eta=0 works there but may as well try it since I have sort of comparable results.
-
-# Maybe we try with contrib scaling first.
-
-# n_agents_list = [3, 4, 5, 6]
 # n_agents_list = [2,3,4]
-n_agents_list = [3]
+n_agents_list = [10]
 
 for n_agents in n_agents_list:
 
     if not contribution_scale:
-        # coop_payout = 1 / (1 - gamma) * (contribution_factor - 1)
         coop_payout = 1 / (1 - gamma) * (contribution_factor - 1) * \
                       (
                                   1 - gamma ** rollout_len)  # This last term here accounts for the fact that we don't go to infinity
@@ -1060,8 +1046,6 @@ for n_agents in n_agents_list:
                 1 - gamma) * adjustment_to_make_rewards_negative * \
                                     (1 - gamma ** rollout_len)
 
-    # print(coop_payout)
-    # print(max_payout)
 
     for eta in etas:
 
@@ -1070,16 +1054,11 @@ for n_agents in n_agents_list:
         for run in range(repeats):
 
             if theta_mode == 'tabular':
-                # Initialise theta ~ Normal(0, std)
-                # Select game
 
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
                                 contribution_scale=contribution_scale)
 
-                # n=4 already seems to break down... maybe it needs more epochs?
-                # Also there's the question of contribution/reward scaling. With scaling it seems to work for 4... but again a bit more shaky
-                # And even seems ok on 5 with scaling
 
                 std = 1
                 if theta_init_mode == 'tft':
@@ -1087,79 +1066,40 @@ for n_agents in n_agents_list:
                     # Basically with std higher, you're going to need higher logit shift (but only slightly, really), in order to reduce the variance
                     # and avoid random-like behaviour which could undermine the closeness/pull into the TFT basin of solutions
                     th = init_th_tft(dims, std, logit_shift=1.7)
-                    # Try under NL as well:
-                    # 1.7, 1.8 fails
-                    # 1.85, 1.9, 2 works
-                    # Under LOLA:
-                    # 1, 1.5 fails
-                    # 1.7 works
-                    # 1.6 fails
-                    # so what is the implied probability we need?
-                    # 2 works
+                    # Need around 1.85 for NL and 1.7 for LOLA
                 else:
                     th = init_th(dims, std)
             elif theta_mode == 'nn':
                 using_nn = True
 
-                # dims, Ls = ipd2_with_func_approx()
                 dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
                                                          contribution_factor=contribution_factor,
                                                          contribution_scale=contribution_scale)
 
-                # th = init_nn(dims)
 
                 th = init_custom(dims)
 
-                # TODO Try TFT mode again with some variance...
-
-                # th, optims = init_nn(dims)
             else:
                 raise Exception()
 
-            # Set num_epochs, learning rate and learning algo
 
             if using_nn:
-                # alpha = 0.01
-                # alpha = 0.001 # for NL PG REINFORCE experiments.
-                # alpha = 0.0005 # for LOLA with PG/rollouts/func approx
-                # alpha = 0.0001
-                # alpha = 0.005 # This seems to work well for LOLA with no fun approx but with rollouts
-                # alpha = 0.001 # Now with the new adjustments to reward we need to have lower learning rate for the neural net it seems
-                # alpha = 0.0005
-                # alphas = [0.0001, 0.001]
-                # alphas = [0.001, 0.005]
                 # alphas = [0.01, 0.005]
 
-                alphas = [0.001, 0.001, 0.001]
-                # alphas = [0.05, 0.05]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
-                # So maybe never use relus lol. If this actually fixes the problem, I resolve to never use relus ever again.
+                # alphas = [0.001, 0.001, 0.001]
+                alphas = [0.01] * n_agents
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
-                # How does standard reinforce/policy gradient get around this? Temperature or annealed exploration or something?
-                # Anyway try the baseline/variance reduction as well.
+                # How does standard reinforce/policy gradient get around this? Entropy regularization
+                # Baseline might help too. As might negative rewards everywhere.
 
-                # alpha = 1
-                # Wtf it actually does work with alpha=1... why does it need to be this high?
-                # But not always, btw.
-                # Actually it works with lower alpha like 0.2 as well. Just not always. Only sometimes.
-                # beta = 10
-                # With func approx it seems much more a toss up... sometimes you get coop but more often you get only 1 is coop
-                # and then rarely you even get both defect
-                # One TODO here is to test this more thoroughly with better gradient descent
-                # methods (adam, SGD w momentum, etc) And with more epochs and diff learn rates.
             else:
-                # Interesting... even tabular LOLA fails with lower alpha
-                # Nvm, it can work with more epochs too with lower alpha e.g. 1000 epochs
-                # Perhaps the higher lr just makes
-                # t easier to escape the local optima/local equilibrium
-                # And get to TFT/better equilibrium
-                # alpha = 1
+
                 alphas = [1,1]
                 alphas = [0.05,0.05]
-            # algo = 'lola'  # ('sos', 'lola', 'la', 'sga', 'co', 'eg', 'cgd', 'lss' or 'nl')
-            algos = ['lola', 'lola', 'lola']
             # algos = ['nl', 'lola']
             # algos = ['lola', 'nl']
+            algos = ['lola'] * n_agents
 
 
             # Run
@@ -1183,39 +1123,24 @@ for n_agents in n_agents_list:
                 if G_ts is not None:
                     G_ts_record[k] = G_ts[0]
 
-
-                if lola_terms_running_total == []:
-                    for i in range(n_agents):
-                        lola_terms_running_total.append(alphas[i] * lola_terms[i].detach())
-                else:
-                    for i in range(n_agents):
-                        lola_terms_running_total[i] += alphas[i] * lola_terms[i].detach()
-
-                for i in range(n_agents):
-                    if grad_2_return_1 is None:
-                        nl_term = nl_terms[i].detach()
-                    else:
-                        nl_term = grad_2_return_1[i][i].detach()
-
-                    if len(nl_terms_running_total) < n_agents:
-                        nl_terms_running_total.append(alphas[i] * nl_term)
-                    else:
-                        nl_terms_running_total[i] += alphas[i] * nl_term
-
-
-                # if nl_terms_running_total == []:
+                # This is just to get an idea of the relative influence of the lola vs nl terms
+                # if lola_terms_running_total == []:
                 #     for i in range(n_agents):
-                #         if grad_2_return_1 is None:
-                #             nl_term = nl_terms[i].detach()
-                #         else:
-                #             nl_term = grad_2_return_1[i][i].detach()
-                #         nl_terms_running_total.append(alphas[i] * nl_term)
+                #         lola_terms_running_total.append(alphas[i] * lola_terms[i].detach())
                 # else:
                 #     for i in range(n_agents):
-                #         # print("hi")
-                #         # print(grad_2_return_1[i][i])
-                #         nl_terms_running_total[i] += alphas[i] * grad_2_return_1[i][i].detach()
-                #         # 1/0
+                #         lola_terms_running_total[i] += alphas[i] * lola_terms[i].detach()
+                #
+                # for i in range(n_agents):
+                #     if grad_2_return_1 is None:
+                #         nl_term = nl_terms[i].detach()
+                #     else:
+                #         nl_term = grad_2_return_1[i][i].detach()
+                #
+                #     if len(nl_terms_running_total) < n_agents:
+                #         nl_terms_running_total.append(alphas[i] * nl_term)
+                #     else:
+                #         nl_terms_running_total[i] += alphas[i] * nl_term
 
 
 
@@ -1229,57 +1154,12 @@ for n_agents in n_agents_list:
                     # print("NL Terms: ")
                     # print(nl_terms_running_total)
 
-            # Below is a measure across the gradient (so first, abs value/magnitude of gradient, and then average over the number of terms in it)
-            # This lets us see approximately in each state, how much influence the LOLA term has
-            # (but we should also compare to the regular gradient?)
-            # Doing just for agent 0 right now
-            # print_gradients = False
-            # if print_gradients:
-            #     if lola_terms_sum is not None:
-            #         print("LOLA terms:")
-            #         print(torch.abs(lola_terms_sum[0]) / num_epochs)
-            #         print((lola_terms_sum[0]) / num_epochs)
-            #     if nl_terms_sum is not None:
-            #         print("NL terms:")
-            #         print(torch.abs(nl_terms_sum[0]) / num_epochs)
-            #         print((nl_terms_sum[0]) / num_epochs)
-            #     if lola_terms_sum is not None:
-            #         print(torch.mean(torch.abs(lola_terms_sum[0])) / num_epochs)
-            #         total_lola = torch.zeros(1)
-            #         for i in range(len(th)):
-            #             total_lola += torch.mean(
-            #                 (torch.abs(lola_terms_sum[0])) / num_epochs)
-            #         avg_lola = total_lola / len(th)
-            #         print("Avg LOLA abs gradient: {0:.5f}".format(
-            #             avg_lola.item()))
-            #     if nl_terms_sum is not None:
-            #         print(torch.mean(torch.abs(nl_terms_sum[0])) / num_epochs)
-            #         total_nl = torch.zeros(1)
-            #         for i in range(len(th)):
-            #             total_nl += torch.mean(
-            #                 (torch.abs(nl_terms_sum[0])) / num_epochs)
-            #         avg_nl = total_nl / len(th)
-            #         print("Avg NL abs gradient: {0:.5f}".format(avg_nl.item()))
-
-            # print(losses_out.mean(axis=1))
-
-            # stability_threshold = 0.95
-
-            # Stability of cooperation (how many epochs had cooperation)
-            # print((losses_out.mean(axis=1) <= stability_threshold * (-coop_payout)))
-            # total_stable_coop_epochs = sum(losses_out.mean(axis=1) <= stability_threshold * (-coop_payout))
-            # percent_stable_coop = total_stable_coop_epochs / num_epochs
-            # print(percent_stable_coop)
-
             # % comparison of average individual reward to max average individual reward
             # This gives us a rough idea of how close to optimal (how close to full cooperation) we are.
-            # max_avg_indiv_reward = coop_payout # well actually a loss, not a reward
             reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_payout)
-            # print(-losses_out.mean() / max_avg_indiv_reward)
 
             plot_results = True
             if plot_results:
-                # plt.plot(losses_out)
                 plt.plot(G_ts_record + discounted_sum_of_adjustments)
 
                 plt.show()
