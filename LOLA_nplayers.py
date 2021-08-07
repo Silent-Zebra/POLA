@@ -236,11 +236,8 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
             policies = torch.zeros(n_agents)
 
             for i in range(n_agents):
+                # Below only works for 2 players
                 if isinstance(th[i], torch.Tensor):
-                    # print(state[0][0].item())
-                    # print(init_state_representation)
-                    # print(state)
-                    # print((state - init_state).sum())
 
                     if (state - init_state).sum() == 0:
                         policy = torch.sigmoid(th[i])[-1]
@@ -615,10 +612,15 @@ class NeuralNet(nn.Module):
 def init_custom(dims):
     th = []
 
-    th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
-                  output_size=1))
-    th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
-                  output_size=1))
+    for i in range(len(dims)):
+        th.append(
+            NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
+                      output_size=1))
+
+    # th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
+    #               output_size=1))
+    # th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
+    #               output_size=1))
     # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
     # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
 
@@ -677,10 +679,12 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
 
     if using_nn:
 
-        state_batch = torch.cat((build_bin_matrix(n_agents, n_agents ** 2),
+        state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents ),
                                  torch.Tensor([
                                                   init_state_representation] * n_agents).reshape(
                                      1, -1)))
+
+
 
         # state_batch = torch.Tensor([[0, 0], [0, 1], [1, 0], [1, 1], [-1, -1]])
         # print(state_batch)
@@ -982,10 +986,10 @@ print_every = 20
 gamma = 0.96
 
 # n_agents = 3
-contribution_factor = 1.6
-contribution_scale = False
-# contribution_factor=0.6
-# contribution_scale=True
+# contribution_factor = 1.6
+# contribution_scale = False
+contribution_factor=0.6
+contribution_scale=True
 
 
 # TODO Feb 17 after can try with contr factor scale
@@ -998,7 +1002,9 @@ using_nn = False
 # 1 TFT and 1 coop agent emerging makes sense. But why is defect at the start happening for the TFT agent?
 # Compare vs tabular - do you get TFT on both or 1 coop?
 # etas = [5] # TODO Try different etas under LOLA. Check that the gradient calc still makes sense with PG formulation.
-etas = [0.001 * 15]
+# etas = [0.001 * 15]
+etas = [0.001 * 13]
+
 # etas = [1]
 # NOTE: eta should not be a hyperparameter. Eta should be equal to the alpha of the other players
 # TODO replace this formulation, remove the eta loop, make eta equal to sum of other alphas.
@@ -1024,7 +1030,7 @@ etas = [0.001 * 15]
 
 # n_agents_list = [3, 4, 5, 6]
 # n_agents_list = [2,3,4]
-n_agents_list = [2]
+n_agents_list = [3]
 
 for n_agents in n_agents_list:
 
@@ -1124,7 +1130,7 @@ for n_agents in n_agents_list:
                 # alphas = [0.001, 0.005]
                 # alphas = [0.01, 0.005]
 
-                alphas = [0.001, 0.001]
+                alphas = [0.001, 0.001, 0.001]
                 # alphas = [0.05, 0.05]  # will leakyRelus really make all the difference? Maybe. Because with relus you have the dying relu problem, and this stops gradients including second order gradients too.
                 # So maybe never use relus lol. If this actually fixes the problem, I resolve to never use relus ever again.
 
@@ -1151,7 +1157,7 @@ for n_agents in n_agents_list:
                 alphas = [1,1]
                 alphas = [0.05,0.05]
             # algo = 'lola'  # ('sos', 'lola', 'la', 'sga', 'co', 'eg', 'cgd', 'lss' or 'nl')
-            algos = ['lola', 'lola']
+            algos = ['lola', 'lola', 'lola']
             # algos = ['nl', 'lola']
             # algos = ['lola', 'nl']
 
