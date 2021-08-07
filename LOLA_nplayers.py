@@ -132,61 +132,6 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
 
 # Of course these updates assume we have access to the reward model.
 
-def ipd2_with_func_approx(gamma=0.96):
-    dims = [2,
-            2]  # now each agent gets a vector observation, a 2 dimensional vector
-    # imagine something like [0,1] instead of CD which previously was just a 1D value such as 2
-
-    # Instead of theta just being a tabular policy, we will use a neural net
-    # as a function approximator based on the input tensor states
-    # payout_mat_1 = torch.Tensor([[-2, -5], [0, -4]])
-    payout_mat_1 = torch.Tensor([[-1, -3], [0, -2]])
-    payout_mat_2 = torch.t(payout_mat_1)
-
-    def Ls(th):
-        # Now theta needs to be neural net parameters which we'll optimize
-        # Neural net will have output dim 1 to be consistent, it just outputs a prob of coop
-        # to get the normalized probability of action C or D
-        # Which means theta needs to be a list of NN params (one set of params for each agent)
-
-        init_state = torch.Tensor([[init_state_representation,
-                                    init_state_representation]])  # repeat -1 n times, where n is num agents
-        # Every agent sees same state; P1 [action, P2 action, P3 action ...]
-        # State 2 is start state
-
-        # Action prob at start of the game (higher val = more likely to coop)
-        p_1_0 = th[0](
-            init_state)  # take theta 0 and pass init_state through it to get the action probs
-        # Do we need sigmoid? Depends how you set up the NN
-        p_2_0 = th[1](init_state)
-
-        # Prob of each of the first states (after first action), CC CD DC DD
-        p = torch.cat([p_1_0 * p_2_0,
-                       p_1_0 * (1 - p_2_0),
-                       (1 - p_1_0) * p_2_0,
-                       (1 - p_1_0) * (1 - p_2_0)], dim=1)
-
-        # Probabilities in the states other than the start state
-        # state_batch = torch.Tensor([[1, 1], [1, 0], [0, 1], [0, 0]])
-        state_batch = torch.Tensor([[0, 0], [0, 1], [1, 0], [1, 1]])
-        # Let's revert this to 0 is coop and 1 is defect.
-        # And 2 is start state here.
-        p_1 = th[0](state_batch)
-        p_2 = th[1](state_batch)
-
-        P = torch.cat([p_1 * p_2,
-                       p_1 * (1 - p_2),
-                       (1 - p_1) * p_2,
-                       (1 - p_1) * (1 - p_2)], dim=1)
-        M = torch.matmul(p, torch.inverse(torch.eye(4) - gamma * P))
-
-        L_1 = torch.matmul(M, torch.reshape(payout_mat_1, (4, 1)))
-        L_2 = torch.matmul(M, torch.reshape(payout_mat_2, (4, 1)))
-        return [L_1, L_2]
-
-    return dims, Ls
-
-
 def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
                                   contribution_scale=False):
     # Contribution game
@@ -549,14 +494,6 @@ def init_th_tft(dims, std, logit_shift=3):
     return th
 
 
-# TODO try again with NL too.
-# Also shift the logits so all others more likely to defect, ie minus the init, but then increase the coop inits by 2x. And maybe scale the logit down to 3 or so.
-
-
-# It's not working. It's not learning TFT. Why? What might be going wrong?
-# Try rollouts with no func approx first?
-
-
 class NeuralNet(nn.Module):
     def __init__(self, input_size, hidden_size, extra_hidden_layers,
                  output_size):
@@ -564,7 +501,6 @@ class NeuralNet(nn.Module):
         layers = []
 
         # layers.append(torch.nn.Linear(input_size, output_size))
-
 
         layers.append(torch.nn.Linear(input_size, hidden_size))
         # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
@@ -576,46 +512,14 @@ class NeuralNet(nn.Module):
         layers.append(nn.Linear(hidden_size, output_size))
         layers.append(nn.Sigmoid())
 
-
         self.net = nn.Sequential(*layers)
 
 
-
-
-        # self.layer1 = nn.Linear(input_size, hidden_size)
-        # self.layer2 = nn.Linear(hidden_size, hidden_size)
-        # self.layer3 = nn.Linear(hidden_size, output_size)
-
     def forward(self, x):
-        # output = F.leaky_relu(self.layer1(x))
-        # output = F.leaky_relu(self.layer2(output))
-        # output = torch.sigmoid(self.layer3(output))
-
         output = self.net(x)
-
         return output
 
 
-# def init_nn(dims):
-#     th = []
-#     # optims = []
-#     # Dims [2, 2] or something, len is num agents
-#     # And each num represents the dim of the input (state) for that agent
-#     for i in range(len(dims)):
-#         if i == 1:
-#             # Test diff dimension
-#             init = NeuralNet(input_size=dims[i], hidden_size=128, output_size=1)
-#         else:
-#             init = NeuralNet(input_size=dims[i], hidden_size=128, output_size=1)
-#
-#         # init = NeuralNet(input_size=dims[i], hidden_size=128, output_size=1)
-#
-#
-#
-#         # optimizer = torch.optim.Adam(init.parameters(), lr=lr)
-#         th.append(init)
-#         # optims.append(optimizer)
-#     return th #, optims
 
 def init_custom(dims):
     th = []
@@ -694,10 +598,8 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
     if using_nn:
 
         state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents ),
-                                 torch.Tensor([
-                                                  init_state_representation] * n_agents).reshape(
+                                 torch.Tensor([init_state_representation] * n_agents).reshape(
                                      1, -1)))
-
 
 
         # state_batch = torch.Tensor([[0, 0], [0, 1], [1, 0], [1, 1], [-1, -1]])
@@ -718,9 +620,6 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
                 print(policy)
 
                 if i==0:
-                    # layers = th[0].net
-                    # for param in layers[0].parameters():
-                    #     print(param)
 
                     print(
                         "Discounted Sum Rewards in this episode (removing negative adjustment): ")
@@ -752,28 +651,9 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
     # if algo == 'lola':
     if 'lola' in algos:
 
-        # TODO Can fix the seed and compare two variants to see if any different
-        # afterward ask
-
-        # test = [[(j, i) for j in range(n)] for i in range(n)]
-        # print(test)
-        # print(test[1][0])
-        # if you wanna see why we need to flip the order
-        # And for every agent i we calculate the pairwise with theta_i and theta_j for every
-        # other agent j
 
         if using_nn:
-            # params_len = len(list(th[0].parameters())) # assumes all agents have same param list length
 
-            # terms = [sum([torch.sum(grad_L[j][i][k] * grad_L[j][j][k]) for k in
-            #                range(params_len)
-            #           for j in range(n) if j != i]) for i in range(n)]
-            # grads = [
-            #     [grad_L[i][i][k] - alpha * eta * get_gradient(terms[i], param) for
-            #      (k, param)
-            #      in enumerate(th[i].parameters())] for i in
-            #     range(n)]
-            #
 
             # TODO IMPORTANT REALLY THINK ABOUT WHAT ORDER IS CORRECT HERE
 
@@ -806,28 +686,7 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
                             else:
                                 grad_1_grad_2_return_2_new[i][j] += grad_t
 
-            # grad_1_grad_2_return_2 = []
-            # for i in range(n_agents):
-            #     grad_1_grad_2_return_2.append([0] * n_agents)
-            # for i in range(n_agents):
-            #     for j in range(n_agents):
-            #         if i != j:
-            #             for t in range(rollout_len):
-            #                 grad_t = torch.FloatTensor(gamma_t_r_ts)[:,j][t] * \
-            #                                                torch.outer(get_gradient(log_p_act_sums_0_to_t[:,i][t], th[i]) if isinstance(
-            #                 th[i], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,i][t], param).flatten() for param in
-            #                   th[i].parameters()]), get_gradient(log_p_act_sums_0_to_t[:,j][t], th[j]) if isinstance(
-            #                 th[j], torch.Tensor) else torch.cat([get_gradient(log_p_act_sums_0_to_t[:,j][t], param).flatten() for param in
-            #                   th[j].parameters()]))
-            #
-            #                 if t == 0:
-            #                     grad_1_grad_2_return_2[i][j] = grad_t
-            #                 else:
-            #                     grad_1_grad_2_return_2[i][j] += grad_t
-            # print(grad_1_grad_2_return_2_new)
-            # print(grad_1_grad_2_return_2)
-            # 1/0
-            #
+
             grad_1_grad_2_return_2 = grad_1_grad_2_return_2_new
 
             # When we take the j i entry of the log_p_times_G_t_matrix
@@ -899,23 +758,12 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
 
                             param_len = len(param.flatten())
 
-                            # print(k)
-                            #
-                            # print(grad_2_return_1[i][i][
-                            #       start_pos:start_pos + param_len])
-                            # print(grad_2_return_1)
-
-                            # print(grad_2_return_1[i][i])
-                            # print(lola_terms[i])
-                            # print(param.size())
-
                             grad.append(
                                 (grad_2_return_1[i][i][start_pos:start_pos + param_len] + lola_terms[i][
                                                            start_pos:start_pos + param_len]).reshape(param.size())
                             )
                             start_pos += param_len
 
-                        # print(grad)
 
                         grads.append(grad)
                     else:
