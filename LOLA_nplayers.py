@@ -250,6 +250,7 @@ class ContributionGame():
         losses = losses_nl
 
         grad_log_p_act = []
+
         for i in range(n_agents):
             # TODO could probably get this without taking grad, could be more efficient
             example_grad = get_gradient(log_p_act[0, i], th[i]) if isinstance(
@@ -638,9 +639,6 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
                                      1, -1)))
 
 
-        # state_batch = torch.Tensor([[0, 0], [0, 1], [1, 0], [1, 1], [-1, -1]])
-        # print(state_batch)
-
         policies = []
         for i in range(n):
             if isinstance(th[i], torch.Tensor):
@@ -664,13 +662,6 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
 
             policies.append(policy)
 
-        # grad_L = [[(get_gradient(losses[j], th[i]) if isinstance(th[i], torch.Tensor) else
-        #     [get_gradient(losses[j], param) for param in th[i].parameters()])
-        #            for j in range(n)]
-        #           for i in range(n)]
-
-
-
 
     else:
         for i in range(n):
@@ -690,32 +681,30 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
 
         if using_samples:
 
-
-            # TODO IMPORTANT REALLY THINK ABOUT WHAT ORDER IS CORRECT HERE
-
-            # TODO aren't only the diagonal terms here used too? E.g. when i == j
-            # grad_1_grad_2_return_2 = [
-            #     [get_gradient(grad_1_grad_2_matrix[i][j], th[j]) if isinstance(th[j], torch.Tensor) else
-            #         torch.cat([get_gradient(grad_1_grad_2_matrix[i][j], param).flatten() for param in
-            #       th[j].parameters()])
-            #      for j in range(n)]
-            #     for i in range(n)]
-
             grad_1_grad_2_return_2_new = []
             for i in range(n_agents):
                 grad_1_grad_2_return_2_new.append([0] * n_agents)
+
+
+            grad_log_p_act_sums_0_to_t = []
+            for i in range(n_agents):
+                grad_log_p_act_sums_0_to_t.append(torch.cumsum(grad_log_p_act[i], dim=0))
+            # print(grad_log_p_act_sums_0_to_t)
 
             for i in range(n_agents):
                 for j in range(n_agents):
                     if i != j:
                         for t in range(rollout_len):
-                            # print(grad_log_p_act)
-                            # print(grad_log_p_act[:t+1])
+
+                            # grad_t = torch.FloatTensor(gamma_t_r_ts)[:, j][t] * \
+                            #          torch.outer(
+                            #              grad_log_p_act[i][:t + 1].sum(dim=0),
+                            #              grad_log_p_act[j][:t + 1].sum(dim=0))
 
                             grad_t = torch.FloatTensor(gamma_t_r_ts)[:, j][t] * \
                                      torch.outer(
-                                         grad_log_p_act[i][:t + 1].sum(dim=0),
-                                         grad_log_p_act[j][:t + 1].sum(dim=0))
+                                         grad_log_p_act_sums_0_to_t[i][t],
+                                         grad_log_p_act_sums_0_to_t[j][t])
 
                             if t == 0:
                                 grad_1_grad_2_return_2_new[i][j] = grad_t
@@ -724,15 +713,6 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
 
 
             grad_1_grad_2_return_2 = grad_1_grad_2_return_2_new
-
-            # When we take the j i entry of the log_p_times_G_t_matrix
-            # what we get is the log probs of player j and the return of player i
-            # so obv we have to differentiate through w.r.t player j
-            # But then entry i j of the resulting grad_2_return_1
-            # is then grad_j of player i return
-            # Should be ok.
-
-            # TODO CHECK THIS IS OK. CHECK EVERYTHING.
 
             grad_2_return_1 = [
                 [get_gradient(log_p_times_G_t_matrix[j][i],
@@ -757,25 +737,15 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
             # is approximated by sample, so after that, we have no p1 term showing up anywhere anymore)
             # Then this will work and we will get what we want.
 
-            # TODO given that only the i i terms are used here (only the diagonal)
-            # why do we bother calculating the whole matrix?
-            # Could be a potential speedup.
-            # Or alternatively reuse this matrix instead of calculating the separate grad_2_return_1 matrix
-
-            # The reason we use alpha * eta here is because
-            # alpha is the learning step of the opponent (in this case we assume same amount)
-            # and then we take some fraction of that in our learning step
-            # Otherwise it becomes way too large relative to our gradient
-            # TODO Actually think about this, is this true? Maybe it's not true.
+            # Eta is a hyperparam
 
             # IMPORTANT NOTE: the way these grad return matrices are set up is that you should always call i j here
             # because the j i switch was done during the construction of the matrix
-            # TODO we should allow different eta/learning rates across other agents
+            # TODO allow for different eta across agents?
             # And then account for that here.
             lola_terms = [sum([eta * grad_2_return_1[i][j].t() @
                                grad_1_grad_2_return_2[i][j].t() for j in
                                range(n) if j != i]) for i in range(n)]
-
 
             grads = []
             for i in range(n):
@@ -805,10 +775,6 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
                     else:
                         grads.append(grad_2_return_1[i][i])
 
-
-
-
-
         else:
             # Look at pg 12, Stable Opponent Shaping paper
             # This is literally the first line of the second set of equations
@@ -825,15 +791,10 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
                 eta * get_gradient(terms[i], th[i])
                 for i in range(n)]
 
-
-
             nl_terms = [grad_L[i][i]
                         for i in range(n)]
 
-
-
             grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
-
 
     else:  # Naive Learning
         grads = [grad_L[i][i] for i in range(n)]
@@ -852,11 +813,6 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
                 th[i] += alphas[i] * grads[i]
     return th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1
 
-
-# TODO DEC 13
-# Only create the list of bin integers once. Then use that repeatedly
-# Create it not as a list but as a torch tensor
-# Then instead of for loop use vectorization. This should be much faster.
 
 calculation_modes = ['exact', 'samples']
 calculation_mode = 'samples'
@@ -888,16 +844,12 @@ contribution_scale = False
 # contribution_factor=0.6
 # contribution_scale=True
 
-
-# TODO Feb 17 after can try with contr factor scale
-#
-
 using_samples = False
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5]
 
-# TODO consider making etas scale based on alphas
+# TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
 # etas = [0,1,2,3,4,5,6,7,8,9,10]
 # etas = [0, 1, 3, 5]
