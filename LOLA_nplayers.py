@@ -609,7 +609,7 @@ def get_gradient(function, param):
     return grad
 
 
-def update_th(th, Ls, gradient_terms, alphas, eta, algos, epoch,
+def update_th(th, gradient_terms, alphas, eta, algos, epoch,
               a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_samples=False, beta=1):
     n = len(th)
 
