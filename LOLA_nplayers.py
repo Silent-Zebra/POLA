@@ -129,9 +129,9 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
 
     return dims, Ls
 
-class contrib_game():
+class ContributionGame():
     def __init__(self, n, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
-        self.n = n
+        self.n_agents = n
         self.gamma = gamma
         self.contribution_factor = contribution_factor
         self.contribution_scale = contribution_scale
@@ -142,19 +142,139 @@ class contrib_game():
         else:
             assert self.contribution_factor > 1
 
-    def rollout(self, th, num_iters=rollout_len):
-        init_state = torch.Tensor([[init_state_representation] * self.n])  # repeat -1 n times, where n is num agents
+    def rollout(self, th, num_iters):
+        init_state = torch.Tensor([[init_state_representation] * self.n_agents])  # repeat -1 n times, where n is num agents
         state = init_state
 
-        trajectory = torch.zeros((num_iters, n_agents), dtype=torch.int)
-        rewards = np.zeros((num_iters, n_agents))
-        policy_history = torch.zeros((num_iters, n_agents))
+        trajectory = torch.zeros((num_iters, self.n_agents), dtype=torch.int)
+        rewards = torch.zeros((num_iters, self.n_agents))
+        policy_history = torch.zeros((num_iters, self.n_agents))
 
-        # discounts = np.ones(num_iters)
-        # for i in range(num_iters):
-        #     discounts[i] *= gamma ** i
-        #
-        # cum_discount = torch.cumprod(hp.gamma * torch.ones(*rewards.size()), dim=1)/hp.gamma
+        for iter in range(num_iters):
+
+            policies = torch.zeros(self.n_agents)
+
+            for i in range(self.n_agents):
+                if isinstance(th[i], torch.Tensor):
+
+                    if (state - init_state).sum() == 0:
+                        policy = torch.sigmoid(th[i])[-1]
+                    else:
+
+                        policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
+                else:
+                    policy = th[i](state)
+                # policy prob of coop between 0 and 1
+                policies[i] = policy
+
+            policy_history[iter] = policies
+
+            actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
+
+            state = torch.Tensor(actions)
+
+            trajectory[iter] = torch.Tensor(actions)
+
+            # Note negative rewards might help with exploration in PG formulation
+            total_contrib = sum(actions)
+            payout_per_agent = total_contrib * contribution_factor / self.n_agents
+            agent_rewards = -actions + payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
+            agent_rewards -= adjustment_to_make_rewards_negative
+            rewards[iter] = agent_rewards
+
+        return trajectory, rewards, policy_history
+
+    def get_gradient_terms(self, trajectory, rewards, policy_history):
+
+        num_iters = len(trajectory)
+
+        discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
+                                  dim=0) / self.gamma
+
+        G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
+
+        # Discounted rewards, not sum of rewards which G_t is
+        gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
+
+        p_act_given_state = trajectory.float() * policy_history + (
+                    1 - trajectory.float()) * (1 - policy_history)
+        # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
+        # and when defect 0 is taken, we take 1-policy = prob of defect
+
+        log_p_act = torch.log(p_act_given_state)
+
+        # These are basically grad_i E[R_0^i] - naive learning loss
+        # no LOLA loss here yet
+        losses_nl = (log_p_act * G_ts).sum(dim=0)
+        # G_ts gives you the inner sum of discounted rewards
+
+        log_p_times_G_t_matrix = torch.zeros((n_agents, n_agents))
+        # so entry 0,0 is - (log_p_act[:,0] * G_ts[:,0]).sum(dim=0)
+        # entry 1,1 is - (log_p_act[:,1] * G_ts[:,1]).sum(dim=0)
+        # and so on
+        # entry 0,1 is - (log_p_act[:,0] * G_ts[:,1]).sum(dim=0)
+        # and so on
+        # Be careful with dimensions/not to mix them up
+        for i in range(n_agents):
+            for j in range(n_agents):
+                log_p_times_G_t_matrix[i][j] = (
+                            log_p_act[:, i] * G_ts[:, j]).sum(dim=0)
+        # Remember that the grad corresponds to the log_p and the R_t corresponds to the G_t
+        # We can switch the log_p and G_t (swap log_p i to j and vice versa) if we want to change order
+
+        # For the first term, my own derivation showed that
+        # grad_2 E(R_1) = (prop to) Sum (grad_2 (log pi_2)) G_t(1)
+
+        # For the grad_1 grad_2 term:
+        # the way this will work is that the ith entry (row) in this log_p_act_sums_0_to_t
+        # will be the sum of log probs from time 0 to time i
+        # Then the dimension of each row is the number of agents - we have the sum of log probs
+        # for each agent
+        # later we will product them (but in pairwise combinations!)
+
+        log_p_act_sums_0_to_t = torch.cumsum(log_p_act, dim=0)
+
+        # Remember also that for p1 you want grad_1 grad_2 of R_2 (P2's return)
+        # So then you also want grad_1 grad_3 of R_3
+        # and so on
+
+        grad_1_grad_2_matrix = torch.zeros((n_agents, n_agents))
+        for i in range(n_agents):
+            for j in range(n_agents):
+                grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,
+                                              j] * log_p_act_sums_0_to_t[:,
+                                                   i] * log_p_act_sums_0_to_t[:,
+                                                        j]).sum(dim=0)
+        # Here entry i j is grad_i grad_j E[R_j]
+
+        losses = losses_nl
+
+        grad_log_p_act = []
+        for i in range(n_agents):
+            # TODO could probably get this without taking grad, could be more efficient
+            example_grad = get_gradient(log_p_act[0, i], th[i]) if isinstance(
+                th[i], torch.Tensor) else torch.cat(
+                [get_gradient(log_p_act[0, i], param).flatten() for
+                 param in
+                 th[i].parameters()])
+            grad_len = len(example_grad)
+            grad_log_p_act.append(torch.zeros((rollout_len, grad_len)))
+
+        for i in range(n_agents):
+
+            for t in range(rollout_len):
+
+                grad_t = get_gradient(log_p_act[t, i], th[i]) if isinstance(
+                    th[i], torch.Tensor) else torch.cat(
+                    [get_gradient(log_p_act[t, i], param).flatten() for
+                     param in
+                     th[i].parameters()])
+
+
+                grad_log_p_act[i][t] = grad_t
+
+        return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
+
 
 
 
@@ -186,11 +306,13 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
 
     def Ls(th, num_iters=rollout_len):
 
-        # In n player case we have to do stochastic rollout instead of matrix inversion
-        # for expectation because the transition matrix blows up exponentially
+        # stochastic rollout instead of matrix inversion (exact case)
+        # helps significantly because even though it only saves ~n^3 time
+        # the base n is already exponential in the number of agents as state space blows up exponentially
+        # Rollouts can allow us to get 10, even 15 agents
+        # But for 20 or 30 we will need func approx as well
 
-        init_state = torch.Tensor([[init_state_representation] * n])  # repeat -1 n times, where n is num agents
-        # print(init_state)
+        init_state = torch.Tensor([[init_state_representation] * n])  # repeat -1 (init state representation) n times, where n is num agents
         # Every agent sees same state; P1 [action, P2 action, P3 action ...]
 
         state = init_state
@@ -199,34 +321,19 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         rewards = torch.zeros((num_iters, n_agents))
         policy_history = torch.zeros((num_iters, n_agents))
 
-        # discounts = np.ones(num_iters)
-        # for i in range(num_iters):
-        #     discounts[i] *= gamma ** i
-        #
-        # print(discounts)
         discounts = torch.cumprod(gamma * torch.ones((num_iters)),dim=0) / gamma
-
 
 
         # TODO: rollout can be refactored as a function
         # Lots of this code can be refactored as functions
 
-        # First use contrib factor, keep everything exact, but make it contrib factor game.
-        # Then once that working, do rollouts still with 2 players.
-        # No, do rollouts first, then contrib factor. Don't want to bother with exact contrib factor formulation.
 
-        # Below is for rollouts. We can do without it for now. First just try the basic formulation
-        # with exact to see if it works.
-        # Then do 2 player rollouts and see if that works.
-        # Only once 2 player rollouts are working, then go to n player rollouts.
         for iter in range(num_iters):
 
-            # policies = []
             policies = torch.zeros(n_agents)
 
             for i in range(n_agents):
                 if isinstance(th[i], torch.Tensor):
-
 
                     if (state - init_state).sum() == 0:
                         policy = torch.sigmoid(th[i])[-1]
@@ -235,18 +342,12 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
                         policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
                 else:
                     policy = th[i](state)
-                # single state policy, so just a prob of coop between 0 and 1
-                # print(policy)
+                # policy prob of coop between 0 and 1
                 policies[i] = policy
 
             policy_history[iter] = policies
 
             actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
-            # print(actions)
-
-            # actions = np.random.binomial(np.ones(n_agents, dtype=int),
-            #                              policies.detach().numpy())
-            # print(actions)
 
             state = torch.Tensor(actions)
 
@@ -258,12 +359,6 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
             agent_rewards = -actions + payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
-
-        # G_ts = torch.zeros((num_iters, n_agents))
-        # for i in range(len(rewards)):
-        #     G_t = torch.FloatTensor(
-        #         (rewards[i:] * discounts[i:].reshape(-1, 1)).sum(axis=0))
-        #     G_ts[i] = G_t
 
         G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
 
@@ -279,8 +374,7 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
 
         # These are basically grad_i E[R_0^i] - naive learning loss
         # no LOLA loss here yet
-        losses_nl = (log_p_act * G_ts).sum(
-            dim=0)  # Negative because the formulation is a loss (in this codebase), not a reward
+        losses_nl = (log_p_act * G_ts).sum(dim=0)
         # G_ts gives you the inner sum of discounted rewards
 
         log_p_times_G_t_matrix = torch.zeros((n_agents, n_agents))
@@ -296,22 +390,9 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
                             log_p_act[:, i] * G_ts[:, j]).sum(dim=0)
         # Remember that the grad corresponds to the log_p and the R_t corresponds to the G_t
         # We can switch the log_p and G_t (swap log_p i to j and vice versa) if we want to change order
-        # maybe to be more consistent with other term
-
-        # For lola let's try just sum of y^t r_t
-        # No I think we do need to do the two separate terms
-        # And then we need to modify code around line 600 or so to take gradients
-        # differently for the two different terms
-        # one is grad_2 E(R_1) and the other is grad_1 grad_2 E(R_2)
 
         # For the first term, my own derivation showed that
         # grad_2 E(R_1) = (prop to) Sum (grad_2 (log pi_2)) G_t(1)
-        # Btw you also need to think about how to generalize to n players later
-        # Follow the same terms formulation
-        # There's some matrix of G_ts and log probs where you can do pairwise between all players
-        # And you should probably use that
-        # But maybe just get 2p working first. Once 2p actually learns LOLA/TFT
-        # Then scale/generalize.
 
         # For the grad_1 grad_2 term:
         # the way this will work is that the ith entry (row) in this log_p_act_sums_0_to_t
@@ -320,15 +401,7 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         # for each agent
         # later we will product them (but in pairwise combinations!)
 
-        # log_p_act_sums_0_to_t = torch.zeros((num_iters, n_agents))
-
-        # for i in range(num_iters):
-        #     single_sum = log_p_act[:i + 1].sum(dim=0)
-        #     # print(single_sum)
-        #     log_p_act_sums_0_to_t[i] = single_sum
-
         log_p_act_sums_0_to_t = torch.cumsum(log_p_act, dim=0)
-
 
         # Remember also that for p1 you want grad_1 grad_2 of R_2 (P2's return)
         # So then you also want grad_1 grad_3 of R_3
@@ -347,16 +420,14 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
 
         grad_log_p_act = []
         for i in range(n_agents):
+            # TODO could probably get this without taking grad, could be more efficient
             example_grad = get_gradient(log_p_act[0, i], th[i]) if isinstance(
                 th[i], torch.Tensor) else torch.cat(
                 [get_gradient(log_p_act[0, i], param).flatten() for
                  param in
                  th[i].parameters()])
-            # print(example_grad)
             grad_len = len(example_grad)
-            # print(grad_len  )
             grad_log_p_act.append(torch.zeros((rollout_len, grad_len)))
-            # grad_log_p_act.append([0] * rollout_len)
 
         for i in range(n_agents):
 
@@ -368,45 +439,13 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
                      param in
                      th[i].parameters()])
 
-                # get_gradient(log_p_act_sums_0_to_t[:, j][t],
-                #                                        th[j]) if isinstance(
-                #    th[j], torch.Tensor) else torch.cat(
-                #    [get_gradient(log_p_act_sums_0_to_t[:, j][t], param).flatten() for
-                #     param in
-                #     th[j].parameters()])
-                # print(grad_t)
 
                 grad_log_p_act[i][t] = grad_t
 
         return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
 
-        # TODO May 2021
-        # you're gonna have to change the output/return format here... returning something like the actions taken instead
-        # And you'll have to change the update_th code too to calculate gradients based on how changing policy changes action probability
-        # And that, multiplied by the G_t as weighting, and then summed up over the episode
-        # Oh and then you have to change the LOLA gradient calculation to account for this too, probably
-        # Put it as a separate flag, use a REINFORCE boolean instead.
+        # TODO
         # Later use actor critic and other architectures
-
-        # You'll probably need a lot more episodes too with smaller learning rate
-        # Maybe baseline/variance reduction too
-        # Anyway all this is good practice/learning, but will prob take a while
-        # Get this working for 2 players w func approx and rollouts first, before moving on to more agents and before optimizing for speed
-        # And using GPUs (e.g. colab)
-
-        # Then multiply by the gradient of the log policy
-
-        # Only at end of episode then collect discounted sum reward for all agents and do policy updates
-        # For all of the Gt's, you can sum them up and accumulate the gradient updates
-        # or average them, whatever
-        # Do reinforce algorithm first
-        # ANd test in 2p case with naive learning first then LOLA and see what happens
-        # Then n player general case
-        # Also consider doing the total num cooperators formulation, you can do that in tabular
-        # And see results.
-        # Yeah use LOLA-PG which is basically just REINFORCE
-        # We could try actor critic or even only value function (basically DQN?) methods later or separately too
-        # But for now just accumulate all the trajectories and apply PG update
 
     return dims, Ls
 
@@ -586,7 +625,7 @@ def get_gradient(function, param):
 #     return torch.stack(out)
 
 
-def update_th(th, Ls, alphas, eta, algos, epoch,
+def update_th(th, gradient_terms, alphas, eta, algos, epoch,
               a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_nn=False, beta=1):
     n = len(th)
 
@@ -595,10 +634,12 @@ def update_th(th, Ls, alphas, eta, algos, epoch,
     nl_terms = None
 
     if using_nn:
-        losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = Ls(
-            th)
-    else:
-        losses = Ls(th)
+        # losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = Ls(
+        #     th)
+        losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = gradient_terms
+
+    # else:
+    #     losses = Ls(th)
 
     # Compute gradients
     # This is a 2d array of all the pairwise gradient computations between all agents
@@ -931,10 +972,14 @@ for n_agents in n_agents_list:
             elif theta_mode == 'nn':
                 using_nn = True
 
-                dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
+                # dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
+                #                                          contribution_factor=contribution_factor,
+                #                                          contribution_scale=contribution_scale)
+
+                game = ContributionGame(n=n_agents, gamma=gamma,
                                                          contribution_factor=contribution_factor,
                                                          contribution_scale=contribution_scale)
-
+                dims = game.dims
 
                 th = init_custom(dims)
 
@@ -970,12 +1015,14 @@ for n_agents in n_agents_list:
 
             # th_out = []
             for k in range(num_epochs):
+                trajectory, rewards, policy_history = game.rollout(th, num_iters=rollout_len)
+                gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
 
-                # print(update_th(th, Ls, alphas, eta, algos, lola_terms_sum, nl_terms_sum, using_nn=using_nn, epoch=k))
-
-                # th, losses, lola_terms_sum, nl_terms_sum, G_ts, lola_terms, grad_2_return_1 = \
                 th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                    update_th(th, Ls, alphas, eta, algos, using_nn=using_nn, epoch=k)
+                    update_th(th, gradient_terms, alphas, eta, algos, using_nn=using_nn, epoch=k)
+
+                # th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
+                #     update_th(th, Ls, alphas, eta, algos, using_nn=using_nn, epoch=k)
 
                 losses_out[k] = [loss.data.numpy() for loss in losses]
 
