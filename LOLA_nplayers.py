@@ -609,31 +609,15 @@ def get_gradient(function, param):
     return grad
 
 
-# def get_jacobian(func, param):
-#     jac = torch.autograd.functional.jacobian(func, param, create_graph=True,
-#                                        strict=True, vectorize=True)
-#     return jac
-
-
-# def get_jacobian(l, param):
-#     out = []
-#     print(l)
-#     for thing in l:
-#         print(thing)
-#         grad = torch.autograd.grad(thing, param, create_graph=True)[0]
-#         out.append(grad)
-#     return torch.stack(out)
-
-
-def update_th(th, gradient_terms, alphas, eta, algos, epoch,
-              a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_nn=False, beta=1):
+def update_th(th, Ls, gradient_terms, alphas, eta, algos, epoch,
+              a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_samples=False, beta=1):
     n = len(th)
 
     G_ts = None
     grad_2_return_1 = None
     nl_terms = None
 
-    if using_nn:
+    if using_samples:
         # losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = Ls(
         #     th)
         losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = gradient_terms
@@ -647,7 +631,7 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
     # So it is the gradient of the loss of agent j with respect to the parameters of agent i
     # When j=i this is just regular gradient update
 
-    if using_nn:
+    if using_samples:
 
         state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents ),
                                  torch.Tensor([init_state_representation] * n_agents).reshape(
@@ -704,7 +688,7 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
     if 'lola' in algos:
 
 
-        if using_nn:
+        if using_samples:
 
 
             # TODO IMPORTANT REALLY THINK ABOUT WHAT ORDER IS CORRECT HERE
@@ -857,7 +841,7 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
     # Update theta
     with torch.no_grad():
         for i in range(n):
-            # if using_nn:
+            # if using_samples:
             if not isinstance(th[i], torch.Tensor):
                 k = 0
                 for param in th[i].parameters():
@@ -874,11 +858,13 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
 # Create it not as a list but as a torch tensor
 # Then instead of for loop use vectorization. This should be much faster.
 
-
-theta_modes = ['tabular', 'nn']
-# theta_mode = 'tabular'
-theta_mode = 'nn'
-assert theta_mode in theta_modes
+calculation_modes = ['exact', 'samples']
+calculation_mode = 'samples'
+assert calculation_mode in calculation_modes
+# theta_modes = ['tabular', 'nn']
+# # theta_mode = 'tabular'
+# theta_mode = 'nn'
+# assert theta_mode in theta_modes
 theta_init_modes = ['standard', 'tft']
 theta_init_mode = 'standard'
 # theta_init_mode = 'tft'
@@ -906,7 +892,7 @@ contribution_scale = False
 # TODO Feb 17 after can try with contr factor scale
 #
 
-using_nn = False
+using_samples = False
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5]
@@ -953,7 +939,8 @@ for n_agents in n_agents_list:
 
         for run in range(repeats):
 
-            if theta_mode == 'tabular':
+            if calculation_mode == 'exact':
+            # if theta_mode == 'tabular':
 
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
@@ -969,8 +956,8 @@ for n_agents in n_agents_list:
                     # Need around 1.85 for NL and 1.7 for LOLA
                 else:
                     th = init_th(dims, std)
-            elif theta_mode == 'nn':
-                using_nn = True
+            elif calculation_mode == 'samples':
+                using_samples = True
 
                 # dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
                 #                                          contribution_factor=contribution_factor,
@@ -987,7 +974,7 @@ for n_agents in n_agents_list:
                 raise Exception()
 
 
-            if using_nn:
+            if using_samples:
                 # alphas = [0.01, 0.005]
 
                 # alphas = [0.001, 0.001, 0.001]
@@ -1019,10 +1006,10 @@ for n_agents in n_agents_list:
                 gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
 
                 th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                    update_th(th, gradient_terms, alphas, eta, algos, using_nn=using_nn, epoch=k)
+                    update_th(th, gradient_terms, alphas, eta, algos, using_samples=using_samples, epoch=k)
 
                 # th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                #     update_th(th, Ls, alphas, eta, algos, using_nn=using_nn, epoch=k)
+                #     update_th(th, Ls, alphas, eta, algos, using_samples=using_samples, epoch=k)
 
                 losses_out[k] = [loss.data.numpy() for loss in losses]
 
@@ -1047,8 +1034,6 @@ for n_agents in n_agents_list:
                 #         nl_terms_running_total.append(alphas[i] * nl_term)
                 #     else:
                 #         nl_terms_running_total[i] += alphas[i] * nl_term
-
-
 
                 if k % print_every == 0:
                     print("Epoch: " + str(k))
