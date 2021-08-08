@@ -129,6 +129,37 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
 
     return dims, Ls
 
+class contrib_game():
+    def __init__(self, n, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
+        self.n = n
+        self.gamma = gamma
+        self.contribution_factor = contribution_factor
+        self.contribution_scale = contribution_scale
+        self.dims = [n] * n
+
+        if contribution_scale:
+            self.contribution_factor = contribution_factor * n
+        else:
+            assert self.contribution_factor > 1
+
+    def rollout(self, th, num_iters=rollout_len):
+        init_state = torch.Tensor([[init_state_representation] * self.n])  # repeat -1 n times, where n is num agents
+        state = init_state
+
+        trajectory = torch.zeros((num_iters, n_agents), dtype=torch.int)
+        rewards = np.zeros((num_iters, n_agents))
+        policy_history = torch.zeros((num_iters, n_agents))
+
+        # discounts = np.ones(num_iters)
+        # for i in range(num_iters):
+        #     discounts[i] *= gamma ** i
+        #
+        # cum_discount = torch.cumprod(hp.gamma * torch.ones(*rewards.size()), dim=1)/hp.gamma
+
+
+
+def reverse_cumsum(x, dim):
+    return x + torch.sum(x, dim=dim, keepdims=True) - torch.cumsum(x, dim=dim)
 
 # Of course these updates assume we have access to the reward model.
 
@@ -165,12 +196,16 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         state = init_state
 
         trajectory = torch.zeros((num_iters, n_agents), dtype=torch.int)
-        rewards = np.zeros((num_iters, n_agents))
+        rewards = torch.zeros((num_iters, n_agents))
         policy_history = torch.zeros((num_iters, n_agents))
 
-        discounts = np.ones(num_iters)
-        for i in range(num_iters):
-            discounts[i] *= gamma ** i
+        # discounts = np.ones(num_iters)
+        # for i in range(num_iters):
+        #     discounts[i] *= gamma ** i
+        #
+        # print(discounts)
+        discounts = torch.cumprod(gamma * torch.ones((num_iters)),dim=0) / gamma
+
 
 
         # TODO: rollout can be refactored as a function
@@ -206,52 +241,34 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
 
             policy_history[iter] = policies
 
-            actions = np.random.binomial(np.ones(n_agents, dtype=int),
-                                         policies.detach().numpy())
+            actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
+            # print(actions)
+
+            # actions = np.random.binomial(np.ones(n_agents, dtype=int),
+            #                              policies.detach().numpy())
+            # print(actions)
 
             state = torch.Tensor(actions)
 
             trajectory[iter] = torch.Tensor(actions)
 
-            # Note: Jul 23, 2021. I finally understand why the IPD formulation
-            # in the original SOS notebook uses negative rewards everywhere
-            # Policy gradient can get stuck if defect-defect is 0 reward, and
-            # if your policy is always defect (or close to it), you never explore
-            # and you never learn. Well, even if you explore, but only in one time step,
-            # your policy won't really change much.
-            # However, with negative rewards everywhere, when using PG,
-            # then your current actions are always pushed towards lower probabilities
-            # e.g. you will never get stuck - your action prob of whatever you last did
-            # is constantly being pushed down
-            # so whatever is less negative will still rise up
-            # but this is much better than positive reward formulation because
-            # instead of the issue where you have a positive feedback loop
-            # the negative rewards will avoid a positive feedback loop
-            # while at the same time continuously encouraging exploration/different policies.
-            # So in defining my own rewards, I should prefer negative rewards everywhere
-            # (But be careful here, negative rewards should be LESS negative for the BETTER outcomes)
-
+            # Note negative rewards might help with exploration in PG formulation
             total_contrib = sum(actions)
             payout_per_agent = total_contrib * contribution_factor / n
             agent_rewards = -actions + payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
 
-            # print(actions)
-            # print(agent_rewards)
+        # G_ts = torch.zeros((num_iters, n_agents))
+        # for i in range(len(rewards)):
+        #     G_t = torch.FloatTensor(
+        #         (rewards[i:] * discounts[i:].reshape(-1, 1)).sum(axis=0))
+        #     G_ts[i] = G_t
 
-        # print(rewards)
-
-        G_ts = torch.zeros((num_iters, n_agents))
-        for i in range(len(rewards)):
-            G_t = torch.FloatTensor(
-                (rewards[i:] * discounts[i:].reshape(-1, 1)).sum(axis=0))
-
-            G_ts[i] = G_t
+        G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
 
         # Discounted rewards, not sum of rewards which G_t is
-        gamma_t_r_ts = rewards * discounts.reshape(-1,
-                                                   1)  # implicit broadcasting done by numpy
+        gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
 
         p_act_given_state = trajectory.float() * policy_history + (
                     1 - trajectory.float()) * (
@@ -297,24 +314,21 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         # Then scale/generalize.
 
         # For the grad_1 grad_2 term:
-        log_p_act_sums_0_to_t = torch.zeros((num_iters, n_agents))
         # the way this will work is that the ith entry (row) in this log_p_act_sums_0_to_t
         # will be the sum of log probs from time 0 to time i
         # Then the dimension of each row is the number of agents - we have the sum of log probs
         # for each agent
         # later we will product them (but in pairwise combinations!)
-        for i in range(num_iters):
-            single_sum = log_p_act[:i + 1].sum(dim=0)
-            # print(single_sum)
-            log_p_act_sums_0_to_t[i] = single_sum
 
-        # TODO: pairwise products instead of product of everything, which is not correct
-        # TODO write out the formal math derivation (well the SOS paper already did it, no?)
-        # You can sum them all up and aggregate them which can help save space maybe? But maybe not, look at the full implementation
-        # including the terms calc
-        # Look also at how the terms calculation is done and take inspiration from there
-        # But don't try too hard to fit in, rewrite the code where necessary
-        # No, try to fit it in first
+        # log_p_act_sums_0_to_t = torch.zeros((num_iters, n_agents))
+
+        # for i in range(num_iters):
+        #     single_sum = log_p_act[:i + 1].sum(dim=0)
+        #     # print(single_sum)
+        #     log_p_act_sums_0_to_t[i] = single_sum
+
+        log_p_act_sums_0_to_t = torch.cumsum(log_p_act, dim=0)
+
 
         # Remember also that for p1 you want grad_1 grad_2 of R_2 (P2's return)
         # So then you also want grad_1 grad_3 of R_3
@@ -323,9 +337,6 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         grad_1_grad_2_matrix = torch.zeros((n_agents, n_agents))
         for i in range(n_agents):
             for j in range(n_agents):
-                # This negative formulation of rewards is ridiculous
-                # TODO refactor the codebase without any negative rewards, redo the whole thing
-                # gradient ascent instead of descent
                 grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,
                                               j] * log_p_act_sums_0_to_t[:,
                                                    i] * log_p_act_sums_0_to_t[:,
@@ -845,10 +856,10 @@ print_every = 20
 gamma = 0.96
 
 # n_agents = 3
-# contribution_factor = 1.6
-# contribution_scale = False
-contribution_factor=0.6
-contribution_scale=True
+contribution_factor = 1.6
+contribution_scale = False
+# contribution_factor=0.6
+# contribution_scale=True
 
 
 # TODO Feb 17 after can try with contr factor scale
@@ -865,7 +876,7 @@ etas = [0.01 * 5]
 # etas = [0, 1, 3, 5]
 
 # n_agents_list = [2,3,4]
-n_agents_list = [10]
+n_agents_list = [2]
 
 for n_agents in n_agents_list:
 
