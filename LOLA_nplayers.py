@@ -610,7 +610,7 @@ def get_gradient(function, param):
     return grad
 
 
-def update_th(th, gradient_terms, alphas, eta, algos, epoch,
+def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch,
               a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_samples=False, beta=1):
     n = len(th)
 
@@ -621,10 +621,10 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
     if using_samples:
         # losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = Ls(
         #     th)
-        losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = gradient_terms
+        losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act = gradient_terms_or_Ls
 
-    # else:
-    #     losses = Ls(th)
+    else:
+        losses = gradient_terms_or_Ls(th)
 
     # Compute gradients
     # This is a 2d array of all the pairwise gradient computations between all agents
@@ -814,16 +814,9 @@ def update_th(th, gradient_terms, alphas, eta, algos, epoch,
     return th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1
 
 
-calculation_modes = ['exact', 'samples']
-calculation_mode = 'samples'
-assert calculation_mode in calculation_modes
-# theta_modes = ['tabular', 'nn']
-# # theta_mode = 'tabular'
-# theta_mode = 'nn'
-# assert theta_mode in theta_modes
+
 theta_init_modes = ['standard', 'tft']
 theta_init_mode = 'standard'
-# theta_init_mode = 'tft'
 
 # Repeats for each hyperparam setting
 # repeats = 10
@@ -844,10 +837,10 @@ contribution_scale = False
 # contribution_factor=0.6
 # contribution_scale=True
 
-using_samples = False
+using_samples = True # True for samples, false for exact gradient (using matrix inverse)
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
-etas = [0.01 * 5]
+etas = [0.01 * 10]
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
@@ -891,8 +884,8 @@ for n_agents in n_agents_list:
 
         for run in range(repeats):
 
-            if calculation_mode == 'exact':
-            # if theta_mode == 'tabular':
+            # if calculation_mode == 'exact':
+            if not using_samples:
 
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
@@ -908,8 +901,12 @@ for n_agents in n_agents_list:
                     # Need around 1.85 for NL and 1.7 for LOLA
                 else:
                     th = init_th(dims, std)
-            elif calculation_mode == 'samples':
-                using_samples = True
+
+                alphas = [0.1] * n_agents
+
+            else:
+                # Using samples instead of exact here
+
 
                 # dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
                 #                                          contribution_factor=contribution_factor,
@@ -921,28 +918,16 @@ for n_agents in n_agents_list:
                 dims = game.dims
 
                 th = init_custom(dims)
-
-            else:
-                raise Exception()
-
-
-            if using_samples:
-                # alphas = [0.01, 0.005]
-
-                # alphas = [0.001, 0.001, 0.001]
                 alphas = [0.01] * n_agents
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
                 # How does standard reinforce/policy gradient get around this? Entropy regularization
                 # Baseline might help too. As might negative rewards everywhere.
 
-            else:
 
-                alphas = [1,1]
-                alphas = [0.05,0.05]
             # algos = ['nl', 'lola']
-            # algos = ['lola', 'nl']
-            algos = ['lola'] * n_agents
+            algos = ['lola', 'nl']
+            # algos = ['lola'] * n_agents
 
 
             # Run
@@ -954,14 +939,15 @@ for n_agents in n_agents_list:
 
             # th_out = []
             for k in range(num_epochs):
-                trajectory, rewards, policy_history = game.rollout(th, num_iters=rollout_len)
-                gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
+                if using_samples:
+                    trajectory, rewards, policy_history = game.rollout(th, num_iters=rollout_len)
+                    gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
 
-                th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                    update_th(th, gradient_terms, alphas, eta, algos, using_samples=using_samples, epoch=k)
-
-                # th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                #     update_th(th, Ls, alphas, eta, algos, using_samples=using_samples, epoch=k)
+                    th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
+                        update_th(th, gradient_terms, alphas, eta, algos, using_samples=using_samples, epoch=k)
+                else:
+                    th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
+                        update_th(th, Ls, alphas, eta, algos, using_samples=using_samples, epoch=k)
 
                 losses_out[k] = [loss.data.numpy() for loss in losses]
 
