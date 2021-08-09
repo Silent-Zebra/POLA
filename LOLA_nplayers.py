@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 
+import copy
+
 init_state_representation = 2  # Change here if you want different number to represent the initial state
 rollout_len = 50
 
@@ -37,6 +39,27 @@ def build_p_vector(n, size, pc, bin_mat):
     # p = torch.zeros(size)
     p = torch.prod(bin_mat * pc + (1 - bin_mat) * pd, dim=1)
     return p
+
+
+def magic_box(x):
+    return torch.exp(x - x.detach())
+
+
+def copyNN(target_net, curr_net):
+    # Copy from curr to target
+    target_net.load_state_dict(curr_net.state_dict())
+
+def optim_update(optim, loss):
+    optim.zero_grad()
+    loss.backward(retain_graph=True)
+    optim.step()
+
+# def copy_thetas(th):
+#     # th_copy = []
+#     # for i in range(len(th)):
+#     #     if isinstance(th[i], NeuralNet):
+#     #         th_copy.append()
+#     return copy.deepcopy(th)
 
 
 def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
@@ -275,6 +298,38 @@ class ContributionGame():
                 grad_log_p_act[i][t] = grad_t
 
         return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
+
+    def get_dice_loss(self, trajectory, rewards, policy_history):
+
+        num_iters = len(trajectory)
+
+        discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
+                                  dim=0) / self.gamma
+
+        # G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
+
+        # Discounted rewards, not sum of rewards which G_t is
+        gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
+
+        p_act_given_state = trajectory.float() * policy_history + (
+                    1 - trajectory.float()) * (1 - policy_history)
+        # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
+        # and when defect 0 is taken, we take 1-policy = prob of defect
+
+        log_p_act = torch.log(p_act_given_state)
+
+        sum_over_agents_log_p_act = log_p_act.sum(dim=1)
+        # print(log_p_act)
+        # print(sum_over_agents_log_p_act)
+        # print(gamma_t_r_ts)
+
+        # See 5.2 (page 7) of DiCE paper for below:
+        dice_loss = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1,1) * gamma_t_r_ts).sum(dim=0)
+        # print(dice_loss)
+
+        G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1), dim=0)
+
+        return dice_loss, G_ts
 
 
 
@@ -579,19 +634,12 @@ def init_custom(dims):
     #     th.append(
     #         NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
     #                   output_size=1))
-    #
+
     for i in range(len(dims)):
         # DONT FORGET THIS +1
         # Right now if you omit the +1 we get a bug where the first state is the prob in the all contrib state
         th.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=0.1))
 
-
-    # th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
-    #               output_size=1))
-    # th.append(NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
-    #               output_size=1))
-    # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
-    # th.append(torch.nn.init.normal_(torch.empty(5, requires_grad=True), std=0.1))
 
     # TFT init
     # logit_shift = 2
@@ -600,9 +648,21 @@ def init_custom(dims):
     # init[-2] += 2 * logit_shift
     # th.append(init)
 
-    assert len(th) == len(dims)
+    optims = construct_optims_for_th(th)
 
-    return th
+    assert len(th) == len(dims)
+    assert len(optims) == len(dims)
+
+    return th, optims
+
+def construct_optims_for_th(th):
+    optims = []
+    for i in range(len(th)):
+        if isinstance(th[i], NeuralNet):
+            optims.append(torch.optim.SGD((th[i].parameters()), lr=alphas[i]))
+        else:
+            optims.append(None)
+    return optims
 
 
 def get_gradient(function, param):
@@ -610,8 +670,41 @@ def get_gradient(function, param):
     return grad
 
 
-def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch,
-              a=0.5, b=0.1, gam=1, ep=0.1, lss_lam=0.1, using_samples=False, beta=1):
+def print_policy_info(policy, i, G_ts, discounted_sum_of_adjustments, coop_payout):
+
+    print("Policy {}".format(i))
+    print(
+        "(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
+
+    print(policy)
+
+    if i == 0:
+
+        print(
+            "Discounted Sum Rewards in this episode (removing negative adjustment): ")
+        print(G_ts[0] + discounted_sum_of_adjustments)
+        print("Max Avg Coop Payout: {:.3f}".format(coop_payout))
+
+
+def print_policies_from_state_batch(n_agents, G_ts, discounted_sum_of_adjustments, coop_payout):
+    state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents),
+                             torch.Tensor([
+                                              init_state_representation] * n_agents).reshape(
+                                 1, -1)))
+    # policies = []
+    for i in range(n_agents):
+        if isinstance(th[i], torch.Tensor):
+            policy = torch.sigmoid(th[i])
+        else:
+            policy = th[i](state_batch)
+
+        print_policy_info(policy, i, G_ts,
+                          discounted_sum_of_adjustments, coop_payout)
+
+        # policies.append(policy)
+
+
+def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch, using_samples):
     n = len(th)
 
     G_ts = None
@@ -632,43 +725,9 @@ def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch,
     # So it is the gradient of the loss of agent j with respect to the parameters of agent i
     # When j=i this is just regular gradient update
 
-    if using_samples:
 
-        state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents ),
-                                 torch.Tensor([init_state_representation] * n_agents).reshape(
-                                     1, -1)))
+    if not using_samples:
 
-
-        policies = []
-        for i in range(n):
-            if isinstance(th[i], torch.Tensor):
-                policy = torch.sigmoid(th[i])
-            else:
-                policy = th[i](state_batch)
-
-            if epoch % print_every == 0:
-                print("Policy {}".format(i))
-                print(
-                    "(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
-
-                print(policy)
-
-                if i==0:
-
-                    print(
-                        "Discounted Sum Rewards in this episode (removing negative adjustment): ")
-                    print(G_ts[0] + discounted_sum_of_adjustments)
-                    print("Max Avg Coop Payout: {:.3f}".format(coop_payout))
-
-            policies.append(policy)
-
-
-    else:
-        for i in range(n):
-            policy = torch.sigmoid(th[i])
-            if epoch % print_every == 0:
-                print("Policy {}".format(i))
-                print(policy)
         grad_L = [[get_gradient(losses[j], th[i]) for j in range(n)] for i in
                   range(n)]
 
@@ -838,6 +897,9 @@ contribution_scale = False
 # contribution_scale=True
 
 using_samples = True # True for samples, false for exact gradient (using matrix inverse)
+using_DiCE = True
+if using_DiCE:
+    assert using_samples
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 10]
@@ -851,6 +913,11 @@ etas = [0.01 * 10]
 n_agents_list = [2]
 
 for n_agents in n_agents_list:
+
+    if using_samples:
+        alphas = [0.01] * n_agents
+    else:
+        alphas = [0.1] * n_agents
 
     if not contribution_scale:
         coop_payout = 1 / (1 - gamma) * (contribution_factor - 1) * \
@@ -884,7 +951,6 @@ for n_agents in n_agents_list:
 
         for run in range(repeats):
 
-            # if calculation_mode == 'exact':
             if not using_samples:
 
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
@@ -902,7 +968,6 @@ for n_agents in n_agents_list:
                 else:
                     th = init_th(dims, std)
 
-                alphas = [0.1] * n_agents
 
             else:
                 # Using samples instead of exact here
@@ -917,8 +982,7 @@ for n_agents in n_agents_list:
                                                          contribution_scale=contribution_scale)
                 dims = game.dims
 
-                th = init_custom(dims)
-                alphas = [0.01] * n_agents
+                th, optims = init_custom(dims)
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
                 # How does standard reinforce/policy gradient get around this? Entropy regularization
@@ -931,28 +995,85 @@ for n_agents in n_agents_list:
 
 
             # Run
-            losses_out = np.zeros((num_epochs, n_agents))
             G_ts_record = np.zeros((num_epochs, n_agents))
             lola_terms_running_total = []
             nl_terms_running_total = []
 
 
             # th_out = []
-            for k in range(num_epochs):
+            for epoch in range(num_epochs):
                 if using_samples:
-                    trajectory, rewards, policy_history = game.rollout(th, num_iters=rollout_len)
-                    gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
+                    if using_DiCE:
+                        # TODO later confirm that this deepcopy is working properly for NN also
+                        theta_primes = copy.deepcopy(th)
+                        optims_primes = construct_optims_for_th(theta_primes)
 
-                    th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                        update_th(th, gradient_terms, alphas, eta, algos, using_samples=using_samples, epoch=k)
+                        # with torch.no_grad():
+                        #     th[0] += 1
+
+                        # inner_steps = 1
+                        # for i in range(inner_steps):
+
+                        # Only one inner step for now because otherwise every player has to rollout again
+                        trajectory, rewards, policy_history = game.rollout(theta_primes ,num_iters=rollout_len)
+
+                        dice_loss, G_ts = game.get_dice_loss(trajectory, rewards, policy_history)
+
+                        for i in range(n_agents):
+                            if isinstance(theta_primes[i], torch.Tensor):
+                                grad = get_gradient(dice_loss[i], theta_primes[i])
+                                with torch.no_grad():
+                                    theta_primes[i] += alphas[i] * grad
+                            else:
+                                # print(i)
+
+                                # optim_update(optims_primes[i], dice_loss[i])
+
+                                optim = optims_primes[i]
+                                optim.zero_grad()
+                                dice_loss[i].backward(retain_graph=True)
+
+                        for i in range(n_agents):
+                            if isinstance(theta_primes[i], NeuralNet):
+                                optim = optims_primes[i]
+                                optim.step()
+
+
+                        # Now calculate outer step using for each player a mix of the theta_primes and old thetas
+
+                        for i in range(n_agents):
+                            mixed_thetas = theta_primes
+                            mixed_thetas[i] = th[i]
+                            # mixed_optims = optims_primes
+                            # mixed_optims[i] = optims[i]
+                            trajectory, rewards, policy_history = game.rollout(
+                                mixed_thetas, num_iters=rollout_len)
+                            dice_loss, _ = game.get_dice_loss(trajectory, rewards,
+                                                           policy_history)
+                            if isinstance(th[i], torch.Tensor):
+                                grad = get_gradient(dice_loss[i], th[i])
+                                with torch.no_grad():
+                                    th[i] += alphas[i] * grad
+                            else:
+                                optim_update(optims[i], dice_loss[i])
+
+
+
+                    else:
+
+                        trajectory, rewards, policy_history = game.rollout(th, num_iters=rollout_len)
+                        gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
+
+                        th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
+                            update_th(th, gradient_terms, alphas, eta, algos, using_samples=using_samples, epoch=epoch)
                 else:
                     th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                        update_th(th, Ls, alphas, eta, algos, using_samples=using_samples, epoch=k)
+                        update_th(th, Ls, alphas, eta, algos, using_samples=using_samples, epoch=epoch)
 
-                losses_out[k] = [loss.data.numpy() for loss in losses]
+
 
                 if G_ts is not None:
-                    G_ts_record[k] = G_ts[0]
+                    G_ts_record[epoch] = G_ts[0]
 
                 # This is just to get an idea of the relative influence of the lola vs nl terms
                 # if lola_terms_running_total == []:
@@ -973,8 +1094,8 @@ for n_agents in n_agents_list:
                 #     else:
                 #         nl_terms_running_total[i] += alphas[i] * nl_term
 
-                if k % print_every == 0:
-                    print("Epoch: " + str(k))
+                if epoch % print_every == 0:
+                    print("Epoch: " + str(epoch))
                     print("Eta: " + str(eta))
                     print("Algos: {}".format(algos))
                     print("Alphas: {}".format(alphas))
@@ -982,6 +1103,18 @@ for n_agents in n_agents_list:
                     # print(lola_terms_running_total)
                     # print("NL Terms: ")
                     # print(nl_terms_running_total)
+
+
+                    # Print policies here
+                    if using_samples:
+                        print_policies_from_state_batch(n_agents, G_ts,
+                                                    discounted_sum_of_adjustments,
+                                                    coop_payout)
+                    else:
+                        for i in range(n_agents):
+                            policy = torch.sigmoid(th[i])
+                            print("Policy {}".format(i))
+                            print(policy)
 
             # % comparison of average individual reward to max average individual reward
             # This gives us a rough idea of how close to optimal (how close to full cooperation) we are.
