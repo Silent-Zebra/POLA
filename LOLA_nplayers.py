@@ -1040,12 +1040,22 @@ for n_agents in n_agents_list:
                                         else:
                                             optim_update(optims_primes[j], dice_loss[j])
 
-                        # TODO: allow for eta (inner learn step different from outer learn step)
+                            # TODO: allow for eta (inner learn step different from outer learn step)
+                            #
+                            # TODO CHECK OFFICIAL CODE FIRST
+                            # Square up my code with theirs and check for differences/anything missing
+                            # Then consider trying using built in optim instead of nograd
+                            # Can also try Adam and see results if different
+                            # TODO IMPORTANT FIGURE OUT MEMORY/BATCH AND USE THOSE FOR STABILITY
+                            # Test and get those working with 2 players first.
+                            # Then see other stuff - look into whether dice without env/simulator access exists
+                            # Understand the MAML analogy a bit better (for own knowledge)
+                            # Then ask Jakob about it
+                            # All this should be done Monday, by end of day.
 
 
-                        # Now calculate outer step using for each player a mix of the theta_primes and old thetas
+                            # Now calculate outer step using for each player a mix of the theta_primes and old thetas
 
-                        # for i in range(n_agents):
                             mixed_thetas = theta_primes
                             mixed_thetas[i] = th[i]
                             # ok to use th[i] here because it hasn't been updated yet
