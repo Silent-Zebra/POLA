@@ -884,9 +884,9 @@ repeats = 1
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
-num_epochs = 8000
+num_epochs = 20000
 print_every = max(1, num_epochs / 50)
-print_every = 20
+# print_every = 20
 
 gamma = 0.96
 
@@ -990,8 +990,8 @@ for n_agents in n_agents_list:
 
 
             # algos = ['nl', 'lola']
-            algos = ['lola', 'nl']
-            # algos = ['lola'] * n_agents
+            # algos = ['lola', 'nl']
+            algos = ['lola'] * n_agents
 
 
             # Run
@@ -1015,6 +1015,9 @@ for n_agents in n_agents_list:
                         # for i in range(inner_steps):
 
                         # Only one inner step for now because otherwise every player has to rollout again
+                        # TODO change this to be similar to outer loop rollout and allow multiple steps rollout
+                        # the multiple inner steps is essentially like eta, allows you to adjust the amount of influencing
+                        # ALSO TODO need to allow for different algo choices... or maybe just rollout len... e.g. NL should be 0 rollout?
                         trajectory, rewards, policy_history = game.rollout(theta_primes ,num_iters=rollout_len)
 
                         dice_loss, G_ts = game.get_dice_loss(trajectory, rewards, policy_history)
