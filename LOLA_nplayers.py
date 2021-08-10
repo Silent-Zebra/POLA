@@ -183,6 +183,7 @@ class ContributionGame():
 
                     if (state - init_state).sum() == 0:
                         policy = torch.sigmoid(th[i])[-1]
+
                     else:
 
                         policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
@@ -190,6 +191,7 @@ class ContributionGame():
                     policy = th[i](state)
                 # policy prob of coop between 0 and 1
                 policies[i] = policy
+
 
             policy_history[iter] = policies
 
@@ -271,6 +273,8 @@ class ContributionGame():
                                                         j]).sum(dim=0)
         # Here entry i j is grad_i grad_j E[R_j]
 
+        # TODO NOTE THESE ARE NOT LOSSES, THEY ARE REWARDS (discounted)
+        # Need to negative if you will torch optim on them. This is a big issue lol
         losses = losses_nl
 
         grad_log_p_act = []
@@ -312,6 +316,8 @@ class ContributionGame():
         # Discounted rewards, not sum of rewards which G_t is
         gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
 
+
+
         p_act_given_state = trajectory.float() * policy_history + (
                     1 - trajectory.float()) * (1 - policy_history)
         # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
@@ -325,11 +331,15 @@ class ContributionGame():
         # print(gamma_t_r_ts)
 
         # See 5.2 (page 7) of DiCE paper for below:
-        dice_loss = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1,1) * gamma_t_r_ts).sum(dim=0)
+        dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1,1) * gamma_t_r_ts).sum(dim=0)
+        dice_loss = -dice_rewards
         # print(dice_loss)
 
         G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1), dim=0)
 
+        # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
+
+        # return dice_loss, G_ts, regular_nl_loss
         return dice_loss, G_ts
 
 
@@ -648,20 +658,21 @@ def init_custom(dims):
     # init[-2] += 2 * logit_shift
     # th.append(init)
 
-    optims = construct_optims_for_th(th)
+    optims = construct_optims_for_th(th, lrs=alphas)
 
     assert len(th) == len(dims)
     assert len(optims) == len(dims)
 
     return th, optims
 
-def construct_optims_for_th(th):
+def construct_optims_for_th(th, lrs):
     optims = []
     for i in range(len(th)):
         if isinstance(th[i], NeuralNet):
-            optims.append(torch.optim.SGD(th[i].parameters(), lr=alphas[i]))
+            optims.append(torch.optim.SGD(th[i].parameters(), lr=lrs[i]))
+
         else:
-            optims.append(torch.optim.SGD([th[i]], lr=alphas[i]))
+            optims.append(torch.optim.SGD([th[i]], lr=lrs[i]))
     return optims
 
 
@@ -886,7 +897,7 @@ repeats = 3
 # For each repeat/run:
 num_epochs = 20000
 print_every = max(1, num_epochs / 50)
-# print_every = 20
+print_every = 10
 
 gamma = 0.96
 
@@ -903,11 +914,10 @@ if using_DiCE:
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 10]
+if using_DiCE:
+    etas = [30] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
-
-# etas = [0,1,2,3,4,5,6,7,8,9,10]
-# etas = [0, 1, 3, 5]
 
 # n_agents_list = [2,3,4]
 n_agents_list = [2]
@@ -915,11 +925,11 @@ n_agents_list = [2]
 for n_agents in n_agents_list:
 
     if using_samples:
-        alphas = [0.005] * n_agents
+        # alphas = [0.005] * n_agents
 
-        # alphas = [0.01] * n_agents
+        alphas = torch.tensor([0.01] * n_agents)
     else:
-        alphas = [0.1] * n_agents
+        alphas = torch.tensor(alphas = [0.1] * n_agents)
 
     if not contribution_scale:
         coop_payout = 1 / (1 - gamma) * (contribution_factor - 1) * \
@@ -992,7 +1002,7 @@ for n_agents in n_agents_list:
 
 
             if using_DiCE:
-                inner_steps = [2, 2]
+                inner_steps = [2,2]
             else:
                 # algos = ['nl', 'lola']
                 # algos = ['lola', 'nl']
@@ -1010,76 +1020,126 @@ for n_agents in n_agents_list:
                 if using_samples:
                     if using_DiCE:
                         static_th_copy = copy.deepcopy(th)
+
                         # optims_primes = construct_optims_for_th(theta_primes)
 
-                        # with torch.no_grad():
-                        #     th[0] += 1
+                        # TODO Try actual symmetric with inner steps now
 
-                        for i in range(n_agents):
-                            K = inner_steps[i]
+                        test_symmetric=False
+                        if test_symmetric:
+                            # With 0 inner steps right now
+                            trajectory, rewards, policy_history = game.rollout(
+                                th, num_iters=rollout_len)
 
-                            # TODO later confirm that this deepcopy is working properly for NN also
-                            theta_primes = copy.deepcopy(static_th_copy)
-                            optims_primes = construct_optims_for_th(theta_primes)
+                            dice_loss, G_ts, nl_loss = game.get_dice_loss(
+                                trajectory, rewards,
+                                policy_history)
+                            for j in range(n_agents):
+                                # print(th[j])
+                                # if isinstance(th[j], torch.Tensor):
+                                #     grad = get_gradient(dice_loss[j], th[j])
+                                    # with torch.no_grad():
+                                    #     th[j] += alphas[j] * grad
+                                    # th[j] = th[j] + alphas[j] * grad
+                                    # print(th[j] - alphas[j] * grad)
+                                optim_update(optims[j], dice_loss[j])
+                                grad = get_gradient(dice_loss[j], th[j])
+                                print(grad)
+                                grad = get_gradient(nl_loss[j], th[j])
+                                print(grad)
+                                # print(th[j])
 
-                            mixed_thetas = theta_primes
-                            mixed_thetas[i] = th[i]
-                            for step in range(K):
+                            1/0
 
+                        else:
+
+                            for i in range(n_agents):
+                                K = inner_steps[i]
+
+                                # TODO later confirm that this deepcopy is working properly for NN also
+                                theta_primes = copy.deepcopy(static_th_copy)
+                                optims_primes = construct_optims_for_th(theta_primes, lrs=alphas * eta)
+
+                                mixed_thetas = theta_primes
+                                mixed_thetas[i] = th[i]
+
+                                # print(mixed_thetas)
+
+                                for step in range(K):
+
+                                    # ok to use th[i] here because it hasn't been updated yet
+
+                                    trajectory, rewards, policy_history = game.rollout(
+                                        mixed_thetas, num_iters=rollout_len)
+                                    dice_loss, _ = game.get_dice_loss(trajectory,
+                                                                      rewards,
+                                                                      policy_history)
+                                    for j in range(n_agents):
+                                        if j != i:
+                                            if isinstance(mixed_thetas[j], torch.Tensor):
+                                                grad = get_gradient(dice_loss[j], mixed_thetas[j])
+                                                mixed_thetas[j] = mixed_thetas[j] + alphas[
+                                                                       j] * eta * grad
+                                                # with torch.no_grad():
+                                                #     mixed_thetas[j] += alphas[j] * grad
+                                            else:
+                                                optim_update(optims_primes[j], dice_loss[j])
+
+
+                                            # optim_update(optims_primes[j],
+                                            #              dice_loss[j])
+
+                                            # print(mixed_thetas[j])
+                                            # print(th[j])
+                                            # print(theta_primes[j])
+                                            # print(static_th_copy[j])
+
+                                # TODO: allow for eta (inner learn step different from outer learn step)
+                                #
+                                # TODO CHECK OFFICIAL CODE FIRST
+                                # Square up my code with theirs and check for differences/anything missing
+                                # Then consider trying using built in optim instead of nograd
+                                # Can also try Adam and see results if different
+                                # TODO IMPORTANT FIGURE OUT MEMORY/BATCH AND USE THOSE FOR STABILITY
+                                # Test and get those working with 2 players first.
+                                # Then see other stuff - look into whether dice without env/simulator access exists
+                                # Understand the MAML analogy a bit better (for own knowledge)
+                                # Then ask Jakob about it
+                                # All this should be done Monday, by end of day.
+
+                                # print(mixed_thetas)
+
+
+                                # Now calculate outer step using for each player a mix of the theta_primes and old thetas
+
+                                # mixed_thetas = theta_primes
+                                # mixed_thetas[i] = th[i]
                                 # ok to use th[i] here because it hasn't been updated yet
+                                # (the th[i-1] may have been udpated but that's ok because we don't use that)
 
+                                # mixed_optims = optims_primes
+                                # mixed_optims[i] = optims[i]
                                 trajectory, rewards, policy_history = game.rollout(
                                     mixed_thetas, num_iters=rollout_len)
-                                dice_loss, _ = game.get_dice_loss(trajectory,
-                                                                  rewards,
-                                                                  policy_history)
-                                for j in range(n_agents):
-                                    if j != i:
-                                        # if isinstance(mixed_thetas[j], torch.Tensor):
-                                        #     grad = get_gradient(dice_loss[j], mixed_thetas[j])
-                                        #     with torch.no_grad():
-                                        #         mixed_thetas[j] += alphas[j] * grad
-                                        # else:
-                                        #     optim_update(optims_primes[j], dice_loss[j])
-                                        optim_update(optims_primes[j],
-                                                     dice_loss[j])
+                                # dice_loss, G_ts, regular_nl_loss = game.get_dice_loss(trajectory, rewards,
+                                #                                policy_history)
+                                dice_loss, G_ts = game.get_dice_loss(
+                                    trajectory, rewards,
+                                    policy_history)
+                                # NOTE: TODO potentially: G_ts here may not be the best choice
+                                # But it should be close enough to give an idea of what the rewards roughly look like
+                                if isinstance(th[i], torch.Tensor):
+                                    grad = get_gradient(dice_loss[i], th[i])
+                                    with torch.no_grad():
+                                        th[i] += alphas[i] * grad
+                                else:
+                                    optim_update(optims[i], dice_loss[i])
 
-                            # TODO: allow for eta (inner learn step different from outer learn step)
-                            #
-                            # TODO CHECK OFFICIAL CODE FIRST
-                            # Square up my code with theirs and check for differences/anything missing
-                            # Then consider trying using built in optim instead of nograd
-                            # Can also try Adam and see results if different
-                            # TODO IMPORTANT FIGURE OUT MEMORY/BATCH AND USE THOSE FOR STABILITY
-                            # Test and get those working with 2 players first.
-                            # Then see other stuff - look into whether dice without env/simulator access exists
-                            # Understand the MAML analogy a bit better (for own knowledge)
-                            # Then ask Jakob about it
-                            # All this should be done Monday, by end of day.
+                                # optim_update(optims[i], dice_loss[i])
 
-
-                            # Now calculate outer step using for each player a mix of the theta_primes and old thetas
-
-                            # mixed_thetas = theta_primes
-                            # mixed_thetas[i] = th[i]
-                            # ok to use th[i] here because it hasn't been updated yet
-                            # (the th[i-1] may have been udpated but that's ok because we don't use that)
-
-                            # mixed_optims = optims_primes
-                            # mixed_optims[i] = optims[i]
-                            trajectory, rewards, policy_history = game.rollout(
-                                mixed_thetas, num_iters=rollout_len)
-                            dice_loss, G_ts = game.get_dice_loss(trajectory, rewards,
-                                                           policy_history)
-                            # NOTE: TODO potentially: G_ts here may not be the best choice
-                            # But it should be close enough to give an idea of what the rewards roughly look like
-                            # if isinstance(th[i], torch.Tensor):
-                            #     grad = get_gradient(dice_loss[i], th[i])
-                            #     with torch.no_grad():
-                            #         th[i] += alphas[i] * grad
-                            # else:
-                            #     optim_update(optims[i], dice_loss[i])
-                            optim_update(optims[i], dice_loss[i])
+                                # print(mixed_thetas)
+                                # print(th)
+                                # print("---")
 
 
 
