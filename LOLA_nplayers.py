@@ -659,9 +659,9 @@ def construct_optims_for_th(th):
     optims = []
     for i in range(len(th)):
         if isinstance(th[i], NeuralNet):
-            optims.append(torch.optim.SGD((th[i].parameters()), lr=alphas[i]))
+            optims.append(torch.optim.SGD(th[i].parameters(), lr=alphas[i]))
         else:
-            optims.append(None)
+            optims.append(torch.optim.SGD([th[i]], lr=alphas[i]))
     return optims
 
 
@@ -915,7 +915,7 @@ n_agents_list = [2]
 for n_agents in n_agents_list:
 
     if using_samples:
-        alphas = [0.02] * n_agents
+        alphas = [0.01] * n_agents
 
         # alphas = [0.01] * n_agents
     else:
@@ -1021,9 +1021,11 @@ for n_agents in n_agents_list:
                             # TODO later confirm that this deepcopy is working properly for NN also
                             theta_primes = copy.deepcopy(static_th_copy)
                             optims_primes = construct_optims_for_th(theta_primes)
+
+                            mixed_thetas = theta_primes
+                            mixed_thetas[i] = th[i]
                             for step in range(K):
-                                mixed_thetas = theta_primes
-                                mixed_thetas[i] = th[i]
+
                                 # ok to use th[i] here because it hasn't been updated yet
 
                                 trajectory, rewards, policy_history = game.rollout(
@@ -1033,12 +1035,14 @@ for n_agents in n_agents_list:
                                                                   policy_history)
                                 for j in range(n_agents):
                                     if j != i:
-                                        if isinstance(theta_primes[j], torch.Tensor):
-                                            grad = get_gradient(dice_loss[j], theta_primes[j])
-                                            with torch.no_grad():
-                                                theta_primes[j] += alphas[j] * grad
-                                        else:
-                                            optim_update(optims_primes[j], dice_loss[j])
+                                        # if isinstance(mixed_thetas[j], torch.Tensor):
+                                        #     grad = get_gradient(dice_loss[j], mixed_thetas[j])
+                                        #     with torch.no_grad():
+                                        #         mixed_thetas[j] += alphas[j] * grad
+                                        # else:
+                                        #     optim_update(optims_primes[j], dice_loss[j])
+                                        optim_update(optims_primes[j],
+                                                     dice_loss[j])
 
                             # TODO: allow for eta (inner learn step different from outer learn step)
                             #
@@ -1056,8 +1060,8 @@ for n_agents in n_agents_list:
 
                             # Now calculate outer step using for each player a mix of the theta_primes and old thetas
 
-                            mixed_thetas = theta_primes
-                            mixed_thetas[i] = th[i]
+                            # mixed_thetas = theta_primes
+                            # mixed_thetas[i] = th[i]
                             # ok to use th[i] here because it hasn't been updated yet
                             # (the th[i-1] may have been udpated but that's ok because we don't use that)
 
@@ -1069,12 +1073,13 @@ for n_agents in n_agents_list:
                                                            policy_history)
                             # NOTE: TODO potentially: G_ts here may not be the best choice
                             # But it should be close enough to give an idea of what the rewards roughly look like
-                            if isinstance(th[i], torch.Tensor):
-                                grad = get_gradient(dice_loss[i], th[i])
-                                with torch.no_grad():
-                                    th[i] += alphas[i] * grad
-                            else:
-                                optim_update(optims[i], dice_loss[i])
+                            # if isinstance(th[i], torch.Tensor):
+                            #     grad = get_gradient(dice_loss[i], th[i])
+                            #     with torch.no_grad():
+                            #         th[i] += alphas[i] * grad
+                            # else:
+                            #     optim_update(optims[i], dice_loss[i])
+                            optim_update(optims[i], dice_loss[i])
 
 
 
