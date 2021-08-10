@@ -879,14 +879,14 @@ theta_init_mode = 'standard'
 
 # Repeats for each hyperparam setting
 # repeats = 10
-repeats = 1
+repeats = 3
 
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
 num_epochs = 20000
-# print_every = max(1, num_epochs / 50)
-print_every = 20
+print_every = max(1, num_epochs / 50)
+# print_every = 20
 
 gamma = 0.96
 
@@ -915,7 +915,7 @@ n_agents_list = [2]
 for n_agents in n_agents_list:
 
     if using_samples:
-        alphas = [0.01] * n_agents
+        alphas = [0.005] * n_agents
 
         # alphas = [0.01] * n_agents
     else:
