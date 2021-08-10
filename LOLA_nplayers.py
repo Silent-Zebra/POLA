@@ -1079,7 +1079,8 @@ for n_agents in n_agents_list:
                                             if isinstance(mixed_thetas[j], torch.Tensor):
                                                 grad = get_gradient(dice_loss[j], mixed_thetas[j])
                                                 mixed_thetas[j] = mixed_thetas[j] + alphas[
-                                                                       j] * eta * grad
+                                                                       j] * eta * grad # This step is critical to allow the gradient to flow through
+                                                # You cannot use torch.no_grad on this step
                                                 # with torch.no_grad():
                                                 #     mixed_thetas[j] += alphas[j] * grad
                                             else:
