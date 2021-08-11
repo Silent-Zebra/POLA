@@ -890,14 +890,14 @@ theta_init_mode = 'standard'
 
 # Repeats for each hyperparam setting
 # repeats = 10
-repeats = 3
+repeats = 5
 
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
-num_epochs = 20000
+num_epochs = 10000
 print_every = max(1, num_epochs / 50)
-print_every = 20
+# print_every = 20
 
 gamma = 0.96
 
@@ -915,7 +915,7 @@ if using_DiCE:
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 10]
 if using_DiCE:
-    etas = [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [0, 1, 3, 5, 10, 20, 30, 50] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
@@ -1214,8 +1214,9 @@ for n_agents in n_agents_list:
             plot_results = True
             if plot_results:
                 plt.plot(G_ts_record + discounted_sum_of_adjustments)
+                plt.savefig("{}agents_{}eta_run{}".format(n_agents, eta, run))
 
-                plt.show()
+                # plt.show()
 
         print("Number of agents: {}".format(n_agents))
         print("Contribution factor: {}".format(contribution_factor))
