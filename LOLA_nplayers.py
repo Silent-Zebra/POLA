@@ -890,14 +890,14 @@ theta_init_mode = 'standard'
 
 # Repeats for each hyperparam setting
 # repeats = 10
-repeats = 5
+repeats = 3
 
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
 num_epochs = 10000
 print_every = max(1, num_epochs / 50)
-# print_every = 20
+print_every = 50
 
 gamma = 0.96
 
@@ -915,7 +915,7 @@ if using_DiCE:
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 10]
 if using_DiCE:
-    etas = [0, 1, 3, 5, 10, 20, 30, 50] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [100] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
@@ -946,8 +946,8 @@ for n_agents in n_agents_list:
 
     max_single_step_return = (contribution_factor * (n_agents - 1) / n_agents)
 
-    adjustment_to_make_rewards_negative = 0
-    # adjustment_to_make_rewards_negative = max_single_step_return
+    # adjustment_to_make_rewards_negative = 0
+    adjustment_to_make_rewards_negative = max_single_step_return
     # With adjustment and 20k steps seems LOLA vs NL does learn a TFT like strategy
     # But the problem is NL hasn't learned to coop at the start
     # which results in DD behaviour throughout.
@@ -1002,7 +1002,7 @@ for n_agents in n_agents_list:
 
 
             if using_DiCE:
-                inner_steps = [2,2]
+                inner_steps = [2,0]
             else:
                 # algos = ['nl', 'lola']
                 # algos = ['lola', 'nl']
@@ -1074,17 +1074,18 @@ for n_agents in n_agents_list:
                                     dice_loss, _ = game.get_dice_loss(trajectory,
                                                                       rewards,
                                                                       policy_history)
-                                    for j in range(n_agents):
-                                        if j != i:
-                                            if isinstance(mixed_thetas[j], torch.Tensor):
-                                                grad = get_gradient(dice_loss[j], mixed_thetas[j])
-                                                mixed_thetas[j] = mixed_thetas[j] - alphas[
-                                                                       j] * eta * grad # This step is critical to allow the gradient to flow through
-                                                # You cannot use torch.no_grad on this step
-                                                # with torch.no_grad():
-                                                #     mixed_thetas[j] += alphas[j] * grad
-                                            else:
-                                                optim_update(optims_primes[j], dice_loss[j])
+                                    if eta != 0:
+                                      for j in range(n_agents):
+                                          if j != i:
+                                              if isinstance(mixed_thetas[j], torch.Tensor):
+                                                  grad = get_gradient(dice_loss[j], mixed_thetas[j])
+                                                  mixed_thetas[j] = mixed_thetas[j] - alphas[
+                                                                        j] * eta * grad # This step is critical to allow the gradient to flow through
+                                                  # You cannot use torch.no_grad on this step
+                                                  # with torch.no_grad():
+                                                  #     mixed_thetas[j] += alphas[j] * grad
+                                              else:
+                                                  optim_update(optims_primes[j], dice_loss[j])
 
 
                                             # optim_update(optims_primes[j],
@@ -1216,7 +1217,7 @@ for n_agents in n_agents_list:
                 plt.plot(G_ts_record + discounted_sum_of_adjustments)
                 plt.savefig("{}agents_{}eta_run{}".format(n_agents, eta, run))
 
-                # plt.show()
+                plt.show()
 
         print("Number of agents: {}".format(n_agents))
         print("Contribution factor: {}".format(contribution_factor))
