@@ -897,7 +897,7 @@ repeats = 3
 # For each repeat/run:
 num_epochs = 20000
 print_every = max(1, num_epochs / 50)
-print_every = 10
+print_every = 20
 
 gamma = 0.96
 
@@ -915,7 +915,7 @@ if using_DiCE:
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 10]
 if using_DiCE:
-    etas = [30] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
@@ -1040,7 +1040,7 @@ for n_agents in n_agents_list:
                                 #     grad = get_gradient(dice_loss[j], th[j])
                                     # with torch.no_grad():
                                     #     th[j] += alphas[j] * grad
-                                    # th[j] = th[j] + alphas[j] * grad
+                                    # th[j] = th[j] - alphas[j] * grad
                                     # print(th[j] - alphas[j] * grad)
                                 optim_update(optims[j], dice_loss[j])
                                 grad = get_gradient(dice_loss[j], th[j])
@@ -1078,7 +1078,7 @@ for n_agents in n_agents_list:
                                         if j != i:
                                             if isinstance(mixed_thetas[j], torch.Tensor):
                                                 grad = get_gradient(dice_loss[j], mixed_thetas[j])
-                                                mixed_thetas[j] = mixed_thetas[j] + alphas[
+                                                mixed_thetas[j] = mixed_thetas[j] - alphas[
                                                                        j] * eta * grad # This step is critical to allow the gradient to flow through
                                                 # You cannot use torch.no_grad on this step
                                                 # with torch.no_grad():
@@ -1132,7 +1132,10 @@ for n_agents in n_agents_list:
                                 if isinstance(th[i], torch.Tensor):
                                     grad = get_gradient(dice_loss[i], th[i])
                                     with torch.no_grad():
-                                        th[i] += alphas[i] * grad
+                                        th[i] -= alphas[i] * grad
+                                    # TODO Be careful with +/- formulation now...
+                                    # TODO rename the non-DiCE terms as rewards
+                                    # And keep the DiCE terms as losses
                                 else:
                                     optim_update(optims[i], dice_loss[i])
 
