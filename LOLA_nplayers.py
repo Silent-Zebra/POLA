@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 
+import higher
+
 import datetime
 
 import copy
@@ -34,6 +36,8 @@ contribution_factor = 1.6
 contribution_scale = False
 # contribution_factor=0.6
 # contribution_scale=True
+
+
 
 using_samples = True # True for samples, false for exact gradient (using matrix inverse)
 using_DiCE = True
@@ -89,10 +93,11 @@ def copyNN(target_net, curr_net):
     # Copy from curr to target
     target_net.load_state_dict(curr_net.state_dict())
 
-def optim_update(optim, loss):
-    optim.zero_grad()
-    loss.backward(retain_graph=True)
-    optim.step()
+def optim_update(diffopt, loss, params):
+    return diffopt.step(loss, params)
+    # optim.zero_grad()
+    # loss.backward(retain_graph=True)
+    # optim.step()
 
 # def copy_thetas(th):
 #     # th_copy = []
@@ -778,10 +783,14 @@ def construct_optims_for_th(th, lrs):
     optims = []
     for i in range(len(th)):
         if isinstance(th[i], NeuralNet):
-            optims.append(torch.optim.SGD(th[i].parameters(), lr=lrs[i]))
+            optim = torch.optim.SGD(th[i].parameters(), lr=lrs[i])
+            diffoptim = higher.optim.DifferentiableSGD(optim, th[i].parameters())
+            optims.append(diffoptim)
 
         else:
-            optims.append(torch.optim.SGD([th[i]], lr=lrs[i]))
+            optim = torch.optim.SGD([th[i]], lr=lrs[i])
+            diffoptim = higher.optim.DifferentiableSGD(optim, [th[i]])
+            optims.append(diffoptim)
     return optims
 
 
@@ -1109,27 +1118,27 @@ for n_agents in n_agents_list:
 
                         test_symmetric=False
                         if test_symmetric:
-                            # With 0 inner steps right now
-                            trajectory, rewards, policy_history = game.rollout(
-                                th, num_iters=rollout_len)
-
-                            dice_loss, G_ts, nl_loss = game.get_dice_loss(
-                                trajectory, rewards,
-                                policy_history)
-                            for j in range(n_agents):
-                                # print(th[j])
-                                # if isinstance(th[j], torch.Tensor):
-                                #     grad = get_gradient(dice_loss[j], th[j])
-                                    # with torch.no_grad():
-                                    #     th[j] += alphas[j] * grad
-                                    # th[j] = th[j] - alphas[j] * grad
-                                    # print(th[j] - alphas[j] * grad)
-                                optim_update(optims[j], dice_loss[j])
-                                grad = get_gradient(dice_loss[j], th[j])
-                                print(grad)
-                                grad = get_gradient(nl_loss[j], th[j])
-                                print(grad)
-                                # print(th[j])
+                            # # With 0 inner steps right now
+                            # trajectory, rewards, policy_history = game.rollout(
+                            #     th, num_iters=rollout_len)
+                            #
+                            # dice_loss, G_ts, nl_loss = game.get_dice_loss(
+                            #     trajectory, rewards,
+                            #     policy_history)
+                            # for j in range(n_agents):
+                            #     # print(th[j])
+                            #     # if isinstance(th[j], torch.Tensor):
+                            #     #     grad = get_gradient(dice_loss[j], th[j])
+                            #         # with torch.no_grad():
+                            #         #     th[j] += alphas[j] * grad
+                            #         # th[j] = th[j] - alphas[j] * grad
+                            #         # print(th[j] - alphas[j] * grad)
+                            #     optim_update(optims[j], dice_loss[j])
+                            #     grad = get_gradient(dice_loss[j], th[j])
+                            #     print(grad)
+                            #     grad = get_gradient(nl_loss[j], th[j])
+                            #     print(grad)
+                            #     # print(th[j])
 
                             1/0
 
@@ -1159,15 +1168,20 @@ for n_agents in n_agents_list:
                                     if eta != 0:
                                       for j in range(n_agents):
                                           if j != i:
-                                              if isinstance(mixed_thetas[j], torch.Tensor):
-                                                  grad = get_gradient(dice_loss[j], mixed_thetas[j])
-                                                  mixed_thetas[j] = mixed_thetas[j] - alphas[
-                                                                        j] * eta * grad # This step is critical to allow the gradient to flow through
-                                                  # You cannot use torch.no_grad on this step
-                                                  # with torch.no_grad():
-                                                  #     mixed_thetas[j] += alphas[j] * grad
-                                              else:
-                                                  optim_update(optims_primes[j], dice_loss[j])
+                                              updated_vals = optim_update(optims_primes[j],
+                                                           dice_loss[j], [mixed_thetas[j]])
+                                              mixed_thetas[j] = updated_vals[0]
+
+
+                                              # if isinstance(mixed_thetas[j], torch.Tensor):
+                                              #     grad = get_gradient(dice_loss[j], mixed_thetas[j])
+                                              #     mixed_thetas[j] = mixed_thetas[j] - alphas[
+                                              #                           j] * eta * grad # This step is critical to allow the gradient to flow through
+                                              #     # You cannot use torch.no_grad on this step
+                                              #     # with torch.no_grad():
+                                              #     #     mixed_thetas[j] += alphas[j] * grad
+                                              # else:
+                                              #     optim_update(optims_primes[j], dice_loss[j])
 
 
                                             # optim_update(optims_primes[j],
