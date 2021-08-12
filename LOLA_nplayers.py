@@ -24,8 +24,8 @@ repeats = 3
 # For each repeat/run:
 num_epochs = 2001
 print_every = max(1, num_epochs / 50)
-print_every = 4 #400
-batch_size = 1
+print_every = 10 #400
+batch_size = 64
 
 gamma = 0.96
 
