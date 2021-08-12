@@ -5,10 +5,50 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 
+import datetime
+
 import copy
 
 init_state_representation = 2  # Change here if you want different number to represent the initial state
 rollout_len = 50
+
+theta_init_modes = ['standard', 'tft']
+theta_init_mode = 'standard'
+
+# Repeats for each hyperparam setting
+# repeats = 10
+repeats = 3
+
+# tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
+
+# For each repeat/run:
+num_epochs = 2001
+print_every = max(1, num_epochs / 50)
+print_every = 4 #400
+batch_size = 1
+
+gamma = 0.96
+
+# n_agents = 3
+contribution_factor = 1.6
+contribution_scale = False
+# contribution_factor=0.6
+# contribution_scale=True
+
+using_samples = True # True for samples, false for exact gradient (using matrix inverse)
+using_DiCE = True
+if using_DiCE:
+    assert using_samples
+
+# Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
+etas = [0.01 * 10]
+if using_DiCE:
+    etas = [5] # this is a factor by which we increase the lr on the inner loop vs outer loop
+
+# TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
+
+# n_agents_list = [2,3,4]
+n_agents_list = [2]
 
 
 def bin_inttensor_from_int(x, n):
@@ -154,12 +194,13 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
     return dims, Ls
 
 class ContributionGame():
-    def __init__(self, n, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
+    def __init__(self, n, batch_size, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
         self.n_agents = n
         self.gamma = gamma
         self.contribution_factor = contribution_factor
         self.contribution_scale = contribution_scale
         self.dims = [n] * n
+        self.batch_size = batch_size
 
         if contribution_scale:
             self.contribution_factor = contribution_factor * n
@@ -167,37 +208,68 @@ class ContributionGame():
             assert self.contribution_factor > 1
 
     def rollout(self, th, num_iters):
-        init_state = torch.Tensor([[init_state_representation] * self.n_agents])  # repeat -1 n times, where n is num agents
-        state = init_state
+        # init_state = torch.Tensor([[init_state_representation] * self.n_agents])  # repeat -1 n times, where n is num agents
+        # print(init_state)
+        init_state_batch = torch.ones((self.batch_size, self.n_agents)) * init_state_representation
+        # print(init_state_batch)
 
-        trajectory = torch.zeros((num_iters, self.n_agents), dtype=torch.int)
-        rewards = torch.zeros((num_iters, self.n_agents))
-        policy_history = torch.zeros((num_iters, self.n_agents))
+        # state = init_state
+        state_batch = init_state_batch
+
+
+        trajectory = torch.zeros((num_iters, self.n_agents, self.batch_size, 1), dtype=torch.int)
+        rewards = torch.zeros((num_iters, self.n_agents, self.batch_size, 1))
+        policy_history = torch.zeros((num_iters, self.n_agents, self.batch_size, 1))
 
         for iter in range(num_iters):
 
-            policies = torch.zeros(self.n_agents)
+            policies = torch.zeros((self.n_agents, self.batch_size, 1))
 
             for i in range(self.n_agents):
                 if isinstance(th[i], torch.Tensor):
 
-                    if (state - init_state).sum() == 0:
-                        policy = torch.sigmoid(th[i])[-1]
+                    # if (state - init_state).sum() == 0:
+                    #     policy = torch.sigmoid(th[i])[-1]
+                    if iter == 0:
+                        # we just started
+                        assert state_batch[0][0]-init_state_representation == 0
+                        indices = [-1] * self.batch_size
+
+                        policy = torch.sigmoid(th[i])[indices]
+                        # print(policy.shape)
+                        # print(policy)
+                        policy = torch.sigmoid(th[i])[indices].reshape(-1,1)
+
 
                     else:
+                        # policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
+                        indices = list(map(int_from_bin_inttensor, state_batch))
+                        policy = torch.sigmoid(th[i])[indices].reshape(-1,1)
 
-                        policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
                 else:
-                    policy = th[i](state)
+                    # policy = th[i](state)
+                    policy = th[i](state_batch)
+
+                # print(policy)
+
                 # policy prob of coop between 0 and 1
                 policies[i] = policy
 
 
             policy_history[iter] = policies
 
+
+            # print(policies)
+
             actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
 
-            state = torch.Tensor(actions)
+            # print(actions)
+
+            state_batch = torch.Tensor(actions)
+            state_batch = state_batch.reshape(self.n_agents, self.batch_size)
+            state_batch = state_batch.t()
+
+            # print(state_batch)
 
             trajectory[iter] = torch.Tensor(actions)
 
@@ -313,9 +385,14 @@ class ContributionGame():
 
         # G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
 
-        # Discounted rewards, not sum of rewards which G_t is
-        gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
+        # x = rewards * discounts.reshape(-1, 1, 1, 1)
 
+        # print(x)
+        # print(rewards)
+        # print(discounts)
+
+        # Discounted rewards, not sum of rewards which G_t is
+        gamma_t_r_ts = rewards * discounts.reshape(-1,1,1,1)  # implicit broadcasting done by numpy
 
 
         p_act_given_state = trajectory.float() * policy_history + (
@@ -330,12 +407,32 @@ class ContributionGame():
         # print(sum_over_agents_log_p_act)
         # print(gamma_t_r_ts)
 
+        # print(gamma_t_r_ts.shape)
+
+        # print(sum_over_agents_log_p_act.shape)
+
+        # x = torch.cumsum(sum_over_agents_log_p_act, dim=0)
+
+        # print(sum_over_agents_log_p_act)
+        # print(x)
+
+        # x = x.view(-1, 1, self.batch_size, 1)
+
+        # x = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
+        #
+        # print(x.shape)
+
         # See 5.2 (page 7) of DiCE paper for below:
-        dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1,1) * gamma_t_r_ts).sum(dim=0)
+        # With batches, the mean is the mean across batches. The sum is over the steps in the rollout/trajectory
+        dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
+        # dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1,1) * gamma_t_r_ts).sum(dim=0)
         dice_loss = -dice_rewards
         # print(dice_loss)
 
-        G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1), dim=0)
+        G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1, 1, 1), dim=0)
+
+        # print(G_ts)
+        # print(G_ts.shape)
 
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
 
@@ -640,10 +737,22 @@ class NeuralNet(nn.Module):
 def init_custom(dims):
     th = []
 
+
+    # th.append(torch.nn.init.normal_(
+    #     torch.empty(2 ** n_agents + 1, requires_grad=True), std=0.1))
+    # th.append(
+    #     NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
+    #               output_size=1))
+
+    # NN/func approx
+
     # for i in range(len(dims)):
     #     th.append(
     #         NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
     #                   output_size=1))
+
+
+    # Tabular policies
 
     for i in range(len(dims)):
         # DONT FORGET THIS +1
@@ -692,8 +801,9 @@ def print_policy_info(policy, i, G_ts, discounted_sum_of_adjustments, coop_payou
     if i == 0:
 
         print(
-            "Discounted Sum Rewards in this episode (removing negative adjustment): ")
-        print(G_ts[0] + discounted_sum_of_adjustments)
+            "Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
+        # print(G_ts[0] + discounted_sum_of_adjustments)
+        print(G_ts[0].mean(dim=1).reshape(-1) + discounted_sum_of_adjustments)
         print("Max Avg Coop Payout: {:.3f}".format(coop_payout))
 
 
@@ -706,6 +816,12 @@ def print_policies_from_state_batch(n_agents, G_ts, discounted_sum_of_adjustment
     for i in range(n_agents):
         if isinstance(th[i], torch.Tensor):
             policy = torch.sigmoid(th[i])
+            # indices = list(map(int_from_bin_inttensor, state_batch))
+            # indices[-1] = -1
+            # print(indices)
+            # print(policy[indices])
+            # 1/0
+
         else:
             policy = th[i](state_batch)
 
@@ -885,49 +1001,15 @@ def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch, using_samples
 
 
 
-theta_init_modes = ['standard', 'tft']
-theta_init_mode = 'standard'
 
-# Repeats for each hyperparam setting
-# repeats = 10
-repeats = 5
-
-# tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
-
-# For each repeat/run:
-num_epochs = 6001
-print_every = max(1, num_epochs / 50)
-print_every = 400
-
-gamma = 0.96
-
-# n_agents = 3
-contribution_factor = 1.6
-contribution_scale = False
-# contribution_factor=0.6
-# contribution_scale=True
-
-using_samples = True # True for samples, false for exact gradient (using matrix inverse)
-using_DiCE = True
-if using_DiCE:
-    assert using_samples
-
-# Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
-etas = [0.01 * 10]
-if using_DiCE:
-    etas = [16] # this is a factor by which we increase the lr on the inner loop vs outer loop
-
-# TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
-
-# n_agents_list = [2,3,4]
-n_agents_list = [2]
+# Main loop/code
 
 for n_agents in n_agents_list:
 
     if using_samples:
         # alphas = [0.005] * n_agents
 
-        alphas = torch.tensor([0.01] * n_agents)
+        alphas = torch.tensor([0.05] * n_agents)
     else:
         alphas = torch.tensor(alphas = [0.1] * n_agents)
 
@@ -989,7 +1071,7 @@ for n_agents in n_agents_list:
                 #                                          contribution_factor=contribution_factor,
                 #                                          contribution_scale=contribution_scale)
 
-                game = ContributionGame(n=n_agents, gamma=gamma,
+                game = ContributionGame(n=n_agents, gamma=gamma, batch_size=batch_size,
                                                          contribution_factor=contribution_factor,
                                                          contribution_scale=contribution_scale)
                 dims = game.dims
@@ -1010,7 +1092,7 @@ for n_agents in n_agents_list:
 
 
             # Run
-            G_ts_record = np.zeros((num_epochs, n_agents))
+            G_ts_record = torch.zeros((num_epochs, n_agents, batch_size, 1))
             lola_terms_running_total = []
             nl_terms_running_total = []
 
@@ -1186,6 +1268,7 @@ for n_agents in n_agents_list:
                 if epoch % print_every == 0:
                     print("Epoch: " + str(epoch))
                     print("Eta: " + str(eta))
+                    print("Batch size: " + str(batch_size))
                     if using_DiCE:
                         print("Inner Steps: {}".format(inner_steps))
                     else:
@@ -1212,10 +1295,18 @@ for n_agents in n_agents_list:
             # This gives us a rough idea of how close to optimal (how close to full cooperation) we are.
             reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_payout)
 
+            # print(reward_percent_of_max)
+            # print(G_ts_record)
+
+
             plot_results = True
             if plot_results:
-                plt.plot(G_ts_record + discounted_sum_of_adjustments)
-                plt.savefig("{}agents_{}eta_run{}_steps{}".format(n_agents, eta, run, "_".join(list(map(str, inner_steps)))))
+                now = datetime.datetime.now()
+                # print(now.strftime('%Y-%m-%d_%H-%M'))
+                avg_gts_to_plot = (G_ts_record + discounted_sum_of_adjustments).mean(dim=2).view(num_epochs, n_agents)
+                # print(avg_gts_to_plot)
+                plt.plot(avg_gts_to_plot)
+                plt.savefig("{}agents_{}eta_run{}_steps{}_date{}".format(n_agents, eta, run, "_".join(list(map(str, inner_steps))), now.strftime('%Y-%m-%d_%H-%M')))
 
                 plt.show()
 
