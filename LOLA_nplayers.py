@@ -32,10 +32,10 @@ batch_size = 64
 gamma = 0.96
 
 # n_agents = 3
-contribution_factor = 1.6
-contribution_scale = False
-# contribution_factor=0.6
-# contribution_scale=True
+# contribution_factor = 1.6
+# contribution_scale = False
+contribution_factor=0.6
+contribution_scale=True
 
 
 
@@ -47,12 +47,12 @@ if using_DiCE:
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 10]
 if using_DiCE:
-    etas = [5] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [10] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
 # n_agents_list = [2,3,4]
-n_agents_list = [2]
+n_agents_list = [3]
 
 
 def bin_inttensor_from_int(x, n):
@@ -240,7 +240,7 @@ class ContributionGame():
                         assert state_batch[0][0]-init_state_representation == 0
                         indices = [-1] * self.batch_size
 
-                        policy = torch.sigmoid(th[i])[indices]
+                        # policy = torch.sigmoid(th[i])[indices]
                         # print(policy.shape)
                         # print(policy)
                         policy = torch.sigmoid(th[i])[indices].reshape(-1,1)
@@ -276,14 +276,22 @@ class ContributionGame():
 
             # print(state_batch)
 
+
             trajectory[iter] = torch.Tensor(actions)
 
             # Note negative rewards might help with exploration in PG formulation
             total_contrib = sum(actions)
-            payout_per_agent = total_contrib * contribution_factor / self.n_agents
+            # total_contrib = actions.sum(dim=0)
+
+            payout_per_agent = total_contrib * self.contribution_factor / self.n_agents
             agent_rewards = -actions + payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
+
+            # print(actions)
+            # print(payout_per_agent)
+            # print(agent_rewards)
+
 
         return trajectory, rewards, policy_history
 
@@ -750,7 +758,7 @@ def init_custom(dims):
     #               output_size=1))
 
     # NN/func approx
-
+    #
     # for i in range(len(dims)):
     #     th.append(
     #         NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
@@ -812,6 +820,7 @@ def print_policy_info(policy, i, G_ts, discounted_sum_of_adjustments, coop_payou
         print(
             "Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
         # print(G_ts[0] + discounted_sum_of_adjustments)
+
         print(G_ts[0].mean(dim=1).reshape(-1) + discounted_sum_of_adjustments)
         print("Max Avg Coop Payout: {:.3f}".format(coop_payout))
 
@@ -1037,8 +1046,8 @@ for n_agents in n_agents_list:
 
     max_single_step_return = (contribution_factor * (n_agents - 1) / n_agents)
 
-    # adjustment_to_make_rewards_negative = 0
-    adjustment_to_make_rewards_negative = max_single_step_return
+    adjustment_to_make_rewards_negative = 0
+    # adjustment_to_make_rewards_negative = max_single_step_return
     # With adjustment and 20k steps seems LOLA vs NL does learn a TFT like strategy
     # But the problem is NL hasn't learned to coop at the start
     # which results in DD behaviour throughout.
@@ -1093,7 +1102,8 @@ for n_agents in n_agents_list:
 
 
             if using_DiCE:
-                inner_steps = [2,2]
+                # inner_steps = [2,2]
+                inner_steps = [2] * n_agents
             else:
                 # algos = ['nl', 'lola']
                 # algos = ['lola', 'nl']
@@ -1166,46 +1176,75 @@ for n_agents in n_agents_list:
                                                                       rewards,
                                                                       policy_history)
                                     if eta != 0:
-                                      for j in range(n_agents):
-                                          if j != i:
-                                              updated_vals = optim_update(optims_primes[j],
-                                                           dice_loss[j], [mixed_thetas[j]])
-                                              mixed_thetas[j] = updated_vals[0]
+                                        grads = [None] * n_agents
+                                        for j in range(n_agents):
+                                            if j != i:
+                                                  # updated_vals = optim_update(optims_primes[j],
+                                                  #              dice_loss[j], [mixed_thetas[j]])
+                                                  # mixed_thetas[j] = updated_vals[0]
 
 
-                                              # if isinstance(mixed_thetas[j], torch.Tensor):
-                                              #     grad = get_gradient(dice_loss[j], mixed_thetas[j])
-                                              #     mixed_thetas[j] = mixed_thetas[j] - alphas[
-                                              #                           j] * eta * grad # This step is critical to allow the gradient to flow through
-                                              #     # You cannot use torch.no_grad on this step
-                                              #     # with torch.no_grad():
-                                              #     #     mixed_thetas[j] += alphas[j] * grad
-                                              # else:
-                                              #     optim_update(optims_primes[j], dice_loss[j])
+                                                  if isinstance(mixed_thetas[j], torch.Tensor):
+                                                      grad = get_gradient(dice_loss[j], mixed_thetas[j])
+                                                      grads[j] = grad
+
+                                                  else:
+                                                      # TODO also the update needs to go outside this loop
+                                                      # Get all the grads first, then update all simultaneously
+                                                      # Don't update first because then gradient will flow through to other players
+                                                      # updates as well
+                                                      # for param in mixed_thetas[j].parameters():
+                                                      #     print(param)
+                                                      #     param.data +=  1
+                                                      #     print(param)
+                                                      #     # grad = get_gradient(dice_loss[j],
+                                                      #     #           param)
+                                                      #     # print(grad)
+                                                      # for param in mixed_thetas[j].parameters():
+                                                      #     print(param)
+                                                      #
+                                                      # print(mixed_thetas[j].parameters())
+                                                      # 1 / 0
+                                                      # grad = [get_gradient(dice_loss[j],
+                                                      #               param) for param in mixed_thetas[j].parameters()]
+                                                      # for i in range(len(grad)):
+                                                      #     pass
+                                                      1/0
+                                                      # TODO we have to use higher.
+                                                      # TODO Figure out how to use it, and use it.
+                                                      # Figure out the unroll loop...
+
+                                                      # optim_update(optims_primes[j], dice_loss[j])
+                                        for j in range(n_agents):
+                                            # Need a separate loop to deal with issue where you can't update differentiably first in p2 otherwise p3 will see that and diff through that
+                                            if j != i:
+                                                if isinstance(mixed_thetas[j],
+                                                              torch.Tensor):
+
+                                                    mixed_thetas[j] = mixed_thetas[j] - \
+                                                                      alphas[
+                                                                          j] * eta * grads[j]  # This step is critical to allow the gradient to flow through
+                                                    # You cannot use torch.no_grad on this step
+                                                    # with torch.no_grad():
+                                                    #     mixed_thetas[j] += alphas[j] * grad
+                                                else:
+                                                    1/0
 
 
-                                            # optim_update(optims_primes[j],
-                                            #              dice_loss[j])
+                                        # optim_update(optims_primes[j],
+                                        #              dice_loss[j])
 
-                                            # print(mixed_thetas[j])
-                                            # print(th[j])
-                                            # print(theta_primes[j])
-                                            # print(static_th_copy[j])
+                                        # print(mixed_thetas[j])
+                                        # print(th[j])
+                                        # print(theta_primes[j])
+                                        # print(static_th_copy[j])
 
-                                # TODO: allow for eta (inner learn step different from outer learn step)
-                                #
-                                # TODO CHECK OFFICIAL CODE FIRST
-                                # Square up my code with theirs and check for differences/anything missing
-                                # Then consider trying using built in optim instead of nograd
-                                # Can also try Adam and see results if different
-                                # TODO IMPORTANT FIGURE OUT MEMORY/BATCH AND USE THOSE FOR STABILITY
-                                # Test and get those working with 2 players first.
-                                # Then see other stuff - look into whether dice without env/simulator access exists
-                                # Understand the MAML analogy a bit better (for own knowledge)
-                                # Then ask Jakob about it
-                                # All this should be done Monday, by end of day.
-
-                                # print(mixed_thetas)
+                                # TODO: Batch with LOLA non DiCE and test it
+                                # TODO: try to get 3p DiCE working, debug every step thoroughly!!!!
+                                # ABOVE KEY
+                                # And if it is still not working, investigate why it doesn't, since
+                                # We know that we can get the other non-dice variant working
+                                # DO these before the diff opt and NN and whatever.
 
 
                                 # Now calculate outer step using for each player a mix of the theta_primes and old thetas
