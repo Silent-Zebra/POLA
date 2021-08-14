@@ -1277,9 +1277,7 @@ for n_agents in n_agents_list:
 
                                 # optim_update(optims[i], dice_loss[i])
 
-                                # print(mixed_thetas)
-                                # print(th)
-                                # print("---")
+
 
 
 
