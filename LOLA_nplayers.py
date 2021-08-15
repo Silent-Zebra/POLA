@@ -40,7 +40,7 @@ if using_DiCE:
 # TODO it seems the non-DiCE version with batches isn't really working.
 
 # For DiCE
-symmetric_updates = True
+symmetric_updates = False
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
@@ -50,13 +50,13 @@ if using_DiCE:
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
 # n_agents_list = [2,3,4]
-n_agents_list = [2]
+n_agents_list = [4]
 
 # n_agents = 3
-contribution_factor = 1.6
-contribution_scale = False
-# contribution_factor=0.6
-# contribution_scale=True
+# contribution_factor = 1.6
+# contribution_scale = False
+contribution_factor=0.6
+contribution_scale=True
 
 
 
@@ -1106,7 +1106,7 @@ for n_agents in n_agents_list:
 
             if using_DiCE:
                 # inner_steps = [2,2]
-                inner_steps = [1] * n_agents
+                inner_steps = [2] * n_agents
             else:
                 # algos = ['nl', 'lola']
                 # algos = ['lola', 'nl']
@@ -1411,5 +1411,11 @@ for n_agents in n_agents_list:
         print("Eta: {}".format(eta))
         # print(reward_percent_of_max)
         # Average over all runs
+        if using_DiCE:
+            if symmetric_updates:
+                print("Symmetric Updates")
+            else:
+                print("Asymmetric Updates")
         print("Average reward as % of max: {:.1%}".format(
             sum(reward_percent_of_max) / repeats))
+
