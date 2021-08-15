@@ -32,7 +32,7 @@ batch_size = 4
 gamma = 0.96
 
 using_samples = True # True for samples, false for exact gradient (using matrix inverse)
-using_DiCE = False
+using_DiCE = True
 if using_DiCE:
     assert using_samples
 # TODO it seems the non-DiCE version with batches isn't really working.
