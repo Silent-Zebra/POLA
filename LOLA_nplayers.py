@@ -39,6 +39,9 @@ if using_DiCE:
     assert using_samples
 # TODO it seems the non-DiCE version with batches isn't really working.
 
+# For DiCE
+symmetric_updates = True
+
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
@@ -47,13 +50,13 @@ if using_DiCE:
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
 # n_agents_list = [2,3,4]
-n_agents_list = [3,5]
+n_agents_list = [2]
 
 # n_agents = 3
-# contribution_factor = 1.6
-# contribution_scale = False
-contribution_factor=0.6
-contribution_scale=True
+contribution_factor = 1.6
+contribution_scale = False
+# contribution_factor=0.6
+# contribution_scale=True
 
 
 
@@ -1103,7 +1106,7 @@ for n_agents in n_agents_list:
 
             if using_DiCE:
                 # inner_steps = [2,2]
-                inner_steps = [2] * n_agents
+                inner_steps = [1] * n_agents
             else:
                 # algos = ['nl', 'lola']
                 # algos = ['lola', 'nl']
@@ -1126,31 +1129,69 @@ for n_agents in n_agents_list:
 
                         # TODO Try actual symmetric with inner steps now
 
-                        test_symmetric=False
-                        if test_symmetric:
-                            # # With 0 inner steps right now
-                            # trajectory, rewards, policy_history = game.rollout(
-                            #     th, num_iters=rollout_len)
-                            #
-                            # dice_loss, G_ts, nl_loss = game.get_dice_loss(
-                            #     trajectory, rewards,
-                            #     policy_history)
-                            # for j in range(n_agents):
-                            #     # print(th[j])
-                            #     # if isinstance(th[j], torch.Tensor):
-                            #     #     grad = get_gradient(dice_loss[j], th[j])
-                            #         # with torch.no_grad():
-                            #         #     th[j] += alphas[j] * grad
-                            #         # th[j] = th[j] - alphas[j] * grad
-                            #         # print(th[j] - alphas[j] * grad)
-                            #     optim_update(optims[j], dice_loss[j])
-                            #     grad = get_gradient(dice_loss[j], th[j])
-                            #     print(grad)
-                            #     grad = get_gradient(nl_loss[j], th[j])
-                            #     print(grad)
-                            #     # print(th[j])
+                        if symmetric_updates:
+                            assert inner_steps[0] == sum(inner_steps) / len(inner_steps)
+                            theta_primes = copy.deepcopy(static_th_copy)
 
-                            1/0
+                            # Allow for inner steps
+                            if eta != 0:
+                                K = inner_steps[0]
+                                assert K == 1
+                                # With 1 inner step right now
+                                # There's a non-trivial question how you would allow for multiple steps
+                                # IMPORTANT NOTE THAT APPLIES FOR ASYMM TOO
+                                # With multiple players and steps > 1 the differentiable update step
+                                # means that other players also do a kind of LOLA update in the inner loop
+                                # This may or may not be what you want...
+
+                                for step in range(inner_steps[0]):
+
+                                    grads = [None] * n_agents
+
+
+                                    trajectory, rewards, policy_history = game.rollout(
+                                        th, num_iters=rollout_len)
+
+                                    dice_loss, _ = game.get_dice_loss(
+                                        trajectory, rewards,
+                                        policy_history)
+                                    for j in range(n_agents):
+                                        # print(th[j])
+                                        if isinstance(th[j], torch.Tensor):
+                                            grad = get_gradient(dice_loss[j], th[j])
+                                            grads[j] = grad
+                                        else:
+                                            1/0
+
+                                    for j in range(n_agents):
+                                        # print(th[j])
+                                        if isinstance(theta_primes[j], torch.Tensor):
+                                            theta_primes[j] = theta_primes[j] - \
+                                                              alphas[
+                                                                  j] * eta * grads[j]
+                                        else:
+                                            1 / 0
+
+                            for i in range(n_agents):
+                                mixed_thetas = theta_primes
+                                mixed_thetas[i] = th[i]
+                                trajectory, rewards, policy_history = game.rollout(
+                                    mixed_thetas, num_iters=rollout_len)
+
+                                dice_loss, G_ts = game.get_dice_loss(
+                                    trajectory, rewards,
+                                    policy_history)
+
+                                if isinstance(th[i], torch.Tensor):
+                                    grad = get_gradient(dice_loss[i], th[i])
+                                    with torch.no_grad():
+                                        th[i] -= alphas[i] * grad
+
+                                else:
+                                    optim_update(optims[i], dice_loss[i])
+
+
+
 
                         else:
 
@@ -1165,17 +1206,18 @@ for n_agents in n_agents_list:
                                 mixed_thetas[i] = th[i]
 
                                 # print(mixed_thetas)
+                                if eta != 0:
 
-                                for step in range(K):
+                                    for step in range(K):
 
                                     # ok to use th[i] here because it hasn't been updated yet
+                                        trajectory, rewards, policy_history = game.rollout(
+                                            mixed_thetas, num_iters=rollout_len)
+                                        dice_loss, _ = game.get_dice_loss(
+                                            trajectory,
+                                            rewards,
+                                            policy_history)
 
-                                    trajectory, rewards, policy_history = game.rollout(
-                                        mixed_thetas, num_iters=rollout_len)
-                                    dice_loss, _ = game.get_dice_loss(trajectory,
-                                                                      rewards,
-                                                                      policy_history)
-                                    if eta != 0:
                                         grads = [None] * n_agents
                                         for j in range(n_agents):
                                             if j != i:
