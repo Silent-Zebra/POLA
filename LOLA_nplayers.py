@@ -26,33 +26,33 @@ repeats = 3
 # For each repeat/run:
 num_epochs = 2001
 print_every = max(1, num_epochs / 50)
-print_every = 10 #400
-batch_size = 64
+print_every = 20 #400
+batch_size = 4
 
 gamma = 0.96
 
-# n_agents = 3
-# contribution_factor = 1.6
-# contribution_scale = False
-contribution_factor=0.6
-contribution_scale=True
-
-
-
 using_samples = True # True for samples, false for exact gradient (using matrix inverse)
-using_DiCE = True
+using_DiCE = False
 if using_DiCE:
     assert using_samples
+# TODO it seems the non-DiCE version with batches isn't really working.
 
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
-etas = [0.01 * 10]
+etas = [0.05 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [10] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [5] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
 # n_agents_list = [2,3,4]
-n_agents_list = [3]
+n_agents_list = [2]
+
+# n_agents = 3
+contribution_factor = 1.6
+contribution_scale = False
+# contribution_factor=0.6
+# contribution_scale=True
+
 
 
 def bin_inttensor_from_int(x, n):
@@ -295,41 +295,63 @@ class ContributionGame():
 
         return trajectory, rewards, policy_history
 
-    def get_gradient_terms(self, trajectory, rewards, policy_history):
-
+    def get_loss_helper(self, trajectory, rewards, policy_history):
         num_iters = len(trajectory)
 
         discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
                                   dim=0) / self.gamma
 
-        G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
+        # G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
+        G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1, 1, 1), dim=0)
+        # G_ts gives you the inner sum of discounted rewards
 
         # Discounted rewards, not sum of rewards which G_t is
-        gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
+        gamma_t_r_ts = rewards * discounts.reshape(-1, 1, 1,
+                                                   1)  # implicit broadcasting done by numpy
 
         p_act_given_state = trajectory.float() * policy_history + (
-                    1 - trajectory.float()) * (1 - policy_history)
+                1 - trajectory.float()) * (1 - policy_history)
         # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
         # and when defect 0 is taken, we take 1-policy = prob of defect
 
         log_p_act = torch.log(p_act_given_state)
+        return G_ts, gamma_t_r_ts, log_p_act
+
+    def get_gradient_terms(self, trajectory, rewards, policy_history):
+
+        G_ts, gamma_t_r_ts, log_p_act = self.get_loss_helper(trajectory,
+                                                             rewards,
+                                                             policy_history)
 
         # These are basically grad_i E[R_0^i] - naive learning loss
         # no LOLA loss here yet
-        losses_nl = (log_p_act * G_ts).sum(dim=0)
-        # G_ts gives you the inner sum of discounted rewards
+        # objective_nl = (torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(
+        #     dim=0)
+        objective_nl = (log_p_act * G_ts).sum(dim=0)
+        # losses_nl = (log_p_act * G_ts).sum(dim=0)
 
-        log_p_times_G_t_matrix = torch.zeros((n_agents, n_agents))
+        log_p_times_G_t_matrix = torch.zeros((self.n_agents, self.n_agents))
         # so entry 0,0 is - (log_p_act[:,0] * G_ts[:,0]).sum(dim=0)
         # entry 1,1 is - (log_p_act[:,1] * G_ts[:,1]).sum(dim=0)
         # and so on
         # entry 0,1 is - (log_p_act[:,0] * G_ts[:,1]).sum(dim=0)
         # and so on
         # Be careful with dimensions/not to mix them up
-        for i in range(n_agents):
-            for j in range(n_agents):
+
+
+        for i in range(self.n_agents):
+            for j in range(self.n_agents):
+                # print(log_p_act[:, i].shape)
+                # print(G_ts[:, j].shape)
+                # print((log_p_act[:, i] * G_ts[:, j]).sum(dim=0))
+
+                # print((log_p_act[:, i] * G_ts[:, j]).shape)
+                # print((log_p_act[:, i] * G_ts[:, j]).sum(dim=0).shape)
+                # print((log_p_act[:, i] * G_ts[:, j]).sum(dim=0).mean(dim=0).shape)
+
+
                 log_p_times_G_t_matrix[i][j] = (
-                            log_p_act[:, i] * G_ts[:, j]).sum(dim=0)
+                            log_p_act[:, i] * G_ts[:, j]).sum(dim=0).mean(dim=0)
         # Remember that the grad corresponds to the log_p and the R_t corresponds to the G_t
         # We can switch the log_p and G_t (swap log_p i to j and vice versa) if we want to change order
 
@@ -349,9 +371,9 @@ class ContributionGame():
         # So then you also want grad_1 grad_3 of R_3
         # and so on
 
-        grad_1_grad_2_matrix = torch.zeros((n_agents, n_agents))
-        for i in range(n_agents):
-            for j in range(n_agents):
+        grad_1_grad_2_matrix = torch.zeros((self.n_agents, self.n_agents, self.batch_size, 1))
+        for i in range(self.n_agents):
+            for j in range(self.n_agents):
                 grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,
                                               j] * log_p_act_sums_0_to_t[:,
                                                    i] * log_p_act_sums_0_to_t[:,
@@ -360,80 +382,48 @@ class ContributionGame():
 
         # TODO NOTE THESE ARE NOT LOSSES, THEY ARE REWARDS (discounted)
         # Need to negative if you will torch optim on them. This is a big issue lol
-        losses = losses_nl
+        # objective = objective_nl
 
         grad_log_p_act = []
 
-        for i in range(n_agents):
+        for i in range(self.n_agents):
             # TODO could probably get this without taking grad, could be more efficient
-            example_grad = get_gradient(log_p_act[0, i], th[i]) if isinstance(
+            # print(log_p_act[0, i].shape)
+
+            # CANNOT DO mean here. Must do individually for every batch, preserving the batch_size dimension
+            # until later.
+            # Once done, then test with just 2 players that you get the right result.
+
+            example_grad = get_gradient(log_p_act[0, i, 0], th[i]) if isinstance(
                 th[i], torch.Tensor) else torch.cat(
-                [get_gradient(log_p_act[0, i], param).flatten() for
+                [get_gradient(log_p_act[0, i, 0], param).flatten() for
                  param in
                  th[i].parameters()])
             grad_len = len(example_grad)
-            grad_log_p_act.append(torch.zeros((rollout_len, grad_len)))
+            grad_log_p_act.append(torch.zeros((rollout_len, self.batch_size, grad_len)))
 
-        for i in range(n_agents):
+        for i in range(self.n_agents):
 
             for t in range(rollout_len):
 
-                grad_t = get_gradient(log_p_act[t, i], th[i]) if isinstance(
-                    th[i], torch.Tensor) else torch.cat(
-                    [get_gradient(log_p_act[t, i], param).flatten() for
-                     param in
-                     th[i].parameters()])
+                for b in range(self.batch_size):
+
+                    grad_t = get_gradient(log_p_act[t, i, b], th[i]) if isinstance(
+                        th[i], torch.Tensor) else torch.cat(
+                        [get_gradient(log_p_act[t, i, b], param).flatten() for
+                         param in
+                         th[i].parameters()])
 
 
-                grad_log_p_act[i][t] = grad_t
+                    grad_log_p_act[i][t][b] = grad_t
 
-        return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
+        return objective_nl, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
 
     def get_dice_loss(self, trajectory, rewards, policy_history):
 
-        num_iters = len(trajectory)
-
-        discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
-                                  dim=0) / self.gamma
-
-        # G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
-
-        # x = rewards * discounts.reshape(-1, 1, 1, 1)
-
-        # print(x)
-        # print(rewards)
-        # print(discounts)
-
-        # Discounted rewards, not sum of rewards which G_t is
-        gamma_t_r_ts = rewards * discounts.reshape(-1,1,1,1)  # implicit broadcasting done by numpy
-
-
-        p_act_given_state = trajectory.float() * policy_history + (
-                    1 - trajectory.float()) * (1 - policy_history)
-        # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
-        # and when defect 0 is taken, we take 1-policy = prob of defect
-
-        log_p_act = torch.log(p_act_given_state)
+        G_ts, gamma_t_r_ts, log_p_act = self.get_loss_helper(trajectory, rewards, policy_history)
 
         sum_over_agents_log_p_act = log_p_act.sum(dim=1)
-        # print(log_p_act)
-        # print(sum_over_agents_log_p_act)
-        # print(gamma_t_r_ts)
-
-        # print(gamma_t_r_ts.shape)
-
-        # print(sum_over_agents_log_p_act.shape)
-
-        # x = torch.cumsum(sum_over_agents_log_p_act, dim=0)
-
-        # print(sum_over_agents_log_p_act)
-        # print(x)
-
-        # x = x.view(-1, 1, self.batch_size, 1)
-
-        # x = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
-        #
-        # print(x.shape)
 
         # See 5.2 (page 7) of DiCE paper for below:
         # With batches, the mean is the mean across batches. The sum is over the steps in the rollout/trajectory
@@ -441,11 +431,6 @@ class ContributionGame():
         # dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act, dim=0)).reshape(-1,1) * gamma_t_r_ts).sum(dim=0)
         dice_loss = -dice_rewards
         # print(dice_loss)
-
-        G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1, 1, 1), dim=0)
-
-        # print(G_ts)
-        # print(G_ts.shape)
 
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
 
@@ -560,8 +545,11 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
         # entry 0,1 is - (log_p_act[:,0] * G_ts[:,1]).sum(dim=0)
         # and so on
         # Be careful with dimensions/not to mix them up
+
+
         for i in range(n_agents):
             for j in range(n_agents):
+
                 log_p_times_G_t_matrix[i][j] = (
                             log_p_act[:, i] * G_ts[:, j]).sum(dim=0)
         # Remember that the grad corresponds to the log_p and the R_t corresponds to the G_t
@@ -899,24 +887,34 @@ def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch, using_samples
                 for j in range(n_agents):
                     if i != j:
                         for t in range(rollout_len):
+                            for b in range(batch_size):
 
-                            # grad_t = torch.FloatTensor(gamma_t_r_ts)[:, j][t] * \
-                            #          torch.outer(
-                            #              grad_log_p_act[i][:t + 1].sum(dim=0),
-                            #              grad_log_p_act[j][:t + 1].sum(dim=0))
+                                # grad_t = torch.FloatTensor(gamma_t_r_ts)[:, j][t] * \
+                                #          torch.outer(
+                                #              grad_log_p_act[i][:t + 1].sum(dim=0),
+                                #              grad_log_p_act[j][:t + 1].sum(dim=0))
 
-                            grad_t = torch.FloatTensor(gamma_t_r_ts)[:, j][t] * \
-                                     torch.outer(
-                                         grad_log_p_act_sums_0_to_t[i][t],
-                                         grad_log_p_act_sums_0_to_t[j][t])
 
-                            if t == 0:
-                                grad_1_grad_2_return_2_new[i][j] = grad_t
-                            else:
-                                grad_1_grad_2_return_2_new[i][j] += grad_t
+                                # print(grad_log_p_act_sums_0_to_t[i].shape)
+                                # print(torch.FloatTensor(gamma_t_r_ts)[:, j][t].shape)
+                                # print(grad_log_p_act_sums_0_to_t[i][t].shape)
+                                # print(grad_log_p_act_sums_0_to_t[j][t].shape)
+
+
+                                grad_t_b = torch.FloatTensor(gamma_t_r_ts)[:, j][t][b] * \
+                                         torch.outer(
+                                             grad_log_p_act_sums_0_to_t[i][t][b],
+                                             grad_log_p_act_sums_0_to_t[j][t][b])
+
+                                if t == 0 and b == 0:
+                                    grad_1_grad_2_return_2_new[i][j] = grad_t_b
+                                else:
+                                    grad_1_grad_2_return_2_new[i][j] += grad_t_b
+                            grad_1_grad_2_return_2_new[i][j] /= batch_size # do an average
 
 
             grad_1_grad_2_return_2 = grad_1_grad_2_return_2_new
+
 
             grad_2_return_1 = [
                 [get_gradient(log_p_times_G_t_matrix[j][i],
@@ -1277,7 +1275,9 @@ for n_agents in n_agents_list:
 
                                 # optim_update(optims[i], dice_loss[i])
 
-
+                                # print(mixed_thetas)
+                                # print(th)
+                                # print("---")
 
 
 
