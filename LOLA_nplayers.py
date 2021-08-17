@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
 
-import higher
+# import higher
 
 import datetime
 
@@ -24,9 +24,9 @@ repeats = 1
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
-num_epochs = 2001
+num_epochs = 10001
 print_every = max(1, num_epochs / 50)
-print_every = 20 #400
+print_every = 100
 batch_size = 64
 # Bigger batch is a big part of convergence with DiCE. Too small batch (e.g. 1 or 4) frequently results in issues.
 
@@ -46,18 +46,18 @@ symmetric_updates = False
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [10] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [20, 10] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
 # n_agents_list = [2,3,4]
-n_agents_list = [2]
+n_agents_list = [5]
 
 # n_agents = 3
-contribution_factor = 1.6
-contribution_scale = False
-# contribution_factor=0.6
-# contribution_scale=True
+# contribution_factor = 1.6
+# contribution_scale = False
+contribution_factor=0.6
+contribution_scale=True
 
 
 
@@ -462,6 +462,7 @@ class ContributionGame():
 
         baseline_term = ((1 - magic_box(sum_over_agents_log_p_act.reshape(-1, 1, self.batch_size, 1))) * discounted_vals).sum(dim=0).mean(dim=1)
 
+
         # print(baseline_term.shape)
         # print(dice_rewards.shape)
 
@@ -476,6 +477,31 @@ class ContributionGame():
         # print(val_history.shape)
 
         values_loss = ((G_ts - discounted_vals) ** 2).sum(dim=0).mean(dim=1)
+
+        # Hm so I think this might be interesting. By choosing discounted_vals as the term for the baseline
+        # No that's definitely correct, you definitely need that since you are comparing against G_t
+        # But what's interesting is that in terms of the loss for the value function,
+        # I should be using G_ts - discounted_vals, but brought forward so that discounting starts from 0
+        # and suppose the true value from start is ~13, then the value in each state should be closer to 7 or so depending
+        # on the discounting - because in the last time step, the value is pretty close to 0
+        # So there is an issue resulting from the fixed time step termination when we should be doing probabilistic termination
+        # But anyway while the true value should be around 7 or so
+        # If you actually use that then you may not get very helpful variance reduction
+        # like maybe at the beginning you get var red, but towards end you actually get variance increase
+        # But by using the G - discounted_vals discounted all the way back to the start
+        # what happens is much less importance is placed on the later time steps
+        # So our value estimates are going to be wrong on the later time steps
+        # But it doesn't really matter because since those G_ts are heavily discounted anyways
+        # even a fairly large % mistake in the value won't have much influence on the true objective
+        # so this should actually be significantly more stable
+        # Has anyone analyzed this already?
+        # Key characteristics: fixed termination/time steps, but that doesn't show up in the state
+        # large enough discounting/long enough time horizon
+        # I suppose this is kind of a hack that lets us tease apart/better take advantage of the fact that time steps play a big role.
+        # If you had a time step variable in the state as well, then you shouldn't use this formulation, should use other formulation
+        # An overestimate for the baseline value probably also helps in the same way that the adjustment_to_make_rewards_negative does
+
+        # Hm ok let's try the other (correct) formulation and compare in the 2p case.
 
         # Yeah so interesting, because we cannot distinguish from 0,0 in time step 1 or 40, then maybe the baseline doens't help.
         # Or maybe it doesn't help much.
@@ -818,10 +844,11 @@ def init_custom(dims):
     # init[-2] += 2 * logit_shift
     # th.append(init)
 
-    optims = construct_optims_for_th(th, lrs=alphas)
+    # optims = construct_optims_for_th(th, lrs=alphas)
+    optims = None
 
     assert len(th) == len(dims)
-    assert len(optims) == len(dims)
+    # assert len(optims) == len(dims)
 
     vals = []
 
@@ -832,19 +859,19 @@ def init_custom(dims):
 
     return th, optims, vals
 
-def construct_optims_for_th(th, lrs):
-    optims = []
-    for i in range(len(th)):
-        if isinstance(th[i], NeuralNet):
-            optim = torch.optim.SGD(th[i].parameters(), lr=lrs[i])
-            diffoptim = higher.optim.DifferentiableSGD(optim, th[i].parameters())
-            optims.append(diffoptim)
-
-        else:
-            optim = torch.optim.SGD([th[i]], lr=lrs[i])
-            diffoptim = higher.optim.DifferentiableSGD(optim, [th[i]])
-            optims.append(diffoptim)
-    return optims
+# def construct_optims_for_th(th, lrs):
+#     optims = []
+#     for i in range(len(th)):
+#         if isinstance(th[i], NeuralNet):
+#             optim = torch.optim.SGD(th[i].parameters(), lr=lrs[i])
+#             diffoptim = higher.optim.DifferentiableSGD(optim, th[i].parameters())
+#             optims.append(diffoptim)
+#
+#         else:
+#             optim = torch.optim.SGD([th[i]], lr=lrs[i])
+#             diffoptim = higher.optim.DifferentiableSGD(optim, [th[i]])
+#             optims.append(diffoptim)
+#     return optims
 
 
 def get_gradient(function, param):
@@ -1154,7 +1181,7 @@ for n_agents in n_agents_list:
                                                          contribution_scale=contribution_scale)
                 dims = game.dims
 
-                th, optims, vals = init_custom(dims)
+                th, _, vals = init_custom(dims)
 
                 # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
                 # How does standard reinforce/policy gradient get around this? Entropy regularization
@@ -1259,7 +1286,7 @@ for n_agents in n_agents_list:
                                 # TODO later confirm that this deepcopy is working properly for NN also
                                 theta_primes = copy.deepcopy(static_th_copy)
                                 val_primes = copy.deepcopy(static_vals_copy)
-                                optims_primes = construct_optims_for_th(theta_primes, lrs=alphas * eta)
+                                # optims_primes = construct_optims_for_th(theta_primes, lrs=alphas * eta)
 
                                 mixed_thetas = theta_primes
                                 mixed_thetas[i] = th[i]
@@ -1381,7 +1408,8 @@ for n_agents in n_agents_list:
 
 
                                 else:
-                                    optim_update(optims[i], dice_loss[i])
+                                    # optim_update(optims[i], dice_loss[i])
+                                    1/0
 
                                 # optim_update(optims[i], dice_loss[i])
 
@@ -1472,7 +1500,7 @@ for n_agents in n_agents_list:
                 plt.plot(avg_gts_to_plot)
                 plt.savefig("{}agents_{}eta_run{}_steps{}_date{}".format(n_agents, eta, run, "_".join(list(map(str, inner_steps))), now.strftime('%Y-%m-%d_%H-%M')))
 
-                plt.show()
+                # plt.show()
 
         print("Number of agents: {}".format(n_agents))
         print("Contribution factor: {}".format(contribution_factor))
