@@ -1365,6 +1365,15 @@ for n_agents in n_agents_list:
 
                         else:
 
+                            # if repeat_train_on_same_samples:
+                            #     mixed_thetas = copy.deepcopy(static_th_copy)
+                            #     mixed_vals = copy.deepcopy(static_vals_copy)
+                            #     trajectory, rewards, policy_history, val_history = game.rollout(
+                            #         mixed_thetas, mixed_vals)
+                            # challenge is that you need to reset these mixed_thetas for each agent
+                            # how can you do that without rerolling? loss backward and all this stuff too
+
+
                             for i in range(n_agents):
                                 K = inner_steps[i]
 
@@ -1373,6 +1382,7 @@ for n_agents in n_agents_list:
                                 val_primes = copy.deepcopy(static_vals_copy)
                                 # optims_primes = construct_optims_for_th(theta_primes, lrs=alphas * eta)
 
+                                # if not repeat_train_on_same_samples:
                                 mixed_thetas = theta_primes
                                 mixed_thetas[i] = th[i]
                                 mixed_vals = val_primes
@@ -1537,6 +1547,11 @@ for n_agents in n_agents_list:
 
                                 # mixed_optims = optims_primes
                                 # mixed_optims[i] = optims[i]
+
+                                if repeat_train_on_same_samples:
+                                    mixed_thetas[i] = th[i]
+                                    mixed_vals[i] = vals[i]
+
                                 trajectory, rewards, policy_history, val_history = game.rollout(
                                     mixed_thetas, mixed_vals)
                                 # dice_loss, G_ts, regular_nl_loss = game.get_dice_loss(trajectory, rewards,
