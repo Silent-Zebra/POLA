@@ -53,7 +53,7 @@ if using_DiCE:
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
-n_agents_list = [2]
+n_agents_list = [3]
 # n_agents_list = [5, 8]
 
 
@@ -545,14 +545,22 @@ class ContributionGame():
 
         if repeat_train_on_same_samples and use_clipping:
 
-            probs_to_clip = (advantages > 0).float()
-            # print(probs_to_clip)
+            # PPO style clipping
 
-            # print(log_p_act_or_p_act_ratio)
+            probs_to_clip = (advantages > 0).float()
 
             log_p_act_or_p_act_ratio = probs_to_clip * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + (1-probs_to_clip) * log_p_act_or_p_act_ratio
 
+        # if repeat_train_on_same_samples and use_clipping:
+        #
+        #     # print(log_p_act_or_p_act_ratio)
+        #
+        #     # full clipping - sometimes in rare cases the not clipping on the negative side leads to way too big a movement and then you have essentially
+        #     # a stuck policy (e.g. too close to 0 or 1 for any hope of future exploration) which is always bad
+        #     log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
+
         # print(log_p_act_or_p_act_ratio)
+
 
 
         # Find the indices/probs where the advantage is negative for each player
@@ -1446,10 +1454,14 @@ for n_agents in n_agents_list:
                                             mixed_thetas, mixed_vals)
                                         for step in range(K):
                                             if step == 0:
+                                                # dice_loss, _, values_loss = game.get_dice_loss(
+                                                #     trajectory,
+                                                #     rewards,
+                                                #     policy_history, val_history)
                                                 dice_loss, _, values_loss = game.get_dice_loss(
                                                     trajectory,
                                                     rewards,
-                                                    policy_history, val_history)
+                                                    policy_history, val_history, old_policy_history=policy_history)
                                             else:
                                                 new_policies, new_vals = game.get_policies_vals_for_states(
                                                     mixed_thetas, mixed_vals, trajectory)
@@ -1604,11 +1616,19 @@ for n_agents in n_agents_list:
 
                                 trajectory, rewards, policy_history, val_history = game.rollout(
                                     mixed_thetas, mixed_vals)
-                                # dice_loss, G_ts, regular_nl_loss = game.get_dice_loss(trajectory, rewards,
-                                #                                policy_history)
-                                dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                    trajectory, rewards,
-                                    policy_history, val_history)
+
+
+                                if repeat_train_on_same_samples:
+                                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                        trajectory, rewards,
+                                        policy_history, val_history,
+                                        old_policy_history=policy_history)
+                                else:
+                                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                        trajectory, rewards,
+                                        policy_history, val_history)
+
+
                                 # NOTE: TODO potentially: G_ts here may not be the best choice
                                 # But it should be close enough to give an idea of what the rewards roughly look like
                                 if isinstance(th[i], torch.Tensor):
