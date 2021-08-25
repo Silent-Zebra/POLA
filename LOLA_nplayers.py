@@ -53,8 +53,8 @@ if using_DiCE:
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
-# n_agents_list = [3]
-n_agents_list = [5, 8]
+n_agents_list = [2]
+# n_agents_list = [5, 8]
 
 
 
@@ -229,7 +229,7 @@ class ContributionGame():
         else:
             assert self.contribution_factor > 1
 
-        self.dec_value_mask = 2 ** torch.arange(n - 1, -1, -1)
+        self.dec_value_mask = (2 ** torch.arange(n - 1, -1, -1)).float()
 
     def get_init_state_batch(self):
         init_state_batch = torch.ones(
@@ -237,7 +237,8 @@ class ContributionGame():
         return init_state_batch
 
     def int_from_bin_inttensor(self, bin_tens):
-        return torch.sum(self.dec_value_mask * bin_tens, -1)
+
+        return torch.sum(self.dec_value_mask * bin_tens, -1).item()
 
     def get_state_batch_indices(self, state_batch, iter):
         if iter == 0:
@@ -262,6 +263,8 @@ class ContributionGame():
             # policy = torch.sigmoid(pol)[indices].reshape(-1, 1)
             #
             # state_value = val[indices].reshape(-1, 1)
+
+            # print(state_batch_indices)
 
             policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
 
