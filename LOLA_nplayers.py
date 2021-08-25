@@ -48,18 +48,14 @@ symmetric_updates = False
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [4] # [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
-# n_agents_list = [2,3,4]
-n_agents_list = [5, 8]
+n_agents_list = [2]
+# n_agents_list = [5, 8]
 
-# n_agents = 3
-# contribution_factor = 1.6
-# contribution_scale = False
-contribution_factor=0.6
-contribution_scale=True
+
 
 
 
@@ -67,15 +63,24 @@ def bin_inttensor_from_int(x, n):
     return torch.Tensor([int(d) for d in (str(bin(x))[2:]).zfill(n)])
     # return [int(d) for d in str(bin(x))[2:]]
 
+# https://stackoverflow.com/questions/55918468/convert-integer-to-pytorch-tensor-of-binary-bits
 def int_from_bin_inttensor(bin_tens):
-    index = 0
-    for i in range(len(bin_tens)):
-        index += 2**i * bin_tens[-i-1]
-    return int(index.item())
+    bits = len(bin_tens)
+    # mask = 2 ** torch.arange(bits - 1, -1, -1).to(bin_tens.device, bin_tens.dtype)
+    mask = 2 ** torch.arange(bits - 1, -1, -1)
 
-# bin_tens = torch.tensor([0,1,0])
-# print(int_from_bin_inttensor(bin_tens))
-# 1/0
+    # print(mask)
+
+    # index = 0
+    # for i in range(len(bin_tens)):
+    #     index += 2**i * bin_tens[-i-1]
+    #
+    # print(int(index.item()))
+    # print(torch.sum(mask * bin_tens, -1))
+    # 1/0
+
+    return torch.sum(mask * bin_tens, -1)
+
 
 def build_bin_matrix(n, size):
     bin_mat = torch.zeros((size, n))
@@ -227,22 +232,33 @@ class ContributionGame():
         return init_state_batch
 
 
-    def get_policy_and_state_value(self, pol, val, state_batch, iter):
+    def get_state_batch_indices(self, state_batch, iter):
+        if iter == 0:
+            # we just started
+            assert state_batch[0][0] - init_state_representation == 0
+            indices = [-1] * self.batch_size
+        else:
+            indices = list(map(int_from_bin_inttensor, state_batch))
+        return indices
+
+    def get_policy_and_state_value(self, pol, val, state_batch, iter, state_batch_indices=None):
         if isinstance(pol, torch.Tensor):
+            assert state_batch_indices is not None
 
-            # if (state - init_state).sum() == 0:
-            #     policy = torch.sigmoid(th[i])[-1]
-            if iter == 0:
-                # we just started
-                assert state_batch[0][0] - init_state_representation == 0
-                indices = [-1] * self.batch_size
+            # if iter == 0:
+            #     assert state_batch[0][0] - init_state_representation == 0
+            #     indices = [-1] * self.batch_size
+            #
+            # else:
+            #     indices = list(map(int_from_bin_inttensor, state_batch))
 
-            else:
-                indices = list(map(int_from_bin_inttensor, state_batch))
+            # policy = torch.sigmoid(pol)[indices].reshape(-1, 1)
+            #
+            # state_value = val[indices].reshape(-1, 1)
 
-            policy = torch.sigmoid(pol)[indices].reshape(-1, 1)
+            policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
 
-            state_value = val[indices].reshape(-1, 1)
+            state_value = val[state_batch_indices].reshape(-1, 1)
 
         else:
             # policy = th[i](state)
@@ -267,10 +283,12 @@ class ContributionGame():
         for iter in range(self.num_iters):
             policies = torch.zeros((self.n_agents, self.batch_size, 1))
             state_values = torch.zeros((self.n_agents, self.batch_size, 1))
+            state_batch_indices = self.get_state_batch_indices(state_batch,
+                                                               iter)
 
             for i in range(self.n_agents):
 
-                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, iter)
+                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, iter, state_batch_indices)
 
                 policies[i] = policy
                 state_values[i] = state_value
@@ -306,8 +324,10 @@ class ContributionGame():
             policies = torch.zeros((self.n_agents, self.batch_size, 1))
             state_values = torch.zeros((self.n_agents, self.batch_size, 1))
 
+            state_batch_indices = self.get_state_batch_indices(state_batch, iter)
             for i in range(self.n_agents):
-                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, iter)
+
+                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, iter, state_batch_indices)
 
                 # policy prob of coop between 0 and 1
                 policies[i] = policy
@@ -1191,6 +1211,14 @@ def update_th(th, gradient_terms_or_Ls, alphas, eta, algos, epoch, using_samples
 # Main loop/code
 
 for n_agents in n_agents_list:
+
+    assert n_agents >= 2
+    if n_agents == 2:
+        contribution_factor = 1.6
+        contribution_scale = False
+    else:
+        contribution_factor = 0.6
+        contribution_scale = True
 
     if using_samples:
         # alphas = [0.005] * n_agents
