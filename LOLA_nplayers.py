@@ -49,12 +49,12 @@ symmetric_updates = False
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [4] # [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
-n_agents_list = [3]
-# n_agents_list = [5, 8]
+# n_agents_list = [3]
+n_agents_list = [5, 8]
 
 
 
