@@ -53,8 +53,8 @@ if using_DiCE:
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
-n_agents_list = [2]
-# n_agents_list = [5, 8]
+# n_agents_list = [2]
+n_agents_list = [5, 8]
 
 
 
