@@ -39,6 +39,7 @@ if using_DiCE:
     assert using_samples
     repeat_train_on_same_samples = True # If true we will instead of rolling out multiple times in the inner loop, just rollout once
     # but then train multiple times on the same data using importance sampling and PPO-style clipping
+    use_clipping = True
     clip_epsilon = 0.2
 # TODO it seems the non-DiCE version with batches isn't really working.
 
@@ -64,23 +65,25 @@ def bin_inttensor_from_int(x, n):
     # return [int(d) for d in str(bin(x))[2:]]
 
 # https://stackoverflow.com/questions/55918468/convert-integer-to-pytorch-tensor-of-binary-bits
-def int_from_bin_inttensor(bin_tens):
-    bits = len(bin_tens)
-    # mask = 2 ** torch.arange(bits - 1, -1, -1).to(bin_tens.device, bin_tens.dtype)
-    mask = 2 ** torch.arange(bits - 1, -1, -1)
-
-    # print(mask)
-
-    # index = 0
-    # for i in range(len(bin_tens)):
-    #     index += 2**i * bin_tens[-i-1]
-    #
-    # print(int(index.item()))
-    # print(torch.sum(mask * bin_tens, -1))
-    # 1/0
-
-    return torch.sum(mask * bin_tens, -1)
-
+# def int_from_bin_inttensor(bin_tens):
+#     bits = len(bin_tens)
+#     # mask = 2 ** torch.arange(bits - 1, -1, -1).to(bin_tens.device, bin_tens.dtype)
+#     mask = 2 ** torch.arange(bits - 1, -1, -1)
+#
+#     # print(mask)
+#
+#     # index = 0
+#     # for i in range(len(bin_tens)):
+#     #     index += 2**i * bin_tens[-i-1]
+#     #
+#     # print(int(index.item()))
+#     # print(torch.sum(mask * bin_tens, -1))
+#     # 1/0
+#
+#     return torch.sum(mask * bin_tens, -1)
+#
+# def int_from_bin_inttensor(dec_values_mask, bin_tens):
+#     return torch.sum(dec_values_mask * bin_tens, -1)
 
 def build_bin_matrix(n, size):
     bin_mat = torch.zeros((size, n))
@@ -226,11 +229,15 @@ class ContributionGame():
         else:
             assert self.contribution_factor > 1
 
+        self.dec_value_mask = 2 ** torch.arange(n - 1, -1, -1)
+
     def get_init_state_batch(self):
         init_state_batch = torch.ones(
             (self.batch_size, self.n_agents)) * init_state_representation
         return init_state_batch
 
+    def int_from_bin_inttensor(self, bin_tens):
+        return torch.sum(self.dec_value_mask * bin_tens, -1)
 
     def get_state_batch_indices(self, state_batch, iter):
         if iter == 0:
@@ -238,10 +245,10 @@ class ContributionGame():
             assert state_batch[0][0] - init_state_representation == 0
             indices = [-1] * self.batch_size
         else:
-            indices = list(map(int_from_bin_inttensor, state_batch))
+            indices = list(map(self.int_from_bin_inttensor, state_batch))
         return indices
 
-    def get_policy_and_state_value(self, pol, val, state_batch, iter, state_batch_indices=None):
+    def get_policy_and_state_value(self, pol, val, state_batch, state_batch_indices=None):
         if isinstance(pol, torch.Tensor):
             assert state_batch_indices is not None
 
@@ -273,12 +280,23 @@ class ContributionGame():
         # (which may be different from the policies and values that were originally
         # used to rollout in the environment)
 
+        # TODO batch this, to be faster and avoid for loops
+        # Look through entire code for for loops
+        # Finally, move everything to GPU? And then test that also.
+
         coop_probs = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
         init_state_batch = self.get_init_state_batch()
         state_batch = init_state_batch
 
         state_vals = torch.zeros(
             (self.num_iters, self.n_agents, self.batch_size, 1))
+
+        # trajectory_indices = self.get_state_batch_indices(state_batch,
+        #                                                        iter)
+        # for i in range(self.n_agents):
+        #     policy, state_value = self.get_policy_and_state_value(th[i], vals[i],
+        #                                                           trajectory,
+        #                                                           trajectory_indices)
 
         for iter in range(self.num_iters):
             policies = torch.zeros((self.n_agents, self.batch_size, 1))
@@ -288,7 +306,7 @@ class ContributionGame():
 
             for i in range(self.n_agents):
 
-                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, iter, state_batch_indices)
+                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, state_batch_indices)
 
                 policies[i] = policy
                 state_values[i] = state_value
@@ -319,6 +337,7 @@ class ContributionGame():
         policy_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
         val_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
 
+        # This loop can't be skipped due to sequential nature of environment
         for iter in range(self.num_iters):
 
             policies = torch.zeros((self.n_agents, self.batch_size, 1))
@@ -326,8 +345,9 @@ class ContributionGame():
 
             state_batch_indices = self.get_state_batch_indices(state_batch, iter)
             for i in range(self.n_agents):
+                # This loop can't be skipped unless we assume all of the thetas follow the same structure (e.g. tensor)
 
-                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, iter, state_batch_indices)
+                policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, state_batch_indices)
 
                 # policy prob of coop between 0 and 1
                 policies[i] = policy
@@ -523,7 +543,7 @@ class ContributionGame():
         # and do a step by step modification/comparison and test of all different things to see what the issue is
 
 
-        if repeat_train_on_same_samples:
+        if repeat_train_on_same_samples and use_clipping:
 
             probs_to_clip = (advantages > 0).float()
             # print(probs_to_clip)
@@ -559,7 +579,7 @@ class ContributionGame():
 
         # Two equivalent formulations - well they should be but somehow the G_t one is wrong
         dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
-        dice_rewards2 = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * G_ts).sum(dim=0).mean(dim=1)
+        # dice_rewards2 = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * G_ts).sum(dim=0).mean(dim=1)
 
 
         # dice_objective_w_baseline = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * advantages).sum(dim=0).mean(dim=1)
@@ -612,7 +632,9 @@ class ContributionGame():
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
 
         # return dice_loss, G_ts, regular_nl_loss
-        return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
+        return dice_loss, G_ts, values_loss
+
+        # return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
 
 
 
@@ -677,7 +699,7 @@ def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
                         policy = torch.sigmoid(th[i])[-1]
                     else:
 
-                        policy = torch.sigmoid(th[i])[int_from_bin_inttensor(state)]
+                        policy = torch.sigmoid(th[i])[game.int_from_bin_inttensor(state)]
                 else:
                     policy = th[i](state)
                 # policy prob of coop between 0 and 1
@@ -1424,7 +1446,7 @@ for n_agents in n_agents_list:
                                             mixed_thetas, mixed_vals)
                                         for step in range(K):
                                             if step == 0:
-                                                dice_loss, _, values_loss, r1, r2 = game.get_dice_loss(
+                                                dice_loss, _, values_loss = game.get_dice_loss(
                                                     trajectory,
                                                     rewards,
                                                     policy_history, val_history)
@@ -1433,7 +1455,7 @@ for n_agents in n_agents_list:
                                                     mixed_thetas, mixed_vals, trajectory)
                                                 # Using the new policies and vals now
                                                 # Always be careful not to overwrite/reuse names of existing variables
-                                                dice_loss, _, values_loss, r1, r2 = game.get_dice_loss(
+                                                dice_loss, _, values_loss = game.get_dice_loss(
                                                     trajectory, rewards, new_policies, new_vals, old_policy_history=policy_history)
 
                                             grads = [None] * n_agents
@@ -1475,7 +1497,7 @@ for n_agents in n_agents_list:
                                         # ok to use th[i] here because it hasn't been updated yet
                                             trajectory, rewards, policy_history, val_history = game.rollout(
                                                 mixed_thetas, mixed_vals)
-                                            dice_loss, _, values_loss, r1,r2 = game.get_dice_loss(
+                                            dice_loss, _, values_loss = game.get_dice_loss(
                                                 trajectory,
                                                 rewards,
                                                 policy_history, val_history)
@@ -1584,7 +1606,7 @@ for n_agents in n_agents_list:
                                     mixed_thetas, mixed_vals)
                                 # dice_loss, G_ts, regular_nl_loss = game.get_dice_loss(trajectory, rewards,
                                 #                                policy_history)
-                                dice_loss, G_ts, values_loss, r1,r2 = game.get_dice_loss(
+                                dice_loss, G_ts, values_loss = game.get_dice_loss(
                                     trajectory, rewards,
                                     policy_history, val_history)
                                 # NOTE: TODO potentially: G_ts here may not be the best choice
