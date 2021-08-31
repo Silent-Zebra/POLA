@@ -37,7 +37,7 @@ using_samples = True # True for samples, false for exact gradient (using matrix 
 using_DiCE = True
 if using_DiCE:
     assert using_samples
-    repeat_train_on_same_samples = True # If true we will instead of rolling out multiple times in the inner loop, just rollout once
+    repeat_train_on_same_samples = False # If true we will instead of rolling out multiple times in the inner loop, just rollout once
     # but then train multiple times on the same data using importance sampling and PPO-style clipping
     use_clipping = True
     clip_epsilon = 0.2
@@ -49,12 +49,12 @@ symmetric_updates = False
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [5]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on alphas, e.g. alpha serves as a base that you can modify from
 
-# n_agents_list = [2]
-n_agents_list = [5, 8]
+n_agents_list = [2]
+# n_agents_list = [5, 8]
 
 
 
@@ -388,18 +388,17 @@ class ContributionGame():
         discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
                                   dim=0) / self.gamma
 
-        # G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
-        G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1, 1, 1), dim=0)
-        # G_ts gives you the inner sum of discounted rewards
-
         # Discounted rewards, not sum of rewards which G_t is
         gamma_t_r_ts = rewards * discounts.reshape(-1, 1, 1,
                                                    1)  # implicit broadcasting done by numpy
 
+        G_ts = reverse_cumsum(gamma_t_r_ts, dim=0)
+        # G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1, 1, 1), dim=0)
+        # G_ts gives you the inner sum of discounted rewards
+
 
         p_act_given_state = trajectory.float() * policy_history + (
                 1 - trajectory.float()) * (1 - policy_history)
-
 
 
         if old_policy_history is None:
@@ -538,7 +537,18 @@ class ContributionGame():
 
         discounted_vals = val_history * discounts.view(-1, 1, 1, 1)
 
+        # R_t is like G_t except not discounted back to the start. It is the forward
+        # looking return at that point in time
+        R_ts = G_ts / discounts.reshape(-1, 1, 1, 1)
+
+        # print(R_ts[1])
+        # print(G_ts[1])
+
         advantages = G_ts - discounted_vals
+        # print("0")
+        # print(advantages[0])
+        # print("-1")
+        # print(advantages[-1])
 
         # TODO Aug 24 - make sure the basic version without the clipping stuff or the inner loops is working properly
         # Something isn't right... figure out why the basic version is not working, compare vs older versions
@@ -583,30 +593,43 @@ class ContributionGame():
         # a=torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts
         #
         # b = sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1) * G_ts
+        #
         # a = a.sum(dim=0).mean(dim=1)
         # b = b.sum(dim=0).mean(dim=1)
         #
+        # print(a)
+        # print(b)
+        #
         # print(a-b)
 
-        # Two equivalent formulations - well they should be but somehow the G_t one is wrong
-        dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
-        # dice_rewards2 = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * G_ts).sum(dim=0).mean(dim=1)
+        deps_up_to_t = (torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1)
 
+        deps_less_than_t = deps_up_to_t - sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1) # take out the dependency in the given time step
+
+        # Two equivalent formulations - well they should be but somehow the G_t one is wrong.
+        # dice_rewards2 is wrong because while the first order gradients match, the higher order ones don't.
+        # Look at how the magic box operator works and think about why what was equivalent
+        # formulations in the regular policy gradient case is no longer equivalent with the magic box on it
+        dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
+        dice_rewards2 = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * G_ts).sum(dim=0).mean(dim=1)
+        loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * R_ts).sum(dim=0).mean(dim=1)
+
+
+        # print(dice_rewards)
+        # print(dice_rewards2)
+        # dice_rewards = dice_rewards2
 
         # dice_objective_w_baseline = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * advantages).sum(dim=0).mean(dim=1)
 
-
+        # Each state has a baseline. For each state, the sum of nodes w are all of the log probs
+        # So why is the G_t reward formulation wrong? How is that different from the baseline formulation?
         baseline_term = ((1 - magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1))) * discounted_vals).sum(dim=0).mean(dim=1)
 
-        dice_objective_w_baseline = dice_rewards + baseline_term
-
-
+        # dice_objective_w_baseline = dice_rewards + baseline_term
+        dice_objective_w_baseline = loaded_dice_rewards + baseline_term
 
         dice_loss = -dice_objective_w_baseline
-        # print(dice_loss)
-
-        # print(G_ts.shape)
-        # print(val_history.shape)
+        # dice_loss = -loaded_dice_rewards
 
         values_loss = ((G_ts - discounted_vals) ** 2).sum(dim=0).mean(dim=1)
 
@@ -643,9 +666,9 @@ class ContributionGame():
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
 
         # return dice_loss, G_ts, regular_nl_loss
-        return dice_loss, G_ts, values_loss
+        # return dice_loss, G_ts, values_loss
 
-        # return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
+        return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
 
 
 
@@ -1332,7 +1355,7 @@ for n_agents in n_agents_list:
 
             if using_DiCE:
                 # inner_steps = [2,2]
-                inner_steps = [5] * n_agents
+                inner_steps = [2] * n_agents
             else:
                 # algos = ['nl', 'lola']
                 # algos = ['lola', 'nl']
@@ -1461,7 +1484,7 @@ for n_agents in n_agents_list:
                                                 #     trajectory,
                                                 #     rewards,
                                                 #     policy_history, val_history)
-                                                dice_loss, _, values_loss = game.get_dice_loss(
+                                                dice_loss, _, values_loss, r1,r2 = game.get_dice_loss(
                                                     trajectory,
                                                     rewards,
                                                     policy_history, val_history, old_policy_history=policy_history)
@@ -1470,7 +1493,7 @@ for n_agents in n_agents_list:
                                                     mixed_thetas, mixed_vals, trajectory)
                                                 # Using the new policies and vals now
                                                 # Always be careful not to overwrite/reuse names of existing variables
-                                                dice_loss, _, values_loss = game.get_dice_loss(
+                                                dice_loss, _, values_loss,r1,r2 = game.get_dice_loss(
                                                     trajectory, rewards, new_policies, new_vals, old_policy_history=policy_history)
 
                                             grads = [None] * n_agents
@@ -1512,7 +1535,7 @@ for n_agents in n_agents_list:
                                         # ok to use th[i] here because it hasn't been updated yet
                                             trajectory, rewards, policy_history, val_history = game.rollout(
                                                 mixed_thetas, mixed_vals)
-                                            dice_loss, _, values_loss = game.get_dice_loss(
+                                            dice_loss, _, values_loss,r1,r2 = game.get_dice_loss(
                                                 trajectory,
                                                 rewards,
                                                 policy_history, val_history)
@@ -1537,8 +1560,18 @@ for n_agents in n_agents_list:
                                                           # b = get_gradient(
                                                           #     r2[j],
                                                           #     mixed_thetas[j])
-                                                          # print(b-a)
-                                                          # grads[j] += b-a
+                                                          # c = get_gradient(
+                                                          #     a[0],
+                                                          #     mixed_thetas[i])
+                                                          # d = get_gradient(
+                                                          #     b[0],
+                                                          #     mixed_thetas[i])
+                                                          # # print(b-a)
+                                                          # print(d-c)
+                                                          # grads[j] += (b-a) # a + b-a = b
+                                                          # grads[j] += (b-a).detach() # This works ok
+                                                          # # grads[j] += a-b # b + a-b = a
+
                                                           # accum_diffs[j] += (
                                                           #             b-a)
                                                           # print(accum_diffs)
@@ -1622,12 +1655,12 @@ for n_agents in n_agents_list:
 
 
                                 if repeat_train_on_same_samples:
-                                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                    dice_loss, G_ts, values_loss,_,_ = game.get_dice_loss(
                                         trajectory, rewards,
                                         policy_history, val_history,
                                         old_policy_history=policy_history)
                                 else:
-                                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                    dice_loss, G_ts, values_loss,_,_ = game.get_dice_loss(
                                         trajectory, rewards,
                                         policy_history, val_history)
 
