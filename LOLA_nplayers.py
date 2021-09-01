@@ -49,11 +49,11 @@ symmetric_updates = False # Not done for now
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [5]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [10]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on lr_policies, e.g. alpha serves as a base that you can modify from
 
-n_agents_list = [2]
+n_agents_list = [3]
 # n_agents_list = [5, 8]
 
 
@@ -1352,12 +1352,12 @@ for n_agents in n_agents_list:
         # lr_policies = [0.005] * n_agents
 
         lr_policies = torch.tensor([0.05] * n_agents)
-        lr_policies = torch.tensor([0.2] * n_agents)
+        # lr_policies = torch.tensor([0.1] * n_agents)
     else:
         lr_policies = torch.tensor(lr_policies = [0.1] * n_agents)
 
-    # lr_values = lr_policies * 0.5
-    lr_values = lr_policies * 0.2
+    lr_values = lr_policies * 0.5
+    # lr_values = lr_policies * 0.2
 
     if not contribution_scale:
         # inf = infinite horizon
