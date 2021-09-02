@@ -24,9 +24,9 @@ repeats = 1
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
-num_epochs = 10001
+num_epochs = 20001
 print_every = max(1, num_epochs / 50)
-print_every = 10
+print_every = 200
 batch_size = 64
 # Bigger batch is a big part of convergence with DiCE. Too small batch (e.g. 1 or 4) frequently results in issues.
 
@@ -37,7 +37,7 @@ using_samples = True # True for samples, false for exact gradient (using matrix 
 using_DiCE = True
 if using_DiCE:
     assert using_samples
-    repeat_train_on_same_samples = False # If true we will instead of rolling out multiple times in the inner loop, just rollout once
+    repeat_train_on_same_samples = True # If true we will instead of rolling out multiple times in the inner loop, just rollout once
     # but then train multiple times on the same data using importance sampling and PPO-style clipping
     use_clipping = True
     clip_epsilon = 0.2
@@ -49,11 +49,11 @@ symmetric_updates = False # Not done for now
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if using_DiCE:
-    etas = [10]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [10, 15, 20]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on lr_policies, e.g. alpha serves as a base that you can modify from
 
-n_agents_list = [3]
+n_agents_list = [5]
 # n_agents_list = [5, 8]
 
 
@@ -1354,7 +1354,7 @@ for n_agents in n_agents_list:
         lr_policies = torch.tensor([0.05] * n_agents)
         # lr_policies = torch.tensor([0.1] * n_agents)
     else:
-        lr_policies = torch.tensor(lr_policies = [0.1] * n_agents)
+        lr_policies = torch.tensor([0.1] * n_agents)
 
     lr_values = lr_policies * 0.5
     # lr_values = lr_policies * 0.2
@@ -1832,6 +1832,11 @@ for n_agents in n_agents_list:
                     # print(lola_terms_running_total)
                     # print("NL Terms: ")
                     # print(nl_terms_running_total)
+                    if not using_samples:
+                        print("Discounted Rewards (Objective): {}".format(losses))
+                        print(
+                            "Max Avg Coop Payout (Infinite Horizon): {:.3f}".format(
+                                inf_coop_payout))
 
 
                     # Print policies here
