@@ -1298,13 +1298,13 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, epoch, using_sa
 # Main loop/code
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
-    parser.add_argument("--using_samples", type=bool, default=True,
+    parser.add_argument("--using_samples", action="store_true",
                         help="True for samples (with rollout_len), false for exact gradient (using matrix inverse for infinite length rollout)")
-    parser.add_argument("--using_DiCE", type=bool, default=True,
+    parser.add_argument("--using_DiCE", action="store_true",
                         help="True for LOLA-DiCE, false for LOLA-PG. Must have using_samples = True.")
-    parser.add_argument("--repeat_train_on_same_samples", type=bool, default=True,
+    parser.add_argument("--repeat_train_on_same_samples", action="store_true",
                         help="True for PPO style formulation where we repeat train on the same samples (only one inner step rollout, multiple inner step updates with importance weighting)")
-    parser.add_argument("--use_clipping", type=bool, default=True,
+    parser.add_argument("--use_clipping", action="store_true",
                         help="Do the PPO style clipping")
     parser.add_argument("--clip_epsilon", type=float, default=0.2, help="PPO style clip hyperparameter")
     parser.add_argument("--gamma", type=float, default=0.96, help="discount rate")
