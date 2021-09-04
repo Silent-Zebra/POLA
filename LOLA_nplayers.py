@@ -1308,7 +1308,7 @@ if __name__ == "__main__":
                         help="Do the PPO style clipping")
     parser.add_argument("--clip_epsilon", type=float, default=0.2, help="PPO style clip hyperparameter")
     parser.add_argument("--gamma", type=float, default=0.96, help="discount rate")
-    parser.add_argument("--print_every", type=int, default=10, help="Print every x number of epochs")
+    parser.add_argument("--print_every", type=int, default=200, help="Print every x number of epochs")
     parser.add_argument("--num_epochs", type=int, default=50001, help="number of epochs to run")
     parser.add_argument("--repeats", type=int, default=1, help="repeats per setting configuration")
     parser.add_argument("--n_agents_list", nargs="+", type=int, default=[5],
