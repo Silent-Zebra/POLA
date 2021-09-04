@@ -13,7 +13,6 @@ import copy
 
 import argparse
 
-
 init_state_representation = 2  # Change here if you want different number to represent the initial state
 rollout_len = 50
 
@@ -1387,8 +1386,6 @@ if __name__ == "__main__":
         if using_DiCE:
             etas = args.etas  # [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
-        # TODO consider making etas scale based on lr_policies, e.g. alpha serves as a base that you can modify from
-
         if not contribution_scale:
             # inf = infinite horizon
             inf_coop_payout = 1 / (1 - gamma) * (contribution_factor - 1)
@@ -1421,6 +1418,27 @@ if __name__ == "__main__":
 
 
         for eta in etas:
+
+            print("Number of agents: {}".format(n_agents))
+            print("Contribution factor: {}".format(contribution_factor))
+            print("Scaled contribution factor? {}".format(contribution_scale))
+            print("Eta: {}".format(eta))
+            # print(reward_percent_of_max)
+            # Average over all runs
+            if not using_samples:
+                print("Exact Gradients")
+            else:
+                if using_DiCE:
+                    if symmetric_updates:
+                        print("Symmetric DiCE Updates")
+                    else:
+                        print("Asymmetric DiCE Updates")
+                    if repeat_train_on_same_samples:
+                        print("Using Repeat Train on Same Samples")
+                    else:
+                        print("Using regular DiCE formulation")
+                else:
+                    print("Policy Gradient Updates")
 
             reward_percent_of_max = []
 
@@ -1902,17 +1920,7 @@ if __name__ == "__main__":
 
                     # plt.show()
 
-            print("Number of agents: {}".format(n_agents))
-            print("Contribution factor: {}".format(contribution_factor))
-            print("Scaled contribution factor? {}".format(contribution_scale))
-            print("Eta: {}".format(eta))
-            # print(reward_percent_of_max)
-            # Average over all runs
-            if using_DiCE:
-                if symmetric_updates:
-                    print("Symmetric Updates")
-                else:
-                    print("Asymmetric Updates")
+
             print("Average reward as % of max: {:.1%}".format(
                 sum(reward_percent_of_max) / repeats))
 
