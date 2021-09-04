@@ -1492,7 +1492,11 @@ if __name__ == "__main__":
 
 
                 # Run
-                G_ts_record = torch.zeros((num_epochs, n_agents, batch_size, 1))
+                if using_samples:
+                    G_ts_record = torch.zeros((num_epochs, n_agents, batch_size, 1))
+                else:
+                    G_ts_record = torch.zeros(
+                        (num_epochs, n_agents))
                 lola_terms_running_total = []
                 nl_terms_running_total = []
 
@@ -1843,9 +1847,11 @@ if __name__ == "__main__":
                             update_th(th, Ls, lr_policies, eta, algos, using_samples=using_samples, epoch=epoch)
 
 
-
-                    if G_ts is not None:
+                    if using_samples:
+                        assert G_ts is not None
                         G_ts_record[epoch] = G_ts[0]
+                    else:
+                        G_ts_record[epoch] = torch.stack(losses).detach()
 
                     # This is just to get an idea of the relative influence of the lola vs nl terms
                     # if lola_terms_running_total == []:
@@ -1913,10 +1919,16 @@ if __name__ == "__main__":
                 if plot_results:
                     now = datetime.datetime.now()
                     # print(now.strftime('%Y-%m-%d_%H-%M'))
-                    avg_gts_to_plot = (G_ts_record + discounted_sum_of_adjustments).mean(dim=2).view(num_epochs, n_agents)
+                    if using_samples:
+                        avg_gts_to_plot = (G_ts_record + discounted_sum_of_adjustments).mean(dim=2).view(num_epochs, n_agents)
+                    else:
+                        avg_gts_to_plot = G_ts_record
                     # print(avg_gts_to_plot)
                     plt.plot(avg_gts_to_plot)
-                    plt.savefig("{}agents_{}eta_run{}_steps{}_date{}".format(n_agents, eta, run, "_".join(list(map(str, inner_steps))), now.strftime('%Y-%m-%d_%H-%M')))
+                    if using_samples:
+                        plt.savefig("{}agents_{}eta_run{}_steps{}_date{}.png".format(n_agents, eta, run, "_".join(list(map(str, inner_steps))), now.strftime('%Y-%m-%d_%H-%M')))
+                    else:
+                        plt.savefig("{}agents_{:.0f}eta_run{}_exact_date{}.png".format(n_agents, eta / args.lr_policies, run, now.strftime('%Y-%m-%d_%H-%M')))
 
                     # plt.show()
 
