@@ -24,7 +24,7 @@ repeats = 1
 # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
 # For each repeat/run:
-num_epochs = 20001
+num_epochs = 50001
 print_every = max(1, num_epochs / 50)
 print_every = 200
 batch_size = 64
@@ -49,14 +49,14 @@ symmetric_updates = False # Not done for now
 # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
 etas = [0.01 * 5] # wait actually this doesn't seem to work well at all... no consistency in results without dice... is it because we missing 1 term? this is batch size 1
 if not using_samples:
-    etas = [0.05 * 10]
+    etas = [0.05 * 20, 0.05 * 12]
 
 if using_DiCE:
-    etas = [10, 15, 20]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
+    etas = [20, 12]#[8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
 
 # TODO consider making etas scale based on lr_policies, e.g. alpha serves as a base that you can modify from
 
-n_agents_list = [5]
+n_agents_list = [6]
 # n_agents_list = [5, 8]
 
 
