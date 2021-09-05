@@ -626,8 +626,8 @@ class ContributionGame():
         # dice_rewards2 is wrong because while the first order gradients match, the higher order ones don't.
         # Look at how the magic box operator works and think about why what was equivalent
         # formulations in the regular policy gradient case is no longer equivalent with the magic box on it
-        dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
-        dice_rewards2 = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * G_ts).sum(dim=0).mean(dim=1)
+        # dice_rewards = (magic_box(torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts).sum(dim=0).mean(dim=1)
+        # dice_rewards2 = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * G_ts).sum(dim=0).mean(dim=1)
         # loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * discounts * R_ts).sum(dim=0).mean(dim=1)
         # loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * G_ts).sum(dim=0).mean(dim=1)
 
@@ -696,9 +696,9 @@ class ContributionGame():
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
 
         # return dice_loss, G_ts, regular_nl_loss
-        # return dice_loss, G_ts, values_loss
+        return dice_loss, G_ts, values_loss
 
-        return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
+        # return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
 
 
 
@@ -1076,9 +1076,12 @@ def print_policy_info(policy, i, G_ts, discounted_sum_of_adjustments, truncated_
 
     if i == 0:
 
-        print(
-            "Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
+        print("Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
         # print(G_ts[0] + discounted_sum_of_adjustments)
+
+        # print("G_ts")
+        # print(G_ts[0])
+        # print(G_ts[0].shape)
 
         print(G_ts[0].mean(dim=1).reshape(-1) + discounted_sum_of_adjustments)
         print("Max Avg Coop Payout (Truncated Horizon): {:.3f}".format(truncated_coop_payout))
@@ -1360,6 +1363,8 @@ if __name__ == "__main__":
 
 
 
+
+
     n_agents_list = args.n_agents_list
     # n_agents_list = [5, 8]
 
@@ -1373,6 +1378,10 @@ if __name__ == "__main__":
         else:
             contribution_factor = 0.6
             contribution_scale = True
+
+        if batch_size == n_agents or batch_size == rollout_len or rollout_len == n_agents:
+            raise Exception("Having two of batch size, rollout len, or n_agents equal will cause insidious bugs when reshaping dimensions")
+            # TODO refactor/think about a way to avoid these bugs
 
         lr_policies = torch.tensor([args.lr_policies] * n_agents)
 
@@ -1618,7 +1627,7 @@ if __name__ == "__main__":
                                                     #     trajectory,
                                                     #     rewards,
                                                     #     policy_history, val_history)
-                                                    dice_loss, _, values_loss, r1,r2 = game.get_dice_loss(
+                                                    dice_loss, _, values_loss = game.get_dice_loss(
                                                         trajectory,
                                                         rewards,
                                                         policy_history, val_history, next_val_history, old_policy_history=policy_history)
@@ -1627,10 +1636,16 @@ if __name__ == "__main__":
                                                         mixed_thetas, mixed_vals, trajectory)
                                                     # Using the new policies and vals now
                                                     # Always be careful not to overwrite/reuse names of existing variables
-                                                    dice_loss, _, values_loss,r1,r2 = game.get_dice_loss(
+                                                    dice_loss, _, values_loss = game.get_dice_loss(
                                                         trajectory, rewards, new_policies, new_vals, next_new_vals, old_policy_history=policy_history)
 
                                                 grads = [None] * n_agents
+
+                                                # Note only policy update, no value update here
+                                                # because we are updating off policy
+                                                # We need to keep the advantage consistent with the policy that
+                                                # collected the data we are training on
+                                                # So no value update in between policy updates on the same data
                                                 for j in range(n_agents):
                                                     if j != i:
 
@@ -1669,7 +1684,7 @@ if __name__ == "__main__":
                                             # ok to use th[i] here because it hasn't been updated yet
                                                 trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
                                                     mixed_thetas, mixed_vals)
-                                                dice_loss, _, values_loss,r1,r2 = game.get_dice_loss(
+                                                dice_loss, _, values_loss = game.get_dice_loss(
                                                     trajectory,
                                                     rewards,
                                                     policy_history, val_history, next_val_history)
@@ -1677,6 +1692,8 @@ if __name__ == "__main__":
 
 
                                                 grads = [None] * n_agents
+                                                # grad_vals = [None] * n_agents # For stability don't do this
+
                                                 for j in range(n_agents):
                                                     if j != i:
                                                           # updated_vals = optim_update(optims_primes[j],
@@ -1687,28 +1704,9 @@ if __name__ == "__main__":
                                                           if isinstance(mixed_thetas[j], torch.Tensor):
                                                               grad = get_gradient(dice_loss[j], mixed_thetas[j])
                                                               grads[j] = grad
-
-                                                              # a = get_gradient(
-                                                              #     r1[j],
-                                                              #     mixed_thetas[j])
-                                                              # b = get_gradient(
-                                                              #     r2[j],
-                                                              #     mixed_thetas[j])
-                                                              # c = get_gradient(
-                                                              #     a[0],
-                                                              #     mixed_thetas[i])
-                                                              # d = get_gradient(
-                                                              #     b[0],
-                                                              #     mixed_thetas[i])
-                                                              # # print(b-a)
-                                                              # print(d-c)
-                                                              # grads[j] += (b-a) # a + b-a = b
-                                                              # grads[j] += (b-a).detach() # This works ok
-                                                              # # grads[j] += a-b # b + a-b = a
-
-                                                              # accum_diffs[j] += (
-                                                              #             b-a)
-                                                              # print(accum_diffs)
+                                                              # grad_val = get_gradient(values_loss[i],
+                                                              #     vals[i])
+                                                              # grad_vals[j] = grad_val
 
 
                                                           else:
@@ -1750,6 +1748,7 @@ if __name__ == "__main__":
                                                             # You cannot use torch.no_grad on this step
                                                             # with torch.no_grad():
                                                             #     mixed_thetas[j] += lr_policies[j] * grad
+                                                            # mixed_vals[j] = mixed_vals[j] - lr_values[j] * eta * grad_vals[j]
                                                         else:
                                                             1/0
 
@@ -1780,24 +1779,31 @@ if __name__ == "__main__":
                                     # mixed_optims = optims_primes
                                     # mixed_optims[i] = optims[i]
 
-                                    if repeat_train_on_same_samples:
-                                        mixed_thetas[i] = th[i]
-                                        mixed_vals[i] = vals[i]
+                                    # This does nothing.
+                                    # if repeat_train_on_same_samples:
+                                    #     mixed_thetas[i] = th[i]
+                                    #     mixed_vals[i] = vals[i]
 
                                     trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
                                         mixed_thetas, mixed_vals)
 
 
                                     if repeat_train_on_same_samples:
-                                        dice_loss, G_ts, values_loss,_,_ = game.get_dice_loss(
+                                        dice_loss, G_ts, values_loss = game.get_dice_loss(
                                             trajectory, rewards,
                                             policy_history, val_history, next_val_history,
                                             old_policy_history=policy_history)
                                     else:
-                                        dice_loss, G_ts, values_loss,_,_ = game.get_dice_loss(
+                                        dice_loss, G_ts, values_loss = game.get_dice_loss(
                                             trajectory, rewards,
                                             policy_history, val_history, next_val_history)
 
+                                        # print("traj")
+                                        # print(trajectory)
+                                        # print("rew")
+                                        # print(rewards)
+                                        # print("pol hist")
+                                        # print(policy_history)
 
                                     # NOTE: TODO potentially: G_ts here may not be the best choice
                                     # But it should be close enough to give an idea of what the rewards roughly look like
@@ -1805,13 +1811,6 @@ if __name__ == "__main__":
                                         grad = get_gradient(dice_loss[i], th[i])
                                         grad_val = get_gradient(values_loss[i], vals[i])
 
-                                        # a = get_gradient(r1[i], th[i])
-                                        # b = get_gradient(r2[i], th[i])
-                                        # print(a)
-                                        # print(b)
-                                        # print(b-a)
-                                        # accum_diffs[i] += (b-a)
-                                        # print(accum_diffs)
 
                                         with torch.no_grad():
                                             th[i] -= lr_policies[i] * grad
