@@ -428,7 +428,7 @@ class ContributionGame():
                     1 - trajectory.float()) * (1 - old_policy_history)
 
             p_act_ratio = p_act_given_state / p_act_given_state_old.detach()
-            # TODO is this detach necessary?
+            # TODO is this detach necessary? Pretty sure it is.
 
 
             return G_ts, gamma_t_r_ts, p_act_ratio, discounts
@@ -632,7 +632,6 @@ class ContributionGame():
         # loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * G_ts).sum(dim=0).mean(dim=1)
 
         loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * discounts * advantages).sum(dim=0).mean(dim=1)
-
 
         # print(dice_rewards)
         # print(dice_rewards2)
@@ -1323,6 +1322,7 @@ if __name__ == "__main__":
                         help="same learning rate across all policies for now")
     parser.add_argument("--lr_values_scale", type=float, default=0.5,
                         help="scale lr_values relative to lr_policies")
+    parser.add_argument("--inner_steps", type=int, default=2)
 
     args = parser.parse_args()
 
@@ -1417,9 +1417,7 @@ if __name__ == "__main__":
 
         adjustment_to_make_rewards_negative = 0
         # adjustment_to_make_rewards_negative = max_single_step_return
-        # With adjustment and 20k steps seems LOLA vs NL does learn a TFT like strategy
-        # But the problem is NL hasn't learned to coop at the start
-        # which results in DD behaviour throughout.
+
 
         discounted_sum_of_adjustments = 1 / (
                     1 - gamma) * adjustment_to_make_rewards_negative * \
@@ -1492,8 +1490,7 @@ if __name__ == "__main__":
 
 
                 if using_DiCE:
-                    # inner_steps = [2,2]
-                    inner_steps = [2] * n_agents
+                    inner_steps = [args.inner_steps] * n_agents
                 else:
                     # algos = ['nl', 'lola']
                     # algos = ['lola', 'nl']
