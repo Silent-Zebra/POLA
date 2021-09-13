@@ -223,7 +223,9 @@ class ContributionGame():
 
             policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
         else:
+            # print(state_batch)
             policy = pol(state_batch)
+
 
         if isinstance(val, torch.Tensor):
 
@@ -335,7 +337,7 @@ class ContributionGame():
             coop_probs[iter] = policies
             state_vals[iter] = state_values
 
-            state_batch = trajectory[iter] # get the next state batch from the trajectory
+            state_batch = trajectory[iter].float() # get the next state batch from the trajectory
             state_batch = state_batch.reshape(self.n_agents, self.batch_size)
             state_batch = state_batch.t()
         next_val_history = self.get_next_val_history(th, vals, state_vals, state_batch,
@@ -1633,7 +1635,6 @@ if __name__ == "__main__":
                                     mixed_thetas[i] = th[i]
                                     mixed_vals[i] = vals[i]
 
-
                                 # print(mixed_thetas)
                                 if eta != 0:
 
@@ -1642,21 +1643,9 @@ if __name__ == "__main__":
                                             mixed_thetas, mixed_vals)
                                         for step in range(K):
                                             if step == 0:
-                                                # dice_loss, _, values_loss = game.get_dice_loss(
-                                                #     trajectory,
-                                                #     rewards,
-                                                #     policy_history, val_history)
-                                                dice_loss, _, values_loss = game.get_dice_loss(
-                                                    trajectory,
-                                                    rewards,
+                                                dice_loss, _, values_loss = game.get_dice_loss(trajectory, rewards,
                                                     policy_history, val_history, next_val_history, old_policy_history=policy_history)
 
-                                                # dice_loss2, _, values_loss2 = game.get_dice_loss(
-                                                #     trajectory,
-                                                #     rewards,
-                                                #     policy_history,
-                                                #     val_history,
-                                                #     next_val_history)
                                             else:
                                                 new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
                                                     mixed_thetas, mixed_vals, trajectory)
@@ -1674,30 +1663,54 @@ if __name__ == "__main__":
                                             # So no value update in between policy updates on the same data
                                             for j in range(n_agents):
                                                 if j != i:
+                                                    if isinstance(mixed_thetas[j], torch.Tensor):
+                                                        # Higher with diffopt on the tensor can work too
+                                                        # I think what needs to be done is a simpler formulation
+                                                        # Where you just construct the diffopt, no fmodel stuff on the tensor
+                                                        # and then directly use that diffopt. I had it working before
 
-                                                    if isinstance(mixed_thetas[j],
-                                                                  torch.Tensor):
+                                                        # print(mixed_thetas[j])
+
                                                         grad = get_gradient(
                                                             dice_loss[j],
                                                             mixed_thetas[j])
-                                                        grads[j] = grad
+                                                        mixed_thetas[j] = mixed_thetas[j] - lr_policies[j] * eta * grad  # This step is critical to allow the gradient to flow through
+                                                        # You cannot use torch.no_grad on this step
+
+                                                        # print(mixed_thetas[j])
 
                                                     else:
-                                                        1/0
-                                            for j in range(n_agents):
-                                                # Need a separate loop to deal with issue where you can't update differentiably first in p2 otherwise p3 will see that and diff through that
-                                                if j != i:
-                                                    if isinstance(mixed_thetas[j],
-                                                                  torch.Tensor):
 
-                                                        mixed_thetas[j] = \
-                                                        mixed_thetas[j] - \
-                                                        lr_policies[
-                                                            j] * eta * grads[
-                                                            j]  # This step is critical to allow the gradient to flow through
-                                                    else:
-                                                        1 / 0
-                                            # TODO this is unclipped, try clipped afterwards
+                                                        optim_update(optims_th_primes[j],
+                                                            dice_loss[j], mixed_thetas[j].parameters())
+
+                                            # for j in range(n_agents):
+                                            #     if j != i:
+                                            #
+                                            #         if isinstance(mixed_thetas[j],
+                                            #                       torch.Tensor):
+                                            #             grad = get_gradient(
+                                            #                 dice_loss[j],
+                                            #                 mixed_thetas[j])
+                                            #             grads[j] = grad
+                                            #
+                                            #         else:
+                                            #             1/0
+                                            # for j in range(n_agents):
+                                            #     # Need a separate loop to deal with issue where you can't update differentiably first in p2 otherwise p3 will see that and diff through that
+                                            #     if j != i:
+                                            #         if isinstance(mixed_thetas[j],
+                                            #                       torch.Tensor):
+                                            #
+                                            #             mixed_thetas[j] = \
+                                            #             mixed_thetas[j] - \
+                                            #             lr_policies[
+                                            #                 j] * eta * grads[
+                                            #                 j]  # This step is critical to allow the gradient to flow through
+                                            #         else:
+                                            #             1 / 0
+                                            # # TODO this is unclipped, try clipped afterwards
+
                                             # Also TODO Aug 23 is do an outer loop with number of steps also
 
 
