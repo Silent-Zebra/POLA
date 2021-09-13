@@ -68,11 +68,19 @@ def copyNN(copy_to_net, copy_from_net):
     # Copy from curr to target
     copy_to_net.load_state_dict(copy_from_net.state_dict())
 
-def optim_update(diffopt, loss, params):
-    return diffopt.step(loss, params)
-    # optim.zero_grad()
-    # loss.backward(retain_graph=True)
-    # optim.step()
+def optim_update(optim, loss, params=None):
+    if params is not None:
+        #diffopt step here
+        return optim.step(loss, params)
+    else:
+        optim.zero_grad()
+        loss.backward(retain_graph=True)
+        optim.step()
+
+# def optim_update(optim, loss):
+#     optim.zero_grad()
+#     loss.backward(retain_graph=True)
+#     optim.step()
 
 # def copy_thetas(th):
 #     # th_copy = []
@@ -1054,7 +1062,7 @@ def init_custom(dims, using_nn=True):
     # init[-2] += 2 * logit_shift
     # th.append(init)
 
-    optims_th = construct_diff_optims(th, lr_policies, f_th)
+    optims_th = construct_optims(th, lr_policies)
     # optims = None
 
     assert len(th) == len(dims)
@@ -1081,7 +1089,7 @@ def init_custom(dims, using_nn=True):
 
     assert len(vals) == len(dims)
 
-    optims_vals = construct_diff_optims(vals, lr_values, f_vals)
+    optims_vals = construct_optims(vals, lr_values)
 
     return th, optims_th, vals, optims_vals, f_th, f_vals
 
@@ -1105,6 +1113,17 @@ def construct_diff_optims(th_or_vals, lrs, f_th_or_vals):
             optims.append(diffoptim)
     return optims
 
+def construct_optims(th_or_vals, lrs):
+    optims = []
+    for i in range(len(th_or_vals)):
+        if isinstance(th_or_vals[i], NeuralNet):
+            optim = torch.optim.SGD(th_or_vals[i].parameters(), lr=lrs[i])
+            optims.append(optim)
+        else:
+            # Don't use for now
+            optim = torch.optim.SGD([th_or_vals[i]], lr=lrs[i])
+            optims.append(optim)
+    return optims
 
 def get_gradient(function, param):
     grad = torch.autograd.grad(function, param, create_graph=True)[0]
@@ -1606,8 +1625,8 @@ if __name__ == "__main__":
                                 if args.using_nn:
                                     mixed_thetas = f_th_primes
                                     mixed_vals = f_vals_primes
-                                    mixed_thetas[i] = f_th[i]
-                                    mixed_vals[i] = f_vals[i]
+                                    mixed_thetas[i] = th[i]
+                                    mixed_vals[i] = vals[i]
                                 else:
                                     mixed_thetas = theta_primes
                                     mixed_vals = val_primes
@@ -1770,12 +1789,14 @@ if __name__ == "__main__":
 
 
                                 else:
+                                    optim_update(optims_th[i], dice_loss[i])
+                                    optim_update(optims_vals[i], values_loss[i])
 
-                                    optim_update(optims_th[i], dice_loss[i], f_th[i].parameters())
-                                    optim_update(optims_vals[i], values_loss[i], f_vals[i].parameters())
-
-                                    copyNN(th[i], f_th[i])
-                                    copyNN(vals[i], f_vals[i])
+                                    # optim_update(optims_th[i], dice_loss[i], f_th[i].parameters())
+                                    # optim_update(optims_vals[i], values_loss[i], f_vals[i].parameters())
+                                    #
+                                    # copyNN(th[i], f_th[i])
+                                    # copyNN(vals[i], f_vals[i])
 
 
                         else:
