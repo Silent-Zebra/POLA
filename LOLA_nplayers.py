@@ -1054,7 +1054,7 @@ def init_custom(dims, using_nn=True):
     # init[-2] += 2 * logit_shift
     # th.append(init)
 
-    optims_th = construct_optims(th, lr_policies, f_th)
+    optims_th = construct_diff_optims(th, lr_policies, f_th)
     # optims = None
 
     assert len(th) == len(dims)
@@ -1081,11 +1081,11 @@ def init_custom(dims, using_nn=True):
 
     assert len(vals) == len(dims)
 
-    optims_vals = construct_optims(vals, lr_values, f_vals)
+    optims_vals = construct_diff_optims(vals, lr_values, f_vals)
 
     return th, optims_th, vals, optims_vals, f_th, f_vals
 
-def construct_optims(th_or_vals, lrs, f_th_or_vals):
+def construct_diff_optims(th_or_vals, lrs, f_th_or_vals):
     optims = []
     for i in range(len(th_or_vals)):
         if isinstance(th_or_vals[i], NeuralNet):
@@ -1095,6 +1095,7 @@ def construct_optims(th_or_vals, lrs, f_th_or_vals):
             optims.append(diffoptim)
 
         else:
+            # Don't use for now
             optim = torch.optim.SGD([th_or_vals[i]], lr=lrs[i])
             # print(th_or_vals)
             # print(f_th_or_vals)
@@ -1373,7 +1374,7 @@ if __name__ == "__main__":
                         help="list of etas to try")
     parser.add_argument("--lr_policies", type=float, default=0.05,
                         help="same learning rate across all policies for now")
-    parser.add_argument("--lr_values_scale", type=float, default=0.2,
+    parser.add_argument("--lr_values_scale", type=float, default=0.3,
                         help="scale lr_values relative to lr_policies")
     parser.add_argument("--inner_steps", type=int, default=2)
     parser.add_argument("--using_nn", action="store_true",
@@ -1589,7 +1590,7 @@ if __name__ == "__main__":
                                 if args.using_nn:
                                     for ii in range(n_agents):
                                         f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii], copy_initial_weights=True, track_higher_grads=True))
-                                optims_th_primes = construct_optims(theta_primes, lr_policies * eta, f_th_primes)
+                                optims_th_primes = construct_diff_optims(theta_primes, lr_policies * eta, f_th_primes)
                                 f_vals_primes = []
                                 if args.using_nn:
                                     for ii in range(n_agents):
@@ -1598,7 +1599,7 @@ if __name__ == "__main__":
                                                 val_primes[ii],
                                                 copy_initial_weights=True,
                                                 track_higher_grads=True))
-                                optims_vals_primes = construct_optims(
+                                optims_vals_primes = construct_diff_optims(
                                     val_primes, lr_policies * eta,
                                     f_vals_primes)
 
