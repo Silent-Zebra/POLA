@@ -1022,21 +1022,14 @@ class NeuralNet(nn.Module):
 
 
 
-def init_custom(dims, using_nn=True):
+def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0):
     th = []
     f_th = []
 
-    # th.append(torch.nn.init.normal_(
-    #     torch.empty(2 ** n_agents + 1, requires_grad=True), std=0.1))
-    # th.append(
-    #     NeuralNet(input_size=dims[0], hidden_size=16, extra_hidden_layers=0,
-    #               output_size=1))
-
     # NN/func approx
-    #
     if using_nn:
         for i in range(len(dims)):
-            policy_net = NeuralNet(input_size=dims[i], hidden_size=16, extra_hidden_layers=0,
+            policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
                           output_size=1)
             f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
                                      track_higher_grads=True)
@@ -1046,8 +1039,6 @@ def init_custom(dims, using_nn=True):
             f_th.append(f_policy_net)
 
             # th.append(f_policy_net)
-
-
 
     # Tabular policies
     else:
@@ -1075,8 +1066,8 @@ def init_custom(dims, using_nn=True):
 
     for i in range(len(dims)):
         if using_nn:
-            vals_net = NeuralNet(input_size=dims[i], hidden_size=16,
-                                  extra_hidden_layers=0,
+            vals_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size,
+                                  extra_hidden_layers=nn_extra_hidden_layers,
                                   output_size=1, final_sigmoid=False)
             vals.append(vals_net)
             f_vals_net = higher.patch.monkeypatch(vals_net,
@@ -1391,7 +1382,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_agents_list", nargs="+", type=int, default=[5],
                         help="list of number of agents to try")
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--etas", nargs="+", type=int, default=[20, 12],
+    parser.add_argument("--etas", nargs="+", type=float, default=[20, 12],
                         help="list of etas to try")
     parser.add_argument("--lr_policies", type=float, default=0.05,
                         help="same learning rate across all policies for now")
@@ -1400,6 +1391,8 @@ if __name__ == "__main__":
     parser.add_argument("--inner_steps", type=int, default=2)
     parser.add_argument("--using_nn", action="store_true",
                         help="use neural net/func approx instead of tabular policy")
+    parser.add_argument("--nn_hidden_size", type=int, default=16)
+    parser.add_argument("--nn_extra_layers", type=int, default=0)
 
 
     args = parser.parse_args()
