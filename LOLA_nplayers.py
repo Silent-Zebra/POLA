@@ -1393,9 +1393,18 @@ if __name__ == "__main__":
                         help="use neural net/func approx instead of tabular policy")
     parser.add_argument("--nn_hidden_size", type=int, default=16)
     parser.add_argument("--nn_extra_layers", type=int, default=0)
+    parser.add_argument("--set_seed", action="store_true",
+                        help="set manual seed")
+    parser.add_argument("--seed", type=int, default=1, help="for seed")
+
 
 
     args = parser.parse_args()
+
+
+    if args.set_seed:
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
 
     # Repeats for each hyperparam setting
     # repeats = 10
