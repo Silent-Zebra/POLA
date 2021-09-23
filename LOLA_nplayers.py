@@ -254,14 +254,8 @@ class ContributionGame():
     def get_policy_vals_indices_for_iter(self, th, vals, state_batch, iter):
         policies = torch.zeros((self.n_agents, self.batch_size, 1))
         state_values = torch.zeros((self.n_agents, self.batch_size, 1))
-        state_batch_indices = self.get_state_batch_indices(state_batch,
-                                                           iter)
+        state_batch_indices = self.get_state_batch_indices(state_batch, iter)
         for i in range(self.n_agents):
-
-            # print(th[i])
-            # print(vals[i])
-            # if  isinstance(th[i], torch.Tensor):
-            #     1/0
 
             policy, state_value = self.get_policy_and_state_value(th[i],
                                                                   vals[i],
@@ -274,17 +268,12 @@ class ContributionGame():
         return policies, state_values, state_batch_indices
 
     def get_next_val_history(self, th, vals, val_history, ending_state_batch, iter):
+        # The notation and naming here is a bit questionable. Vals is the actual parameterized value function
+        # Val_history or state_vals as in some of the other functions are the state values for the given states in
+        # some rollout/trajectory
 
         policies, ending_state_values, ending_state_indices = self.get_policy_vals_indices_for_iter(
             th, vals, ending_state_batch, iter)
-
-        # ending_state_values = torch.zeros((self.n_agents, self.batch_size, 1))
-        # for i in range(self.n_agents):
-        #     policy, state_value = self.get_policy_and_state_value(th[i],
-        #                                                           vals[i],
-        #                                                           state_batch,
-        #                                                           state_batch_indices)
-        #     ending_state_values[i] = state_value
 
         next_val_history = torch.zeros(
             (self.num_iters, self.n_agents, self.batch_size, 1))
@@ -299,6 +288,7 @@ class ContributionGame():
         # policy_history and val_history, except they are using the current policies and values
         # (which may be different from the policies and values that were originally
         # used to rollout in the environment)
+        # next_val_history is also based off of the current values (vals)
 
         # TODO batch this, to be faster and avoid for loops
         # Look through entire code for for loops
@@ -311,25 +301,8 @@ class ContributionGame():
         state_vals = torch.zeros(
             (self.num_iters, self.n_agents, self.batch_size, 1))
 
-        # trajectory_indices = self.get_state_batch_indices(state_batch,
-        #                                                        iter)
-        # for i in range(self.n_agents):
-        #     policy, state_value = self.get_policy_and_state_value(th[i], vals[i],
-        #                                                           trajectory,
-        #                                                           trajectory_indices)
 
         for iter in range(self.num_iters):
-            # policies = torch.zeros((self.n_agents, self.batch_size, 1))
-            # state_values = torch.zeros((self.n_agents, self.batch_size, 1))
-            # state_batch_indices = self.get_state_batch_indices(state_batch,
-            #                                                    iter)
-            #
-            # for i in range(self.n_agents):
-            #
-            #     policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, state_batch_indices)
-            #
-            #     policies[i] = policy
-            #     state_values[i] = state_value
 
             policies, state_values, state_batch_indices = self.get_policy_vals_indices_for_iter(
                 th, vals, state_batch, iter)
@@ -573,7 +546,7 @@ class ContributionGame():
 
         discounts = discounts.view(-1, 1, 1, 1)
 
-        discounted_vals = val_history * discounts
+        # discounted_vals = val_history * discounts
 
         # R_t is like G_t except not discounted back to the start. It is the forward
         # looking return at that point in time
@@ -595,11 +568,22 @@ class ContributionGame():
 
         if repeat_train_on_same_samples and use_clipping:
 
+
+            # # Two way clamp, not yet ppo style
+            # log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
+
             # PPO style clipping
+            pos_adv = (advantages > 0).float()
+            log_p_act_or_p_act_ratio = pos_adv * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + \
+                                       (1-pos_adv) * torch.maximum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1-clip_epsilon)
 
-            probs_to_clip = (advantages > 0).float()
 
-            log_p_act_or_p_act_ratio = probs_to_clip * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + (1-probs_to_clip) * log_p_act_or_p_act_ratio
+            # # Below was the weird clipping I was using prior to Sep 22
+            # probs_to_clip = (advantages > 0).float()
+            #
+            # log_p_act_or_p_act_ratio = probs_to_clip * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + (1-probs_to_clip) * log_p_act_or_p_act_ratio
+
+
 
         # if repeat_train_on_same_samples and use_clipping:
         #
@@ -1396,7 +1380,8 @@ if __name__ == "__main__":
     parser.add_argument("--set_seed", action="store_true",
                         help="set manual seed")
     parser.add_argument("--seed", type=int, default=1, help="for seed")
-
+    parser.add_argument("--extra_value_updates", type=int, default=0,
+                        help="additional value function updates (0 means just 1 update per outer rollout)")
 
 
     args = parser.parse_args()
@@ -1812,6 +1797,32 @@ if __name__ == "__main__":
                                     #
                                     # copyNN(th[i], f_th[i])
                                     # copyNN(vals[i], f_vals[i])
+
+                                for _ in range(args.extra_value_updates):
+                                    _, val_history, next_val_history = game.get_policies_vals_for_states(mixed_thetas, mixed_vals, trajectory)
+
+                                    if repeat_train_on_same_samples:
+                                        dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                            trajectory, rewards,
+                                            policy_history, val_history,
+                                            next_val_history,
+                                            old_policy_history=policy_history)
+                                    else:
+                                        dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                            trajectory, rewards,
+                                            policy_history, val_history,
+                                            next_val_history)
+
+                                    if isinstance(vals[i], torch.Tensor):
+                                        grad_val = get_gradient(values_loss[i],
+                                                                vals[i])
+                                        with torch.no_grad():
+                                            vals[i] -= lr_values[i] * grad_val
+                                    else:
+                                        optim_update(optims_vals[i],
+                                                     values_loss[i])
+
+
 
 
                         else:
