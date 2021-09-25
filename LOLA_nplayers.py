@@ -1106,8 +1106,7 @@ def get_gradient(function, param):
     grad = torch.autograd.grad(function, param, create_graph=True)[0]
     return grad
 
-
-def print_policy_info(policy, i, G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout):
+def print_policy_info(policy, i):
 
     print("Policy {}".format(i))
     print(
@@ -1115,18 +1114,16 @@ def print_policy_info(policy, i, G_ts, discounted_sum_of_adjustments, truncated_
 
     print(policy)
 
-    if i == 0:
 
-        print("Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
-        # print(G_ts[0] + discounted_sum_of_adjustments)
 
-        # print("G_ts")
-        # print(G_ts[0])
-        # print(G_ts[0].shape)
+def print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout):
+    print("Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
 
-        print(G_ts[0].mean(dim=1).reshape(-1) + discounted_sum_of_adjustments)
-        print("Max Avg Coop Payout (Truncated Horizon): {:.3f}".format(truncated_coop_payout))
-        print("Max Avg Coop Payout (Infinite Horizon): {:.3f}".format(inf_coop_payout))
+    print(G_ts[0].mean(dim=1).reshape(-1) + discounted_sum_of_adjustments)
+    print("Max Avg Coop Payout (Truncated Horizon): {:.3f}".format(
+        truncated_coop_payout))
+    print("Max Avg Coop Payout (Infinite Horizon): {:.3f}".format(
+        inf_coop_payout))
 
 
 def print_value_info(vals, i):
@@ -1135,13 +1132,12 @@ def print_value_info(vals, i):
         values = vals[i]
     else:
         state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents),
-                                 torch.Tensor([
-                                                  init_state_representation] * n_agents).reshape(
+                                 torch.Tensor([init_state_representation] * n_agents).reshape(
                                      1, -1)))
         values = vals[i](state_batch)
     print(values)
 
-def print_policies_from_state_batch(n_agents, G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout):
+def print_policies_for_all_states(n_agents, th):
 
     # policies = []
     for i in range(n_agents):
@@ -1155,15 +1151,12 @@ def print_policies_from_state_batch(n_agents, G_ts, discounted_sum_of_adjustment
 
         else:
             state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents),
-                                     torch.Tensor([
-                                                      init_state_representation] * n_agents).reshape(
+                                     torch.Tensor([init_state_representation] * n_agents).reshape(
                                          1, -1)))
             policy = th[i](state_batch)
 
-        print_policy_info(policy, i, G_ts,
-                          discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
+        print_policy_info(policy, i)
 
-        # policies.append(policy)
 
 
 def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, epoch, using_samples):
@@ -1885,9 +1878,11 @@ if __name__ == "__main__":
 
                         # Print policies here
                         if using_samples:
-                            print_policies_from_state_batch(n_agents, G_ts,
-                                                        discounted_sum_of_adjustments,
-                                                        truncated_coop_payout, inf_coop_payout)
+                            print_additional_policy_info(G_ts,
+                                                         discounted_sum_of_adjustments,
+                                                         truncated_coop_payout,
+                                                         inf_coop_payout)
+                            print_policies_for_all_states(n_agents, th)
                             for i in range(n_agents):
                                 print_value_info(vals, i)
                         else:
