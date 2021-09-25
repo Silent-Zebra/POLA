@@ -1137,10 +1137,10 @@ def print_value_info(vals, i):
         values = vals[i](state_batch)
     print(values)
 
-def print_policies_for_all_states(n_agents, th):
+def print_policies_for_all_states(th):
 
     # policies = []
-    for i in range(n_agents):
+    for i in range(len(th)):
         if isinstance(th[i], torch.Tensor):
             policy = torch.sigmoid(th[i])
             # indices = list(map(int_from_bin_inttensor, state_batch))
@@ -1882,7 +1882,7 @@ if __name__ == "__main__":
                                                          discounted_sum_of_adjustments,
                                                          truncated_coop_payout,
                                                          inf_coop_payout)
-                            print_policies_for_all_states(n_agents, th)
+                            print_policies_for_all_states(th)
                             for i in range(n_agents):
                                 print_value_info(vals, i)
                         else:
