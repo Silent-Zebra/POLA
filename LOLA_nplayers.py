@@ -1689,14 +1689,16 @@ if __name__ == "__main__":
                                             #                 j]  # This step is critical to allow the gradient to flow through
                                             #         else:
                                             #             1 / 0
-                                            # # TODO this is unclipped, try clipped afterwards
 
                                             # Also TODO Aug 23 is do an outer loop with number of steps also
 
 
+                                            # print("---Agent {} Rollout {}---".format(i, step))
+                                            # print_policies_for_all_states(
+                                                # mixed_thetas)
 
 
-                                    else:
+                                    else: # no repeat train on samples, this is the original DiCE formulation
 
                                         for step in range(K):
 
@@ -1738,6 +1740,9 @@ if __name__ == "__main__":
                                                         optim_update(optims_th_primes[j],
                                                             dice_loss[j], mixed_thetas[j].parameters())
 
+                                            # print("---Agent {} Rollout {}---".format(i, step))
+                                            # print_policies_for_all_states(mixed_thetas)
+
 
                                 # Now calculate outer step using for each player a mix of the theta_primes and old thetas
 
@@ -1755,9 +1760,17 @@ if __name__ == "__main__":
                                         trajectory, rewards,
                                         policy_history, val_history, next_val_history)
 
+                                # print("---Agent {} Rollout---".format(i))
+                                # print_policies_for_all_states(mixed_thetas)
+                                # print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
+
 
                                 # NOTE: TODO potentially: G_ts here may not be the best choice
                                 # But it should be close enough to give an idea of what the rewards roughly look like
+                                # The reason why G_ts may not be best representation is I believe the way
+                                # I have the calculation set up now, it only takes G_ts from the last agent's rollout
+                                # Because of asynchronous rollouts, it's weird, we would have to have one more rollout at the end
+                                # if we just wanted to evaluate what the newly updated policies look like when played together.
 
                                 # TODO note mixed_th[i] should be == th[i] here
                                 if isinstance(th[i], torch.Tensor):
