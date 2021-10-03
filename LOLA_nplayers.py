@@ -20,6 +20,10 @@ theta_init_modes = ['standard', 'tft']
 theta_init_mode = 'standard'
 
 def bin_inttensor_from_int(x, n):
+    """Converts decimal value integer x into binary representation.
+    Parameter n represents the number of agents (so you fill with 0s up to the number of agents)
+    Well n doesn't have to be num agents. In case of lookback (say 2 steps)
+    then we may want n = 2x number of agents"""
     return torch.Tensor([int(d) for d in (str(bin(x))[2:]).zfill(n)])
     # return [int(d) for d in str(bin(x))[2:]]
 
@@ -182,12 +186,13 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
     return dims, Ls
 
 class ContributionGame():
-    def __init__(self, n, batch_size, num_iters, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
+    def __init__(self, n, batch_size, num_iters, gamma=0.96, contribution_factor=1.6, contribution_scale=False, history_len=1):
         self.n_agents = n
         self.gamma = gamma
         self.contribution_factor = contribution_factor
         self.contribution_scale = contribution_scale
-        self.dims = [n] * n
+        self.history_len = history_len
+        self.dims = [n * history_len] * n
         self.batch_size = batch_size
         self.num_iters = num_iters
 
@@ -200,7 +205,7 @@ class ContributionGame():
 
     def get_init_state_batch(self):
         init_state_batch = torch.ones(
-            (self.batch_size, self.n_agents)) * init_state_representation
+            (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
         return init_state_batch
 
     def int_from_bin_inttensor(self, bin_tens):
@@ -216,8 +221,11 @@ class ContributionGame():
             indices = list(map(self.int_from_bin_inttensor, state_batch))
         return indices
 
-    def get_policy_and_state_value(self, pol, val, state_batch, state_batch_indices):
-        # assert state_batch_indices is not None
+    def get_policy_and_state_value(self, pol, val, state_batch, iter):
+
+        if isinstance(pol, torch.Tensor) or isinstance(val, torch.Tensor):
+            state_batch_indices = self.get_state_batch_indices(state_batch,
+                                                           iter)
 
         if isinstance(pol, torch.Tensor):
 
@@ -226,22 +234,7 @@ class ContributionGame():
             # print(state_batch)
             policy = pol(state_batch)
 
-
         if isinstance(val, torch.Tensor):
-
-            # if iter == 0:
-            #     assert state_batch[0][0] - init_state_representation == 0
-            #     indices = [-1] * self.batch_size
-            #
-            # else:
-            #     indices = list(map(int_from_bin_inttensor, state_batch))
-
-            # policy = torch.sigmoid(pol)[indices].reshape(-1, 1)
-            #
-            # state_value = val[indices].reshape(-1, 1)
-
-            # print(state_batch_indices)
-
 
             state_value = val[state_batch_indices].reshape(-1, 1)
 
@@ -254,25 +247,25 @@ class ContributionGame():
     def get_policy_vals_indices_for_iter(self, th, vals, state_batch, iter):
         policies = torch.zeros((self.n_agents, self.batch_size, 1))
         state_values = torch.zeros((self.n_agents, self.batch_size, 1))
-        state_batch_indices = self.get_state_batch_indices(state_batch, iter)
+        # state_batch_indices = self.get_state_batch_indices(state_batch, iter)
         for i in range(self.n_agents):
 
             policy, state_value = self.get_policy_and_state_value(th[i],
                                                                   vals[i],
                                                                   state_batch,
-                                                                  state_batch_indices)
+                                                                  iter)
 
             policies[i] = policy
             state_values[i] = state_value
 
-        return policies, state_values, state_batch_indices
+        return policies, state_values
 
     def get_next_val_history(self, th, vals, val_history, ending_state_batch, iter):
         # The notation and naming here is a bit questionable. Vals is the actual parameterized value function
         # Val_history or state_vals as in some of the other functions are the state values for the given states in
         # some rollout/trajectory
 
-        policies, ending_state_values, ending_state_indices = self.get_policy_vals_indices_for_iter(
+        policies, ending_state_values = self.get_policy_vals_indices_for_iter(
             th, vals, ending_state_batch, iter)
 
         next_val_history = torch.zeros(
@@ -311,7 +304,7 @@ class ContributionGame():
             state_vals[iter] = state_values
 
             state_batch = trajectory[iter].float() # get the next state batch from the trajectory
-            state_batch = state_batch.reshape(self.n_agents, self.batch_size)
+            state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
             state_batch = state_batch.t()
         next_val_history = self.get_next_val_history(th, vals, state_vals, state_batch,
                                                      iter + 1)
@@ -337,29 +330,37 @@ class ContributionGame():
         # This loop can't be skipped due to sequential nature of environment
         for iter in range(self.num_iters):
 
-            # policies = torch.zeros((self.n_agents, self.batch_size, 1))
-            # state_values = torch.zeros((self.n_agents, self.batch_size, 1))
-            #
-            # state_batch_indices = self.get_state_batch_indices(state_batch, iter)
-            # for i in range(self.n_agents):
-            #     # This loop can't be skipped unless we assume all of the thetas follow the same structure (e.g. tensor)
-            #
-            #     policy, state_value = self.get_policy_and_state_value(th[i], vals[i], state_batch, state_batch_indices)
-            #
-            #     # policy prob of coop between 0 and 1
-            #     policies[i] = policy
-            #     state_values[i] = state_value
-
-            policies, state_values, state_batch_indices = self.get_policy_vals_indices_for_iter(th, vals, state_batch, iter)
+            policies, state_values = self.get_policy_vals_indices_for_iter(th, vals, state_batch, iter)
 
             policy_history[iter] = policies
             val_history[iter] = state_values
 
             actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
 
-            state_batch = torch.Tensor(actions)
-            state_batch = state_batch.reshape(self.n_agents, self.batch_size)
+            curr_step_batch = torch.Tensor(actions)
+            # This awkward reshape and transpose stuff gets around some issues with reshaping not preserving the data in the ways I want
+            curr_step_batch = curr_step_batch.reshape(self.n_agents, self.batch_size)
+            curr_step_batch = curr_step_batch.t()
+
+            state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
             state_batch = state_batch.t()
+
+            if self.history_len > 1:
+                new_state_batch = torch.zeros_like(state_batch)
+                new_state_batch[:, :self.n_agents * (self.history_len-1)] = state_batch[:, self.n_agents:self.n_agents * self.history_len]
+                new_state_batch[:, self.n_agents * (self.history_len - 1):] = curr_step_batch
+                # state_batch[:, :self.n_agents * (self.history_len-1)] = state_batch[:, self.n_agents:self.n_agents * self.history_len]
+                # state_batch[:, self.n_agents * (self.history_len-1):] = curr_step_batch
+                state_batch = new_state_batch
+            else:
+                state_batch = curr_step_batch
+
+            # print(curr_step_batch.shape)
+            # print(state_batch.shape)
+
+            # state_batch = torch.Tensor(actions)
+            # state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
+            # state_batch = state_batch.t()
 
             trajectory[iter] = torch.Tensor(actions)
 
@@ -372,20 +373,6 @@ class ContributionGame():
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
 
-            # print(actions)
-            # print(payout_per_agent)
-            # print(agent_rewards)
-
-        # ending_state_values = torch.zeros((self.n_agents, self.batch_size, 1))
-        # for i in range(self.n_agents):
-        #     policy, state_value = self.get_policy_and_state_value(th[i], vals[i],
-        #                                                           state_batch,
-        #                                                           state_batch_indices)
-        #     ending_state_values[i] = state_value
-        #
-        # next_val_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
-        # next_val_history[:self.num_iters-1,:,:,:] = val_history[1:self.num_iters,:,:,:]
-        # next_val_history[-1,:,:,:] = ending_state_values
         next_val_history = self.get_next_val_history(th, vals, val_history, state_batch, iter + 1) # iter doesn't even matter here as long as > 0
 
         return trajectory, rewards, policy_history, val_history, next_val_history
@@ -611,17 +598,6 @@ class ContributionGame():
         # See 5.2 (page 7) of DiCE paper for below:
         # With batches, the mean is the mean across batches. The sum is over the steps in the rollout/trajectory
 
-        # a=torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0).reshape(-1, 1, self.batch_size, 1) * gamma_t_r_ts
-        #
-        # b = sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1) * G_ts
-        #
-        # a = a.sum(dim=0).mean(dim=1)
-        # b = b.sum(dim=0).mean(dim=1)
-        #
-        # print(a)
-        # print(b)
-        #
-        # print(a-b)
 
         deps_up_to_t = (torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1)
 
@@ -637,14 +613,11 @@ class ContributionGame():
         # loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * discounts * R_ts).sum(dim=0).mean(dim=1)
         # loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * G_ts).sum(dim=0).mean(dim=1)
 
-        # However this formulation might be fine because we are using the advantage formulation.
+        # dice_objective_w_baseline = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * advantages).sum(dim=0).mean(dim=1)
+
+        # Look at Loaded DiCE paper to see where this formulation comes from
         loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * discounts * advantages).sum(dim=0).mean(dim=1)
 
-        # print(dice_rewards)
-        # print(dice_rewards2)
-        # dice_rewards = dice_rewards2
-
-        # dice_objective_w_baseline = (magic_box(sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1)) * advantages).sum(dim=0).mean(dim=1)
 
         # Each state has a baseline. For each state, the sum of nodes w are all of the log probs
         # So why is the G_t reward formulation wrong? How is that different from the baseline formulation?
@@ -668,36 +641,6 @@ class ContributionGame():
         # print(R_ts + (gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape))
         # print(val_history)
 
-
-        # Hm so I think this might be interesting. By choosing discounted_vals as the term for the baseline
-        # No that's definitely correct, you definitely need that since you are comparing against G_t
-        # But what's interesting is that in terms of the loss for the value function,
-        # I should be using G_ts - discounted_vals, but brought forward so that discounting starts from 0
-        # and suppose the true value from start is ~13, then the value in each state should be closer to 7 or so depending
-        # on the discounting - because in the last time step, the value is pretty close to 0
-        # So there is an issue resulting from the fixed time step termination when we should be doing probabilistic termination
-        # But anyway while the true value should be around 7 or so
-        # If you actually use that then you may not get very helpful variance reduction
-        # like maybe at the beginning you get var red, but towards end you actually get variance increase
-        # But by using the G - discounted_vals discounted all the way back to the start
-        # what happens is much less importance is placed on the later time steps
-        # So our value estimates are going to be wrong on the later time steps
-        # But it doesn't really matter because since those G_ts are heavily discounted anyways
-        # even a fairly large % mistake in the value won't have much influence on the true objective
-        # so this should actually be significantly more stable
-        # Has anyone analyzed this already?
-        # Key characteristics: fixed termination/time steps, but that doesn't show up in the state
-        # large enough discounting/long enough time horizon
-        # I suppose this is kind of a hack that lets us tease apart/better take advantage of the fact that time steps play a big role.
-        # If you had a time step variable in the state as well, then you shouldn't use this formulation, should use other formulation
-        # An overestimate for the baseline value probably also helps in the same way that the adjustment_to_make_rewards_negative does
-
-        # Hm ok let's try the other (correct) formulation and compare in the 2p case.
-
-        # Yeah so interesting, because we cannot distinguish from 0,0 in time step 1 or 40, then maybe the baseline doens't help.
-        # Or maybe it doesn't help much.
-
-        # print(values_loss.shape)
 
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
 
@@ -1126,33 +1069,29 @@ def print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_
         inf_coop_payout))
 
 
+def build_all_combs_state_batch(n):
+    state_batch = torch.cat((build_bin_matrix(n, 2 ** n),
+                             torch.Tensor([init_state_representation] * n).reshape(1, -1)))
+    return state_batch
+
+
 def print_value_info(vals, i):
     print("Values {}".format(i))
     if isinstance(vals[i], torch.Tensor):
         values = vals[i]
     else:
-        state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents),
-                                 torch.Tensor([init_state_representation] * n_agents).reshape(
-                                     1, -1)))
+        state_batch = build_all_combs_state_batch(n_agents * args.history_len)
         values = vals[i](state_batch)
     print(values)
 
-def print_policies_for_all_states(th):
 
-    # policies = []
+def print_policies_for_all_states(th):
     for i in range(len(th)):
         if isinstance(th[i], torch.Tensor):
             policy = torch.sigmoid(th[i])
-            # indices = list(map(int_from_bin_inttensor, state_batch))
-            # indices[-1] = -1
-            # print(indices)
-            # print(policy[indices])
-            # 1/0
 
         else:
-            state_batch = torch.cat((build_bin_matrix(n_agents, 2 ** n_agents),
-                                     torch.Tensor([init_state_representation] * n_agents).reshape(
-                                         1, -1)))
+            state_batch = build_all_combs_state_batch(n_agents * args.history_len)
             policy = th[i](state_batch)
 
         print_policy_info(policy, i)
@@ -1375,6 +1314,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=1, help="for seed")
     parser.add_argument("--extra_value_updates", type=int, default=0,
                         help="additional value function updates (0 means just 1 update per outer rollout)")
+    parser.add_argument("--history_len", type=int, default=1, help="Number of steps lookback that each agent gets as state")
 
 
     args = parser.parse_args()
@@ -1409,6 +1349,9 @@ if __name__ == "__main__":
         use_clipping = args.use_clipping
         clip_epsilon = args.clip_epsilon
     # TODO it seems the non-DiCE version with batches isn't really working.
+
+    if args.history_len > 1:
+        assert args.using_nn # Right now only supported for func approx.
 
     # # Why does LOLA agent sometimes defect at start but otherwise play TFT? Policy gradient issue?
     # etas = [
@@ -1529,9 +1472,12 @@ if __name__ == "__main__":
                     #                                          contribution_factor=contribution_factor,
                     #                                          contribution_scale=contribution_scale)
 
-                    game = ContributionGame(n=n_agents, gamma=gamma, batch_size=batch_size, num_iters=rollout_len,
-                                                             contribution_factor=contribution_factor,
-                                                             contribution_scale=contribution_scale)
+                    game = ContributionGame(n=n_agents, gamma=gamma,
+                                            batch_size=batch_size,
+                                            num_iters=rollout_len,
+                                            contribution_factor=contribution_factor,
+                                            contribution_scale=contribution_scale,
+                                            history_len=args.history_len)
                     dims = game.dims
 
                     th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn)
