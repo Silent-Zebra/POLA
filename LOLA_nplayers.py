@@ -1098,7 +1098,7 @@ def print_policies_for_all_states(th):
 
 
 
-def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, epoch, using_samples):
+def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
     n = len(th)
 
     G_ts = None
@@ -1783,10 +1783,10 @@ if __name__ == "__main__":
                             gradient_terms = game.get_gradient_terms(trajectory, rewards, policy_history)
 
                             th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                                update_th(th, gradient_terms, lr_policies, eta, algos, using_samples=using_samples, epoch=epoch)
+                                update_th(th, gradient_terms, lr_policies, eta, algos, using_samples=using_samples)
                     else:
                         th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                            update_th(th, Ls, lr_policies, eta, algos, using_samples=using_samples, epoch=epoch)
+                            update_th(th, Ls, lr_policies, eta, algos, using_samples=using_samples)
 
 
                     if using_samples:
