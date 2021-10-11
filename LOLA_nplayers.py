@@ -13,11 +13,20 @@ import copy
 
 import argparse
 
+import random
+
+
+
 init_state_representation = 2  # Change here if you want different number to represent the initial state
 rollout_len = 50
 
 theta_init_modes = ['standard', 'tft']
 theta_init_mode = 'standard'
+
+
+
+
+
 
 def bin_inttensor_from_int(x, n):
     """Converts decimal value integer x into binary representation.
@@ -186,7 +195,18 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
     return dims, Ls
 
 class ContributionGame():
-    def __init__(self, n, batch_size, num_iters, gamma=0.96, contribution_factor=1.6, contribution_scale=False, history_len=1):
+    """
+    Because the way this is structured, 1 means a contribution of 1 (and is therefore cooperation) and 0 is a contribution of 0, which is defecting
+    The game works conceptually as: at each round, an agent can either contribute 0 or 1.
+    The total number of contributions go into a public pool (e.g. consider some investment fund, or investing in infrastructure, or something along those lines)
+    which is redistributed equally to agents (all agents benefit equally from the public investment/infrastructure).
+    The value each agent gets from investing 1 must be <1 for the agent itself, but the total value (if you sum up the value each individual agent has across all agents)
+    must be > 1. (So if contribution_scale = False, contribution_factor needs to be > 1, otherwise nobody should ever contribute)
+    Contributing 1 provides an individual reward of -1 (in addition to the redistribution of total contributions)
+    Contributing 0 provides no individual reward (beyond that from the redistribution of total contributions)
+    """
+    def __init__(self, n, batch_size, num_iters, gamma=0.96, contribution_factor=1.6, contribution_scale=False, history_len=1, using_mnist_states=False):
+
         self.n_agents = n
         self.gamma = gamma
         self.contribution_factor = contribution_factor
@@ -195,6 +215,7 @@ class ContributionGame():
         self.dims = [n * history_len] * n
         self.batch_size = batch_size
         self.num_iters = num_iters
+        self.using_mnist_states = using_mnist_states
 
         if contribution_scale:
             self.contribution_factor = contribution_factor * n
@@ -203,9 +224,80 @@ class ContributionGame():
 
         self.dec_value_mask = (2 ** torch.arange(n - 1, -1, -1)).float()
 
+
+        if self.using_mnist_states:
+            from torchvision import datasets, transforms
+
+            mnist_train = datasets.MNIST('data', train=True, download=True,
+                                         transform=transforms.ToTensor())
+            # print(mnist_train[0][0])
+            self.coop_class = 1
+            self.defect_class = 0
+            idx_coop = (mnist_train.targets) == self.coop_class
+            idx_defect = (mnist_train.targets) == self.defect_class
+            idx_init = (mnist_train.targets) == init_state_representation
+
+            self.mnist_coop_class_dset = torch.utils.data.dataset.Subset(
+                mnist_train,
+                np.where(
+                    idx_coop == 1)[
+                    0])
+            self.mnist_defect_class_dset = torch.utils.data.dataset.Subset(
+                mnist_train,
+                np.where(
+                    idx_defect == 1)[
+                    0])
+            self.mnist_init_class_dset = torch.utils.data.dataset.Subset(
+                mnist_train,
+                np.where(
+                    idx_init == 1)[
+                    0])
+            self.len_mnist_coop_dset = len(self.mnist_coop_class_dset)
+            self.len_mnist_defect_dset = len(self.mnist_defect_class_dset)
+            self.len_mnist_init_dset = len(self.mnist_init_class_dset)
+            # print(torch.randint(0, self.len_mnist_init_dset, (self.batch_size,)))
+            #
+            # print(self.mnist_defect_class_dset[0][1])
+            #
+            # idx = torch.tensor(mnist_train.targets) == defect_class
+            # idx = mnist_train.train_labels == 1
+            # print(idx)
+            # labels = mnist_train.train_labels[idx]
+            # data = mnist_train.train_data[idx][0]
+            # print(labels)
+            # print(data)
+
+    def build_mnist_state_from_classes(self, batch_tensor):
+        dims = batch_tensor.shape
+
+        mnist_state = torch.zeros((dims[0], dims[1], 28, 28))
+        for b in range(dims[0]):
+            for c in range(dims[1]):
+                mnist_class = batch_tensor[b][c]
+                if mnist_class == init_state_representation:
+                    randind = random.randint(0, self.len_mnist_init_dset - 1)
+                    mnist_img = self.mnist_init_class_dset[randind][0]
+                elif mnist_class == self.coop_class:
+                    randind = random.randint(0, self.len_mnist_coop_dset - 1)
+                    mnist_img = self.mnist_coop_class_dset[randind][0]
+                else:
+                    assert mnist_class == self.defect_class
+                    randind = random.randint(0, self.len_mnist_defect_dset - 1)
+                    mnist_img = self.mnist_defect_class_dset[randind][0]
+                mnist_state[b][c] = mnist_img
+
+        return mnist_state
+
     def get_init_state_batch(self):
-        init_state_batch = torch.ones(
-            (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
+        if self.using_mnist_states:
+            integer_state_batch = torch.ones(
+                (self.batch_size,
+                 self.n_agents * self.history_len)) * init_state_representation
+            init_state_batch = self.build_mnist_state_from_classes(integer_state_batch)
+
+        else:
+            init_state_batch = torch.ones(
+                (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
         return init_state_batch
 
     def int_from_bin_inttensor(self, bin_tens):
@@ -342,25 +434,23 @@ class ContributionGame():
             curr_step_batch = curr_step_batch.reshape(self.n_agents, self.batch_size)
             curr_step_batch = curr_step_batch.t()
 
-            state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
-            state_batch = state_batch.t()
+            # TODO I think the below line doesn't do anything. To confirm
+            if not mnist_states:
+                state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
+                state_batch = state_batch.t()
+
+
 
             if self.history_len > 1:
                 new_state_batch = torch.zeros_like(state_batch)
                 new_state_batch[:, :self.n_agents * (self.history_len-1)] = state_batch[:, self.n_agents:self.n_agents * self.history_len]
                 new_state_batch[:, self.n_agents * (self.history_len - 1):] = curr_step_batch
-                # state_batch[:, :self.n_agents * (self.history_len-1)] = state_batch[:, self.n_agents:self.n_agents * self.history_len]
-                # state_batch[:, self.n_agents * (self.history_len-1):] = curr_step_batch
                 state_batch = new_state_batch
             else:
                 state_batch = curr_step_batch
 
-            # print(curr_step_batch.shape)
-            # print(state_batch.shape)
-
-            # state_batch = torch.Tensor(actions)
-            # state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
-            # state_batch = state_batch.t()
+            if self.using_mnist_states:
+                state_batch = self.build_mnist_state_from_classes(state_batch)
 
             trajectory[iter] = torch.Tensor(actions)
 
@@ -948,6 +1038,55 @@ class NeuralNet(nn.Module):
         return output
 
 
+class ConvFC(nn.Module):
+    def __init__(self, conv_in_channels, conv_out_channels, input_size, hidden_size, output_size, kernel_size=5, final_sigmoid=True):
+        super(ConvFC, self).__init__()
+
+        self.conv_out_channels = conv_out_channels
+        # layers = []
+
+        self.layer1 = nn.Conv2d(conv_in_channels, conv_out_channels,
+                                kernel_size=kernel_size)
+        self.conv_result_size = (
+                    input_size - kernel_size + 1)  # no stride or pad here
+        self.fc_size = self.conv_result_size ** 2 * self.conv_out_channels
+        self.layer2 = nn.Linear(self.fc_size, hidden_size)
+        self.layer3 = nn.Linear(hidden_size, output_size)
+
+        self.final_sigmoid = final_sigmoid
+
+        # layers.append(self.layer1)
+        # layers.append(torch.nn.Tanh())
+        # layers.append(self.layer2)
+        # layers.append(torch.nn.Tanh())
+        # layers.append(self.layer3)
+        #
+        # if final_sigmoid:
+        #     layers.append(nn.Sigmoid())
+        # self.net = nn.Sequential(*layers)
+
+
+    def forward(self, x):
+
+        # assert len(x.shape) >= 3
+        # print(x.shape)
+        if len(x.shape) == 3:
+            x = x.unsqueeze(0)
+        conv_output = torch.tanh(self.layer1(x))
+        # print(conv_output)
+        output = conv_output.reshape(-1, self.fc_size)
+        # print(output)
+        output = torch.tanh(self.layer2(output))
+        # print(output)
+        output = self.layer3(output)
+        # print(output)
+
+        if self.final_sigmoid:
+            output = torch.sigmoid(output)
+
+
+        return output
+
 
 def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0):
     th = []
@@ -956,8 +1095,17 @@ def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0
     # NN/func approx
     if using_nn:
         for i in range(len(dims)):
-            policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
-                          output_size=1)
+            if mnist_states:
+                policy_net = ConvFC(conv_in_channels=dims[i],
+                                    # mnist specific input is 28x28x1
+                                    conv_out_channels=dims[i],
+                                    input_size=28,
+                                    hidden_size=nn_hidden_size,
+                                    output_size=1,
+                                    final_sigmoid=True)
+            else:
+                policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
+                              output_size=1)
             f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
                                      track_higher_grads=True)
             # print(f_policy_net)
@@ -993,7 +1141,16 @@ def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0
 
     for i in range(len(dims)):
         if using_nn:
-            vals_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size,
+            if mnist_states:
+                vals_net = ConvFC(conv_in_channels=dims[i],
+                                  # mnist specific input is 28x28x1
+                                  conv_out_channels=dims[i],
+                                  input_size=28,
+                                  hidden_size=nn_hidden_size,
+                                  output_size=1,
+                                  final_sigmoid=False)
+            else:
+                vals_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size,
                                   extra_hidden_layers=nn_extra_hidden_layers,
                                   output_size=1, final_sigmoid=False)
             vals.append(vals_net)
@@ -1016,7 +1173,7 @@ def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0
 def construct_diff_optims(th_or_vals, lrs, f_th_or_vals):
     optims = []
     for i in range(len(th_or_vals)):
-        if isinstance(th_or_vals[i], NeuralNet):
+        if not isinstance(th_or_vals[i], torch.Tensor):
             optim = torch.optim.SGD(th_or_vals[i].parameters(), lr=lrs[i])
 
             diffoptim = higher.get_diff_optim(optim, th_or_vals[i].parameters(), f_th_or_vals[i])
@@ -1036,7 +1193,7 @@ def construct_diff_optims(th_or_vals, lrs, f_th_or_vals):
 def construct_optims(th_or_vals, lrs):
     optims = []
     for i in range(len(th_or_vals)):
-        if isinstance(th_or_vals[i], NeuralNet):
+        if not isinstance(th_or_vals[i], torch.Tensor):
             optim = torch.optim.SGD(th_or_vals[i].parameters(), lr=lrs[i])
             optims.append(optim)
         else:
@@ -1075,23 +1232,32 @@ def build_all_combs_state_batch(n):
     return state_batch
 
 
-def print_value_info(vals, i):
+def print_value_info(vals, i, mnist_states=False, contrib_game=None):
     print("Values {}".format(i))
     if isinstance(vals[i], torch.Tensor):
         values = vals[i]
     else:
         state_batch = build_all_combs_state_batch(n_agents * args.history_len)
+        if mnist_states:
+            assert contrib_game is not None
+            state_batch = contrib_game.build_mnist_state_from_classes(state_batch)
+
         values = vals[i](state_batch)
     print(values)
 
 
-def print_policies_for_all_states(th):
+def print_policies_for_all_states(th, mnist_states=False, contrib_game=None):
     for i in range(len(th)):
         if isinstance(th[i], torch.Tensor):
             policy = torch.sigmoid(th[i])
 
         else:
             state_batch = build_all_combs_state_batch(n_agents * args.history_len)
+            if mnist_states:
+                assert contrib_game is not None
+                state_batch = contrib_game.build_mnist_state_from_classes(
+                    state_batch)
+
             policy = th[i](state_batch)
 
         print_policy_info(policy, i)
@@ -1315,7 +1481,8 @@ if __name__ == "__main__":
     parser.add_argument("--extra_value_updates", type=int, default=0,
                         help="additional value function updates (0 means just 1 update per outer rollout)")
     parser.add_argument("--history_len", type=int, default=1, help="Number of steps lookback that each agent gets as state")
-
+    parser.add_argument("--mnist_states", action="store_true",
+                        help="use MNIST digits as state representation")
 
     args = parser.parse_args()
 
@@ -1359,8 +1526,7 @@ if __name__ == "__main__":
     # if not using_samples:
     #     etas = [0.05 * 20, 0.05 * 12]
 
-
-
+    mnist_states = args.mnist_states
 
 
     n_agents_list = args.n_agents_list
@@ -1477,7 +1643,8 @@ if __name__ == "__main__":
                                             num_iters=rollout_len,
                                             contribution_factor=contribution_factor,
                                             contribution_scale=contribution_scale,
-                                            history_len=args.history_len)
+                                            history_len=args.history_len,
+                                            using_mnist_states=mnist_states)
                     dims = game.dims
 
                     th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn)
@@ -1841,9 +2008,9 @@ if __name__ == "__main__":
                                                          discounted_sum_of_adjustments,
                                                          truncated_coop_payout,
                                                          inf_coop_payout)
-                            print_policies_for_all_states(th)
+                            print_policies_for_all_states(th, mnist_states, game)
                             for i in range(n_agents):
-                                print_value_info(vals, i)
+                                print_value_info(vals, i, mnist_states, game)
                         else:
                             for i in range(n_agents):
                                 policy = torch.sigmoid(th[i])
