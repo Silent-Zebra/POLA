@@ -17,7 +17,7 @@ import random
 
 
 
-init_state_representation = 2  # Change here if you want different number to represent the initial state
+# init_state_representation = 2  # Change here if you want different number to represent the initial state
 rollout_len = 50
 
 theta_init_modes = ['standard', 'tft']
@@ -1483,9 +1483,12 @@ if __name__ == "__main__":
     parser.add_argument("--history_len", type=int, default=1, help="Number of steps lookback that each agent gets as state")
     parser.add_argument("--mnist_states", action="store_true",
                         help="use MNIST digits as state representation")
+    parser.add_argument("--init_state_representation", type=int, default=2)
 
     args = parser.parse_args()
 
+
+    init_state_representation = args.init_state_representation
 
     if args.set_seed:
         np.random.seed(args.seed)
