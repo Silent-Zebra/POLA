@@ -1470,7 +1470,7 @@ if __name__ == "__main__":
                         help="same learning rate across all policies for now")
     parser.add_argument("--lr_values_scale", type=float, default=0.3,
                         help="scale lr_values relative to lr_policies")
-    parser.add_argument("--inner_steps", type=int, default=2)
+    parser.add_argument("--inner_steps", type=int, default=1)
     parser.add_argument("--using_nn", action="store_true",
                         help="use neural net/func approx instead of tabular policy")
     parser.add_argument("--nn_hidden_size", type=int, default=16)
