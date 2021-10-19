@@ -405,12 +405,9 @@ class ContributionGame():
 
 
     def rollout(self, th, vals):
-        # init_state = torch.Tensor([[init_state_representation] * self.n_agents])  # repeat -1 n times, where n is num agents
-        # print(init_state)
-        init_state_batch = self.get_init_state_batch()
-        # print(init_state_batch)
 
-        # state = init_state
+        init_state_batch = self.get_init_state_batch()
+
         state_batch = init_state_batch
 
         # trajectory just tracks actions, doesn't track the init state
@@ -438,8 +435,6 @@ class ContributionGame():
             if not mnist_states:
                 state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
                 state_batch = state_batch.t()
-
-
 
             if self.history_len > 1:
                 new_state_batch = torch.zeros_like(state_batch)
@@ -499,7 +494,6 @@ class ContributionGame():
 
             p_act_ratio = p_act_given_state / p_act_given_state_old.detach()
             # TODO is this detach necessary? Pretty sure it is.
-
 
 
             return G_ts, gamma_t_r_ts, p_act_ratio, discounts
@@ -614,37 +608,18 @@ class ContributionGame():
         G_ts, gamma_t_r_ts, log_p_act_or_p_act_ratio, discounts = self.get_loss_helper(
             trajectory, rewards, policy_history, old_policy_history)
 
-        # print(log_p_act_or_p_act_ratio)
-        # if old_policy_history is None:
-        #     G_ts, gamma_t_r_ts, log_p_act, discounts = self.get_loss_helper(trajectory, rewards, policy_history)
-        # else:
-        #     G_ts, gamma_t_r_ts, p_act_ratio, discounts = self.get_loss_helper(
-        #         trajectory, rewards, policy_history, old_policy_history)
-
         discounts = discounts.view(-1, 1, 1, 1)
-
-        # discounted_vals = val_history * discounts
 
         # R_t is like G_t except not discounted back to the start. It is the forward
         # looking return at that point in time
         R_ts = G_ts / discounts
 
-        # print(R_ts[1])
-        # print(G_ts[1])
 
         # advantages = G_ts - discounted_vals
         advantages = rewards + self.gamma * next_val_history - val_history
         # print(advantages)
 
-
-        # TODO Aug 24 - make sure the basic version without the clipping stuff or the inner loops is working properly
-        # Something isn't right... figure out why the basic version is not working, compare vs older versions
-        # Start with the = false flag on the repeat_train_on_samples and ensure that is working first before testing with true flag.
-        # and do a step by step modification/comparison and test of all different things to see what the issue is
-
-
         if repeat_train_on_same_samples and use_clipping:
-
 
             # # Two way clamp, not yet ppo style
             # log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
@@ -661,27 +636,6 @@ class ContributionGame():
             # log_p_act_or_p_act_ratio = probs_to_clip * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + (1-probs_to_clip) * log_p_act_or_p_act_ratio
 
 
-
-        # if repeat_train_on_same_samples and use_clipping:
-        #
-        #     # print(log_p_act_or_p_act_ratio)
-        #
-        #     # full clipping - sometimes in rare cases the not clipping on the negative side leads to way too big a movement and then you have essentially
-        #     # a stuck policy (e.g. too close to 0 or 1 for any hope of future exploration) which is always bad
-        #     log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
-
-        # print(log_p_act_or_p_act_ratio)
-
-
-
-        # Find the indices/probs where the advantage is negative for each player
-        # Then for each of those, we do nothing
-        # THen for the other probs where the advantage is positive
-        # we clip those (so we really only need the min/floor/clamp on the top part to make sure we don't move too much in that direction)
-        # TODO Aug 23 confirm that this is an appropriate interpretation of the PPO clipping.
-
-        # p_act_ratio = torch.clamp(p_act_ratio, min=1 - clip_epsilon,
-        #                           max=1 + clip_epsilon)
 
         sum_over_agents_log_p_act_or_p_act_ratio = log_p_act_or_p_act_ratio.sum(dim=1)
 
@@ -726,10 +680,9 @@ class ContributionGame():
         final_state_vals = next_val_history[-1]
         # final_state_vals = next_val_history[-1].detach()
         # Detach would be wrong here I think
-        values_loss = ((R_ts + (gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape) - val_history) ** 2).sum(dim=0).mean(dim=1)
+        values_loss = ((R_ts + (self.gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape) - val_history) ** 2).sum(dim=0).mean(dim=1)
         # print((gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape))
         # print(R_ts + (gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape))
-        # print(val_history)
 
 
         # regular_nl_loss = -(torch.cumsum(log_p_act, dim=0) * gamma_t_r_ts).sum(dim=0)
@@ -1012,7 +965,7 @@ def init_th_tft(dims, std, logit_shift=3):
 
 class NeuralNet(nn.Module):
     def __init__(self, input_size, hidden_size, extra_hidden_layers,
-                 output_size, final_sigmoid=True):
+                 output_size, final_sigmoid=True, final_softmax=False):
         super(NeuralNet, self).__init__()
         layers = []
 
@@ -1029,12 +982,15 @@ class NeuralNet(nn.Module):
 
         if final_sigmoid:
             layers.append(nn.Sigmoid())
+        elif final_softmax:
+            layers.append(nn.Softmax(dim=-1))
 
         self.net = nn.Sequential(*layers)
 
 
     def forward(self, x):
         output = self.net(x)
+
         return output
 
 
@@ -1069,7 +1025,8 @@ class ConvFC(nn.Module):
     def forward(self, x):
 
         # assert len(x.shape) >= 3
-        # print(x.shape)
+        print(x.shape)
+        # print(x)
         if len(x.shape) == 3:
             x = x.unsqueeze(0)
         conv_output = torch.tanh(self.layer1(x))
@@ -1088,14 +1045,16 @@ class ConvFC(nn.Module):
         return output
 
 
-def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0):
+def init_custom(dims, using_nn=True, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
     th = []
     f_th = []
 
     # NN/func approx
     if using_nn:
         for i in range(len(dims)):
+
             if mnist_states:
+                assert env == 'ipd'
                 policy_net = ConvFC(conv_in_channels=dims[i],
                                     # mnist specific input is 28x28x1
                                     conv_out_channels=dims[i],
@@ -1104,13 +1063,23 @@ def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0
                                     output_size=1,
                                     final_sigmoid=True)
             else:
-                policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
+
+                if env == 'coin':
+                    policy_net = NeuralNet(input_size=dims[i],
+                                           hidden_size=nn_hidden_size,
+                                           extra_hidden_layers=nn_extra_hidden_layers,
+                                           output_size=4, final_sigmoid=False, final_softmax=True) # TODO probably should dynamically code this
+                else:
+                    policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
                               output_size=1)
+
             f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
                                      track_higher_grads=True)
+
             # print(f_policy_net)
 
             th.append(policy_net)
+
             f_th.append(f_policy_net)
 
             # th.append(f_policy_net)
@@ -1162,7 +1131,6 @@ def init_custom(dims, using_nn=True, nn_hidden_size=16, nn_extra_hidden_layers=0
             f_vals.append(f_vals_net)
         else:
             vals.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=0.1))
-
 
     assert len(vals) == len(dims)
 
@@ -1216,14 +1184,16 @@ def print_policy_info(policy, i):
 
 
 
-def print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout):
+def print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout, env):
     print("Discounted Sum Rewards (Avg over batches) in this episode (removing negative adjustment): ")
 
     print(G_ts[0].mean(dim=1).reshape(-1) + discounted_sum_of_adjustments)
-    print("Max Avg Coop Payout (Truncated Horizon): {:.3f}".format(
-        truncated_coop_payout))
-    print("Max Avg Coop Payout (Infinite Horizon): {:.3f}".format(
-        inf_coop_payout))
+
+    if env == 'ipd':
+        print("Max Avg Coop Payout (Truncated Horizon): {:.3f}".format(
+            truncated_coop_payout))
+        print("Max Avg Coop Payout (Infinite Horizon): {:.3f}".format(
+            inf_coop_payout))
 
 
 def build_all_combs_state_batch(n):
@@ -1448,6 +1418,8 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
 # Main loop/code
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
+    parser.add_argument("--env", type=str, default="ipd",
+                        choices=["ipd", "coin"])
     parser.add_argument("--using_samples", action="store_true",
                         help="True for samples (with rollout_len), false for exact gradient (using matrix inverse for infinite length rollout)")
     parser.add_argument("--using_DiCE", action="store_true",
@@ -1641,16 +1613,22 @@ if __name__ == "__main__":
                     #                                          contribution_factor=contribution_factor,
                     #                                          contribution_scale=contribution_scale)
 
-                    game = ContributionGame(n=n_agents, gamma=gamma,
-                                            batch_size=batch_size,
-                                            num_iters=rollout_len,
-                                            contribution_factor=contribution_factor,
-                                            contribution_scale=contribution_scale,
-                                            history_len=args.history_len,
-                                            using_mnist_states=mnist_states)
+                    if args.env == "coin":
+                        from coin_game import CoinGameVec
+                        # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
+                        game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size)
+
+                    else:
+                        game = ContributionGame(n=n_agents, gamma=gamma,
+                                                batch_size=batch_size,
+                                                num_iters=rollout_len,
+                                                contribution_factor=contribution_factor,
+                                                contribution_scale=contribution_scale,
+                                                history_len=args.history_len,
+                                                using_mnist_states=mnist_states)
                     dims = game.dims
 
-                    th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn)
+                    th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn, args.env)
 
                     # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
                     # How does standard reinforce/policy gradient get around this? Entropy regularization
@@ -1817,13 +1795,17 @@ if __name__ == "__main__":
                                     else: # no repeat train on samples, this is the original DiCE formulation
 
                                         for step in range(K):
-
-                                            trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
-                                                mixed_thetas, mixed_vals)
-                                            dice_loss, _, values_loss = game.get_dice_loss(
-                                                trajectory,
-                                                rewards,
-                                                policy_history, val_history, next_val_history)
+                                            if args.env == 'coin':
+                                                obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                                    mixed_thetas, mixed_vals)
+                                                dice_loss, _, values_loss = game.get_dice_loss(rewards, policy_history, val_history, next_val_history)
+                                            else:
+                                                trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                                    mixed_thetas, mixed_vals)
+                                                dice_loss, _, values_loss = game.get_dice_loss(
+                                                    trajectory,
+                                                    rewards,
+                                                    policy_history, val_history, next_val_history)
 
                                             grads = [None] * n_agents
                                             # grad_vals = [None] * n_agents # For stability don't do this
@@ -1862,19 +1844,27 @@ if __name__ == "__main__":
 
                                 # Now calculate outer step using for each player a mix of the theta_primes and old thetas
 
-                                trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
-                                    mixed_thetas, mixed_vals)
-
-
-                                if repeat_train_on_same_samples:
+                                if args.env == 'coin':
+                                    if repeat_train_on_same_samples:
+                                        raise Exception("Repeat_train not yet supported for coin game")
+                                    obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                        mixed_thetas, mixed_vals)
                                     dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                        trajectory, rewards,
-                                        policy_history, val_history, next_val_history,
-                                        old_policy_history=policy_history)
+                                        rewards, policy_history, val_history,
+                                        next_val_history)
                                 else:
-                                    dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                        trajectory, rewards,
-                                        policy_history, val_history, next_val_history)
+                                    trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                        mixed_thetas, mixed_vals)
+
+                                    if repeat_train_on_same_samples:
+                                        dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                            trajectory, rewards,
+                                            policy_history, val_history, next_val_history,
+                                            old_policy_history=policy_history)
+                                    else:
+                                        dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                            trajectory, rewards,
+                                            policy_history, val_history, next_val_history)
 
                                 # print("---Agent {} Rollout---".format(i))
                                 # print_policies_for_all_states(mixed_thetas)
@@ -2010,10 +2000,11 @@ if __name__ == "__main__":
                             print_additional_policy_info(G_ts,
                                                          discounted_sum_of_adjustments,
                                                          truncated_coop_payout,
-                                                         inf_coop_payout)
-                            print_policies_for_all_states(th, mnist_states, game)
-                            for i in range(n_agents):
-                                print_value_info(vals, i, mnist_states, game)
+                                                         inf_coop_payout, args.env)
+                            if args.env == 'ipd':
+                                print_policies_for_all_states(th, mnist_states, game)
+                                for i in range(n_agents):
+                                    print_value_info(vals, i, mnist_states, game)
                         else:
                             for i in range(n_agents):
                                 policy = torch.sigmoid(th[i])
