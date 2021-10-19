@@ -1616,7 +1616,8 @@ if __name__ == "__main__":
                     if args.env == "coin":
                         from coin_game import CoinGameVec
                         # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
-                        game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size)
+                        game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size, history_len=args.history_len)
+                        dims = game.dims_with_history
 
                     else:
                         game = ContributionGame(n=n_agents, gamma=gamma,
@@ -1626,7 +1627,7 @@ if __name__ == "__main__":
                                                 contribution_scale=contribution_scale,
                                                 history_len=args.history_len,
                                                 using_mnist_states=mnist_states)
-                    dims = game.dims
+                        dims = game.dims
 
                     th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn, args.env)
 

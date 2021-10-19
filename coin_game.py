@@ -26,12 +26,13 @@ class CoinGameVec(gym.Env):
     ]
 
     # def __init__(self, max_steps, batch_size, grid_size=3, num_agents=2):
-    def __init__(self, max_steps, batch_size, grid_size=3, gamma=0.96):
+    def __init__(self, max_steps, batch_size, history_len, grid_size=3, gamma=0.96):
         # self.NUM_AGENTS = num_agents
         self.n_agents = self.NUM_AGENTS
         self.max_steps = max_steps
         self.grid_size = grid_size
         self.batch_size = batch_size
+        self.history_len = history_len
         # The 4 channels stand for 2 players and 2 coin positions
         self.ob_space_shape = [self.NUM_AGENTS * self.COIN_POSITIONS, grid_size, grid_size]
         self.NUM_STATES = np.prod(self.ob_space_shape)
@@ -44,7 +45,10 @@ class CoinGameVec(gym.Env):
         self.gamma = gamma
 
 
-        self.dims = [self.NUM_AGENTS * self.COIN_POSITIONS * grid_size * grid_size] * self.NUM_AGENTS
+        self.dims_no_history = [self.NUM_AGENTS * self.COIN_POSITIONS * grid_size * grid_size] * self.NUM_AGENTS
+        self.dims_with_history = [self.NUM_AGENTS * self.COIN_POSITIONS * grid_size * grid_size * self.history_len] * self.NUM_AGENTS
+
+
 
     def reset(self):
         self.step_count = 0
@@ -164,7 +168,7 @@ class CoinGameVec(gym.Env):
         # obs, acs, rets, rews, values, infos = [], [], [], [], [], []
 
         # Assumes same dim obs for all players
-        obs_history = torch.zeros((self.max_steps, self.n_agents, self.batch_size, self.dims[0]), dtype=torch.int)
+        obs_history = torch.zeros((self.max_steps, self.n_agents, self.batch_size, self.dims_no_history[0]), dtype=torch.int)
         act_history = torch.zeros((self.max_steps, self.n_agents, self.batch_size), dtype=torch.int)
         rewards = torch.zeros(
             (self.max_steps, self.n_agents, self.batch_size))
@@ -174,6 +178,19 @@ class CoinGameVec(gym.Env):
             (self.max_steps, self.n_agents, self.batch_size, 1))
 
         ob, info = self.reset()
+
+        init_ob_batch = torch.zeros((self.n_agents, self.batch_size, self.dims_with_history[0]))
+        for i in range(len(ob)):
+            # fill all with starting state
+            start_counter = 0
+            end_counter = self.dims_no_history[0]
+            for j in range(self.history_len):
+                init_ob_batch[i, :, start_counter:end_counter] = torch.FloatTensor(ob[i])
+                start_counter = end_counter
+                end_counter += self.dims_no_history[0]
+
+        ob_batch = init_ob_batch
+
         done = False
         gamma_t = 1.
         iter = 0
@@ -186,18 +203,43 @@ class CoinGameVec(gym.Env):
             actions = torch.zeros((self.n_agents, self.batch_size),dtype=int)
 
             for i in range(len(th)):
+
                 ob[i] = torch.FloatTensor(ob[i])
+
+
+                if self.history_len > 1:
+                    new_ob = torch.zeros_like(ob_batch)
+
+                    # print(new_ob[i,:,:self.dims[0] * (self.history_len - 1)].shape)
+                    # print(ob_batch.shape)
+                    # print(ob_batch[i,:,self.dims[0]:self.dims[0] * self.history_len].shape)
+                    # 1/0
+                    new_ob[i, :,:self.dims_no_history[0] * (self.history_len - 1)] = \
+                        ob_batch[i, :,self.dims_no_history[0]:self.dims_no_history[0] * self.history_len]
+
+                    new_ob[i, :,self.dims_no_history[0] * (self.history_len - 1):] = ob[i]
+
+                    ob_batch = new_ob
+
+
                 # print(th[i])
                 # print(ob[i])
                 # print(ob[i].shape)
+                if self.history_len > 1:
+                    policy = th[i](ob_batch[i])  # Should be 4-D
+                    # print(policy.shape)
 
-                policy = th[i](ob[i]) # Should be 4-D
-                # print(policy.shape)
+                    state_value = vals[i](ob_batch[i])
+                else:
+                    policy = th[i](ob[i]) # Should be 4-D
+                    # print(policy.shape)
 
-                state_value = vals[i](ob[i])
-                # print(state_value)
+                    state_value = vals[i](ob[i])
+                    # print(state_value)
 
-                # print(policy)
+                    # print(policy)
+
+
 
                 # TODO make sure that this works with batches
                 action = torch.distributions.categorical.Categorical(probs=policy.detach()).sample()
