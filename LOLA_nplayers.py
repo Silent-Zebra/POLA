@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import higher
+# TODO credit the higher repo (and let authors know - have link to paper)
 
 import datetime
 
@@ -531,7 +532,7 @@ class ContributionGame():
 
                 # print((log_p_act[:, i] * G_ts[:, j]).shape)
                 # print((log_p_act[:, i] * G_ts[:, j]).sum(dim=0).shape)
-                # print((log_p_act[:, i] * G_ts[:, j]).sum(dim=0).mean(dim=0).shape)
+                # print((log_p_act[:, i] * G_ts[:, j]).sum.shape)(dim=0).mean(dim=0)
 
 
                 log_p_times_G_t_matrix[i][j] = (
@@ -1025,7 +1026,7 @@ class ConvFC(nn.Module):
     def forward(self, x):
 
         # assert len(x.shape) >= 3
-        print(x.shape)
+        # print(x.shape)
         # print(x)
         if len(x.shape) == 3:
             x = x.unsqueeze(0)
@@ -1045,7 +1046,29 @@ class ConvFC(nn.Module):
         return output
 
 
-def init_custom(dims, using_nn=True, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
+class RNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_rnn_layers, final_softmax):
+        super().__init__()
+        self.RNN = nn.RNN(input_size=input_size,
+                          hidden_size=hidden_size,
+                          num_layers=num_rnn_layers,
+                          nonlinearity='tanh',
+                          batch_first=True)
+        self.linear = nn.Linear(hidden_size, 4)
+        self.final_softmax = final_softmax
+        self.init_hidden_state = torch.zeros([num_rnn_layers, args.batch_size, hidden_size]).requires_grad_(True)
+
+    def forward(self, x):
+        # output, hn = self.RNN(x, self.init_hidden_state)
+        # print(x.shape)
+        output, hn = self.RNN(x)
+        out = self.linear(output[:, -1, :])
+        if self.final_softmax:
+            out = torch.nn.functional.softmax(out, dim=-1)
+        return out
+
+
+def init_custom(dims, using_nn=True, using_rnn=False, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
     th = []
     f_th = []
 
@@ -1065,7 +1088,11 @@ def init_custom(dims, using_nn=True, env='ipd', nn_hidden_size=16, nn_extra_hidd
             else:
 
                 if env == 'coin':
-                    policy_net = NeuralNet(input_size=dims[i],
+                    if using_rnn:
+                        policy_net = RNN(input_size=dims[i], hidden_size=nn_hidden_size,
+                                         num_rnn_layers=nn_extra_hidden_layers+1, final_softmax=True) # 1 rnn layer
+                    else:
+                        policy_net = NeuralNet(input_size=dims[i],
                                            hidden_size=nn_hidden_size,
                                            extra_hidden_layers=nn_extra_hidden_layers,
                                            output_size=4, final_sigmoid=False, final_softmax=True) # TODO probably should dynamically code this
@@ -1456,6 +1483,8 @@ if __name__ == "__main__":
     parser.add_argument("--mnist_states", action="store_true",
                         help="use MNIST digits as state representation")
     parser.add_argument("--init_state_representation", type=int, default=2)
+    parser.add_argument("--using_rnn", action="store_true",
+                        help="use RNN (for coin game)") # TODO only supported for coin right now
 
     args = parser.parse_args()
 
@@ -1523,6 +1552,9 @@ if __name__ == "__main__":
             # TODO refactor/think about a way to avoid these bugs
 
         lr_policies = torch.tensor([args.lr_policies] * n_agents)
+
+        # Testing only
+        # lr_policies[-1] = 0
 
         lr_values = lr_policies * args.lr_values_scale
         # lr_values = lr_policies * 0.2
@@ -1629,7 +1661,7 @@ if __name__ == "__main__":
                                                 using_mnist_states=mnist_states)
                         dims = game.dims
 
-                    th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn, args.env)
+                    th, optims_th, vals, optims_vals, f_th, f_vals = init_custom(dims, args.using_nn, args.using_rnn, args.env)
 
                     # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
                     # How does standard reinforce/policy gradient get around this? Entropy regularization
@@ -1798,7 +1830,7 @@ if __name__ == "__main__":
                                         for step in range(K):
                                             if args.env == 'coin':
                                                 obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
-                                                    mixed_thetas, mixed_vals)
+                                                    mixed_thetas, mixed_vals, full_seq_obs=args.using_rnn)
                                                 dice_loss, _, values_loss = game.get_dice_loss(rewards, policy_history, val_history, next_val_history)
                                             else:
                                                 trajectory, rewards, policy_history, val_history, next_val_history = game.rollout(
@@ -1849,7 +1881,7 @@ if __name__ == "__main__":
                                     if repeat_train_on_same_samples:
                                         raise Exception("Repeat_train not yet supported for coin game")
                                     obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
-                                        mixed_thetas, mixed_vals)
+                                        mixed_thetas, mixed_vals, full_seq_obs=args.using_rnn)
                                     dice_loss, G_ts, values_loss = game.get_dice_loss(
                                         rewards, policy_history, val_history,
                                         next_val_history)
@@ -2038,7 +2070,7 @@ if __name__ == "__main__":
 
                     # plt.show()
 
-
-            print("Average reward as % of max: {:.1%}".format(
-                sum(reward_percent_of_max) / repeats))
+            if args.env == 'ipd':
+                print("Average reward as % of max: {:.1%}".format(
+                    sum(reward_percent_of_max) / repeats))
 

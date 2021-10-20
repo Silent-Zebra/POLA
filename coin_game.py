@@ -164,9 +164,7 @@ class CoinGameVec(gym.Env):
 
         return next_val_history
 
-    def rollout(self, th, vals, gamma=0.96):
-        # obs, acs, rets, rews, values, infos = [], [], [], [], [], []
-
+    def rollout(self, th, vals, gamma=0.96, full_seq_obs=True):
         # Assumes same dim obs for all players
         obs_history = torch.zeros((self.max_steps, self.n_agents, self.batch_size, self.dims_no_history[0]), dtype=torch.int)
         act_history = torch.zeros((self.max_steps, self.n_agents, self.batch_size), dtype=torch.int)
@@ -179,21 +177,37 @@ class CoinGameVec(gym.Env):
 
         ob, info = self.reset()
 
-        init_ob_batch = torch.zeros((self.n_agents, self.batch_size, self.dims_with_history[0]))
-        for i in range(len(ob)):
-            # fill all with starting state
-            start_counter = 0
-            end_counter = self.dims_no_history[0]
-            for j in range(self.history_len):
-                init_ob_batch[i, :, start_counter:end_counter] = torch.FloatTensor(ob[i])
-                start_counter = end_counter
-                end_counter += self.dims_no_history[0]
+        if full_seq_obs:
+            # init_ob_batch = torch.zeros((self.n_agents, self.batch_size, 1, self.dims_no_history[0]))
+            init_ob_batch = None
+
+        else:
+            init_ob_batch = torch.zeros((self.n_agents, self.batch_size, self.dims_with_history[0]))
+            for i in range(len(ob)):
+                # fill all with starting state
+                start_counter = 0
+                end_counter = self.dims_no_history[0]
+                for j in range(self.history_len):
+                    init_ob_batch[i, :, start_counter:end_counter] = torch.FloatTensor(ob[i])
+                    start_counter = end_counter
+                    end_counter += self.dims_no_history[0]
 
         ob_batch = init_ob_batch
 
         done = False
-        gamma_t = 1.
+        # gamma_t = 1.
         iter = 0
+
+
+        # Policy test
+        sample_obs = torch.FloatTensor([[[0,0,0],[0,1,0],[0,0,0]],
+                                  [[0, 0, 0], [1, 0, 0], [0, 0, 0]],
+                                  [[0, 0, 0], [0, 0, 1], [0, 0, 0]],
+                                  [[0, 0, 0], [0, 0, 0], [0, 0, 0]]]).reshape(1, 36)
+        for i in range(self.NUM_AGENTS):
+            policy = th[i](sample_obs)
+            print(policy)
+
 
         while not done:
             # obs.append(ob)
@@ -202,42 +216,74 @@ class CoinGameVec(gym.Env):
             policies = torch.zeros((self.n_agents, self.batch_size))
             actions = torch.zeros((self.n_agents, self.batch_size),dtype=int)
 
-            for i in range(len(th)):
-
+            for i in range(self.NUM_AGENTS):
                 ob[i] = torch.FloatTensor(ob[i])
 
-
-                if self.history_len > 1:
-                    new_ob = torch.zeros_like(ob_batch)
-
-                    # print(new_ob[i,:,:self.dims[0] * (self.history_len - 1)].shape)
-                    # print(ob_batch.shape)
-                    # print(ob_batch[i,:,self.dims[0]:self.dims[0] * self.history_len].shape)
+            if full_seq_obs:
+                if ob_batch is None:
+                    # print(torch.stack(ob).shape)
+                    # print(torch.FloatTensor(ob))
                     # 1/0
-                    new_ob[i, :,:self.dims_no_history[0] * (self.history_len - 1)] = \
-                        ob_batch[i, :,self.dims_no_history[0]:self.dims_no_history[0] * self.history_len]
+                    # ob_batch = torch.Tensor(ob).unsqueeze(2)
+                    ob_batch = torch.stack(ob).unsqueeze(2)
+                    # print(ob_batch.shape)
+                else:
+                    # print(ob_batch)
+                    # print(torch.stack(ob).unsqueeze(2).shape)
+                    new_ob = torch.cat((ob_batch, torch.stack(ob).unsqueeze(2)), dim=2 )
+                    # print(new_ob.shape)
+                    ob_batch = new_ob
+                # print(ob_batch.shape)
 
-                    new_ob[i, :,self.dims_no_history[0] * (self.history_len - 1):] = ob[i]
+            else:
+                if self.history_len > 1:
+                    new_ob = ob_batch.clone()
+
+                    for i in range(self.NUM_AGENTS):
+
+                        new_ob[i, :,
+                        :self.dims_no_history[0] * (self.history_len - 1)] = \
+                            ob_batch[i, :, self.dims_no_history[0]:self.dims_no_history[
+                                                                       0] * self.history_len]
+
+                        new_ob[i, :,
+                        self.dims_no_history[0] * (self.history_len - 1):] = ob[i]
 
                     ob_batch = new_ob
 
+            for i in range(self.NUM_AGENTS):
 
-                # print(th[i])
-                # print(ob[i])
-                # print(ob[i].shape)
-                if self.history_len > 1:
+                if full_seq_obs:
+
+                    # print(ob_batch[i].shape)
+                    # print(th[i])
+
                     policy = th[i](ob_batch[i])  # Should be 4-D
-                    # print(policy.shape)
 
                     state_value = vals[i](ob_batch[i])
+                    # print(state_value.shape)
+
+                    state_value = state_value[:, -1]
+                    # print(state_value.shape)
+
+
+
                 else:
-                    policy = th[i](ob[i]) # Should be 4-D
-                    # print(policy.shape)
 
-                    state_value = vals[i](ob[i])
-                    # print(state_value)
+                    if self.history_len > 1:
 
-                    # print(policy)
+                        policy = th[i](ob_batch[i])  # Should be 4-D
+                        # print(policy.shape)
+
+                        state_value = vals[i](ob_batch[i])
+                    else:
+                        policy = th[i](ob[i]) # Should be 4-D
+                        # print(policy.shape)
+
+                        state_value = vals[i](ob[i])
+                        # print(state_value)
+
+                        # print(policy)
 
 
 
@@ -268,24 +314,23 @@ class CoinGameVec(gym.Env):
 
             # Sample from categorical distribution here (th assumed to be nn that outputs 4-d softmax prob)
 
-            # print(policies)
-            # print(actions)
-            #
-            # 1/0
+            act_history[iter] = actions # actions as in action of every agent
 
-            act_history[iter] = actions #? action or actions?
+            # print("---")
+            # for i in range(self.NUM_AGENTS):
+            #     print(ob[i].reshape(self.batch_size, 4, 3, 3))
+            # print(ob)
 
-
-            # ac = [
-            #     pi.act(o, i, sess)
-            #     for pi, o, i in zip(rollout_policies, ob, info)
-            # ]
+            # Testing Only
+            # actions[-1] = torch.zeros_like(actions[-1], dtype=int)
 
             # print(actions)
-            # 1/0
+
 
             ob, rew, done, info = self.step(actions.numpy())
 
+            # for i in range(self.NUM_AGENTS):
+            #     print(ob[i].reshape(self.batch_size, 4, 3, 3))
             # print(rew)
 
             for i in range(self.NUM_AGENTS):
@@ -293,7 +338,7 @@ class CoinGameVec(gym.Env):
             # acs.append(ac)
             # rews.append(rew)
             # rets.append([r * gamma_t for r in rew])
-            gamma_t *= gamma
+            # gamma_t *= gamma
             iter += 1
 
         # print(val_history)
