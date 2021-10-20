@@ -198,12 +198,15 @@ class CoinGameVec(gym.Env):
         # gamma_t = 1.
         iter = 0
 
-
         # Policy test
         sample_obs = torch.FloatTensor([[[0,0,0],[0,1,0],[0,0,0]],
                                   [[0, 0, 0], [1, 0, 0], [0, 0, 0]],
                                   [[0, 0, 0], [0, 0, 1], [0, 0, 0]],
                                   [[0, 0, 0], [0, 0, 0], [0, 0, 0]]]).reshape(1, 36)
+
+        if full_seq_obs:
+            sample_obs = sample_obs.reshape(1,1,36)
+
         for i in range(self.NUM_AGENTS):
             policy = th[i](sample_obs)
             print(policy)
