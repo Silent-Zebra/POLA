@@ -2068,6 +2068,7 @@ if __name__ == "__main__":
                     else:
                         plt.savefig("{}agents_{:.0f}eta_run{}_exact_date{}.png".format(n_agents, eta / args.lr_policies, run, now.strftime('%Y-%m-%d_%H-%M')))
 
+                    plt.clf()
                     # plt.show()
 
             if args.env == 'ipd':
