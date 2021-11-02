@@ -214,10 +214,22 @@ class ContributionGame():
         self.contribution_factor = contribution_factor
         self.contribution_scale = contribution_scale
         self.history_len = history_len
-        self.dims = [n * history_len] * n
         self.batch_size = batch_size
         self.num_iters = num_iters
         self.using_mnist_states = using_mnist_states
+        self.one_hot_states = one_hot_states
+
+
+        if one_hot_states and using_mnist_states:
+            raise Exception("Not yet implemented")
+
+        if one_hot_states:
+            self.action_repr_dim = 3  # one hot with 3 dimensions, dimension 0 for defect, 1 for contrib/coop, 2 for start
+        else:
+            self.action_repr_dim = 1  # a single dimensional observation that can take on different vales e.g. 0, 1, init_state_repr
+            # self.dims = [n * history_len] * n
+
+        self.dims = [n * history_len * self.action_repr_dim] * n
 
         if contribution_scale:
             self.contribution_factor = contribution_factor * n
@@ -298,8 +310,16 @@ class ContributionGame():
             init_state_batch = self.build_mnist_state_from_classes(integer_state_batch)
 
         else:
-            init_state_batch = torch.ones(
-                (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
+            if self.one_hot_states:
+                init_state_batch = torch.zeros(
+                    (self.batch_size,
+                     self.n_agents * self.history_len, self.action_repr_dim))
+                init_state_batch[:,:,init_state_representation] += 1
+                init_state_batch = init_state_batch.reshape(self.batch_size, self.n_agents * self.history_len * self.action_repr_dim)
+                # print(init_state_batch)
+            else:
+                init_state_batch = torch.ones(
+                    (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
         return init_state_batch
 
     def int_from_bin_inttensor(self, bin_tens):
@@ -343,6 +363,8 @@ class ContributionGame():
         state_values = torch.zeros((self.n_agents, self.batch_size, 1))
         # state_batch_indices = self.get_state_batch_indices(state_batch, iter)
         for i in range(self.n_agents):
+
+            # print(state_batch.shape)
 
             policy, state_value = self.get_policy_and_state_value(th[i],
                                                                   vals[i],
@@ -410,6 +432,31 @@ class ContributionGame():
         return coop_probs, state_vals, next_val_history
 
 
+    def build_one_hot_from_batch(self, curr_step_batch, one_at_a_time=True):
+
+        curr_step_batch_one_hot = torch.nn.functional.one_hot(
+            curr_step_batch.long(), self.action_repr_dim).squeeze(dim=2)
+        # print(curr_step_batch_one_hot)
+        # print(curr_step_batch_one_hot.shape)
+        new_tens = curr_step_batch_one_hot[0]
+        if one_at_a_time:
+            range_end =  self.n_agents
+        else:
+            range_end = self.n_agents * self.history_len
+
+        for i in range(1, range_end):
+            new_tens = torch.cat((new_tens, curr_step_batch_one_hot[i]), dim=-1)
+
+        # curr_step_batch_one_hot = torch.zeros(self.batch_size, self.n_agents, self.action_repr_dim)
+        # curr_step_batch_one_hot[curr_step_batch.long()] = 1
+        # print(curr_step_batch_one_hot)
+        # print(curr_step_batch_one_hot.shape)
+        #
+        # print(new_tens)
+        # print(new_tens.shape)
+        curr_step_batch = new_tens.float()
+        return curr_step_batch
+
     def rollout(self, th, vals):
 
         init_state_batch = self.get_init_state_batch()
@@ -417,9 +464,9 @@ class ContributionGame():
         state_batch = init_state_batch
 
         if self.using_mnist_states:
-            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents, 28, 28))
+            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.history_len, 28, 28))
         else:
-            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents))
+            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.action_repr_dim * self.history_len))
         # trajectory just tracks actions, doesn't track the init state
         action_trajectory = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), dtype=torch.int)
         rewards = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
@@ -437,25 +484,39 @@ class ContributionGame():
             actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
 
             curr_step_batch = torch.Tensor(actions)
-            # This awkward reshape and transpose stuff gets around some issues with reshaping not preserving the data in the ways I want
-            curr_step_batch = curr_step_batch.reshape(self.n_agents, self.batch_size)
-            curr_step_batch = curr_step_batch.t()
 
-            # # TODO I think the below line doesn't do anything. To confirm
+            if self.one_hot_states:
+                curr_step_batch = self.build_one_hot_from_batch(curr_step_batch)
+
+
+            else:
+            # This awkward reshape and transpose stuff gets around some issues with reshaping not preserving the data in the ways I want
+            #     print(curr_step_batch)
+                curr_step_batch = curr_step_batch.reshape(self.n_agents, self.batch_size)
+                curr_step_batch = curr_step_batch.t()
+                # print(curr_step_batch)
+
+
             # if not mnist_states:
             #     state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
             #     state_batch = state_batch.t()
 
             if self.history_len > 1:
                 new_state_batch = torch.zeros_like(state_batch)
-                new_state_batch[:, :self.n_agents * (self.history_len-1)] = state_batch[:, self.n_agents:self.n_agents * self.history_len]
-                new_state_batch[:, self.n_agents * (self.history_len - 1):] = curr_step_batch
+                new_state_batch[:, :self.n_agents * self.action_repr_dim * (self.history_len-1)] = state_batch[:, self.n_agents * self.action_repr_dim :self.n_agents * self.action_repr_dim  * self.history_len]
+                new_state_batch[:, self.n_agents * self.action_repr_dim * (self.history_len - 1):] = curr_step_batch
+                # new_state_batch[:,
+                # :self.n_agents * (self.history_len - 1)] = state_batch[:,
+                #                                            self.n_agents:self.n_agents * self.history_len]
+                # new_state_batch[:,
+                # self.n_agents * (self.history_len - 1):] = curr_step_batch
                 state_batch = new_state_batch
             else:
                 state_batch = curr_step_batch
 
             if self.using_mnist_states:
                 state_batch = self.build_mnist_state_from_classes(state_batch)
+
 
             action_trajectory[iter] = torch.Tensor(actions)
             # print(trajectory[iter])
@@ -1383,47 +1444,61 @@ def print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_
             inf_coop_payout))
 
 
-def build_all_combs_state_batch(n):
+def build_all_combs_state_batch(n, contrib_game):
     state_batch = torch.cat((build_bin_matrix(n, 2 ** n),
                              torch.Tensor([init_state_representation] * n).reshape(1, -1)))
+
+    # print(state_batch)
+    if contrib_game.using_mnist_states:
+        state_batch = contrib_game.build_mnist_state_from_classes(state_batch)
+    if contrib_game.one_hot_states:
+        # print(state_batch)
+        # print(state_batch.t())
+        state_batch = contrib_game.build_one_hot_from_batch(state_batch.t(), one_at_a_time=False)
+
+    # print(state_batch)
+
+
     return state_batch
 
 
-def print_value_info(vals, agent_num_i, mnist_states=False, contrib_game=None):
+# TODO should move into the game? Also think about framework (base class + inheritance?) for reducing duplicate code over multiple games
+def print_value_info(vals, agent_num_i, contrib_game):
     i = agent_num_i
     print("Values {}".format(i))
     if isinstance(vals[i], torch.Tensor):
         values = vals[i]
     else:
-        state_batch = build_all_combs_state_batch(n_agents * args.history_len)
-        if mnist_states:
-            assert contrib_game is not None
-            state_batch = contrib_game.build_mnist_state_from_classes(state_batch)
+        state_batch = build_all_combs_state_batch(contrib_game.n_agents * args.history_len, contrib_game)
+
 
         values = vals[i](state_batch)
     print(values)
 
 
-def print_values_for_all_states(vals, mnist_states=False, contrib_game=None):
+def print_values_for_all_states(vals, contrib_game):
     for i in range(len(vals)):
-        print_value_info(vals, i, mnist_states, contrib_game)
+        print_value_info(vals, i, contrib_game)
 
 
-def print_policies_for_all_states(th, mnist_states=False, contrib_game=None):
+def print_policies_for_all_states(th, contrib_game):
     for i in range(len(th)):
         if isinstance(th[i], torch.Tensor):
             policy = torch.sigmoid(th[i])
 
         else:
-            state_batch = build_all_combs_state_batch(n_agents * args.history_len)
-            if mnist_states:
-                assert contrib_game is not None
-                state_batch = contrib_game.build_mnist_state_from_classes(
-                    state_batch)
+            state_batch = build_all_combs_state_batch(n_agents * args.history_len, contrib_game)
+            # if contrib_game.using_mnist_states :
+            #     state_batch = contrib_game.build_mnist_state_from_classes(
+            #         state_batch)
+
 
             policy = th[i](state_batch)
 
         print_policy_info(policy, i)
+
+
+
 
 
 
@@ -1656,6 +1731,7 @@ if __name__ == "__main__":
                         help="use naive learning (no shaping) loss on inner dice loop")
     parser.add_argument("--inner_val_updates", action="store_true",
                         help="value updates on the inner dice loop")
+
 
     args = parser.parse_args()
 
@@ -2244,8 +2320,8 @@ if __name__ == "__main__":
                                                          truncated_coop_payout,
                                                          inf_coop_payout, args.env)
                             if args.env == 'ipd':
-                                print_policies_for_all_states(th, mnist_states, game)
-                                print_values_for_all_states(vals, mnist_states, game)
+                                print_policies_for_all_states(th, game)
+                                print_values_for_all_states(vals, game)
                         else:
                             for i in range(n_agents):
                                 policy = torch.sigmoid(th[i])
