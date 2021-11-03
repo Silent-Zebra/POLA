@@ -220,10 +220,14 @@ class ContributionGame():
         self.one_hot_states = one_hot_states
 
 
-        if one_hot_states and using_mnist_states:
-            raise Exception("Not yet implemented")
+        # if one_hot_states and using_mnist_states:
+        #     raise Exception("Not yet implemented")
+        # MNIST repr was fine, because it gives a specific class. So it is essentially one hot (or not, to the extent that different classes share similarity)
 
-        if one_hot_states:
+        if self.using_mnist_states:
+            self.one_hot_states = False
+
+        if self.one_hot_states:
             self.action_repr_dim = 3  # one hot with 3 dimensions, dimension 0 for defect, 1 for contrib/coop, 2 for start
         else:
             self.action_repr_dim = 1  # a single dimensional observation that can take on different vales e.g. 0, 1, init_state_repr
@@ -231,7 +235,8 @@ class ContributionGame():
 
         self.dims = [n * history_len * self.action_repr_dim] * n
 
-        if contribution_scale:
+
+        if self.contribution_scale:
             self.contribution_factor = contribution_factor * n
         else:
             assert self.contribution_factor > 1
@@ -747,13 +752,14 @@ class ContributionGame():
 
         if repeat_train_on_same_samples and use_clipping:
 
-            # # Two way clamp, not yet ppo style
-            # log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
-
-            # PPO style clipping
-            pos_adv = (advantages > 0).float()
-            log_p_act_or_p_act_ratio = pos_adv * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + \
-                                       (1-pos_adv) * torch.maximum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1-clip_epsilon)
+            # Two way clamp, not yet ppo style
+            if two_way_clip:
+                log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
+            else:
+                # PPO style clipping
+                pos_adv = (advantages > 0).float()
+                log_p_act_or_p_act_ratio = pos_adv * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + \
+                                           (1-pos_adv) * torch.maximum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1-clip_epsilon)
 
 
             # # Below was the weird clipping I was using prior to Sep 22
@@ -1731,7 +1737,8 @@ if __name__ == "__main__":
                         help="use naive learning (no shaping) loss on inner dice loop")
     parser.add_argument("--inner_val_updates", action="store_true",
                         help="value updates on the inner dice loop")
-
+    parser.add_argument("--two_way_clip", action="store_true",
+                        help="use 2 way clipping instead of PPO clip")
 
     args = parser.parse_args()
 
@@ -1769,6 +1776,7 @@ if __name__ == "__main__":
         # but then train multiple times on the same data using importance sampling and PPO-style clipping
         use_clipping = args.use_clipping
         clip_epsilon = args.clip_epsilon
+        two_way_clip = args.two_way_clip
     # TODO it seems the non-DiCE version with batches isn't really working.
 
     if args.history_len > 1:
