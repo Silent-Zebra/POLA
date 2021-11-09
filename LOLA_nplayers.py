@@ -106,6 +106,9 @@ def reverse_cumsum(x, dim):
     return x + torch.sum(x, dim=dim, keepdims=True) - torch.cumsum(x, dim=dim)
 
 def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
+    # Note this is kind of hard coded, not affected by the init_state_representation variable
+    # This is a tabular setting.
+
     dims = [2 ** n + 1 for _ in range(n)]
     state_space = dims[0]
     # print(dims)
@@ -138,8 +141,12 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
         init_pc = torch.zeros(n)
         for i in range(n):
             # p_i_0 = torch.sigmoid(th[i][0:1])
-            p_i_0 = torch.sigmoid(th[i][
-                                      -1])  # so start state is at the end, different from the 2p ipd formulation
+            if init_state_representation == 1:
+                p_i_0 = torch.sigmoid(th[i][
+                                      -2]) # force all coop at the beginning in this special case
+            else:
+                p_i_0 = torch.sigmoid(th[i][
+                                          -1])  # so start state is at the end, different from the 2p ipd formulation
             # Why did I do it this way? It's inconsistent with the 2p ipd setup
             # print(torch.sigmoid(th[i][-1]))
             init_pc[i] = p_i_0
@@ -437,10 +444,10 @@ class ContributionGame():
         return coop_probs, state_vals, next_val_history
 
 
-    def build_one_hot_from_batch(self, curr_step_batch, one_at_a_time=True):
+    def build_one_hot_from_batch(self, curr_step_batch, one_hot_dim, one_at_a_time=True):
 
         curr_step_batch_one_hot = torch.nn.functional.one_hot(
-            curr_step_batch.long(), self.action_repr_dim).squeeze(dim=2)
+            curr_step_batch.long(), one_hot_dim).squeeze(dim=2)
         # print(curr_step_batch_one_hot)
         # print(curr_step_batch_one_hot.shape)
         new_tens = curr_step_batch_one_hot[0]
@@ -491,7 +498,7 @@ class ContributionGame():
             curr_step_batch = torch.Tensor(actions)
 
             if self.one_hot_states:
-                curr_step_batch = self.build_one_hot_from_batch(curr_step_batch)
+                curr_step_batch = self.build_one_hot_from_batch(curr_step_batch, self.action_repr_dim)
 
 
             else:
@@ -582,6 +589,7 @@ class ContributionGame():
             # and when defect 0 is taken, we take 1-policy = prob of defect
 
             log_p_act = torch.log(p_act_given_state)
+
             return G_ts, gamma_t_r_ts, log_p_act, discounts
         else:
             p_act_given_state_old = trajectory.float() * old_policy_history + (
@@ -726,6 +734,7 @@ class ContributionGame():
         # advantages = rewards + self.gamma * next_val_history.detach() - val_history
         # final_state_vals = next_val_history[-1].detach()
         # advantages = (R_ts + (self.gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape) - val_history)
+
 
 
         advantages = torch.zeros_like(G_ts)
@@ -921,180 +930,427 @@ class ContributionGame():
         # return dice_loss, G_ts, values_loss, -dice_rewards, -dice_rewards2
 
 
+class HawkDoveGame(ContributionGame):
+    """
+    Essentially allows for individual 2-player IPDs to be played simultaneously between all pairs of agents at every time step
+    This is in addition to the usual contrib game formulation
+    See comment later about pairwise_reward_scale
+    """
+    def __init__(self, n, batch_size, num_iters, gamma=0.96, contribution_factor=1.6,
+                 contribution_scale=False, history_len=1, using_mnist_states=False,
+                 one_hot_states=True, pairwise_pd_only=True, no_pairwise_pd=False):
+
+        self.n_agents = n
+        self.gamma = gamma
+        self.contribution_factor = contribution_factor
+        self.contribution_scale = contribution_scale
+        self.history_len = history_len
+        self.batch_size = batch_size
+        self.num_iters = num_iters
+        self.using_mnist_states = using_mnist_states
+        self.one_hot_states = one_hot_states
+        self.pairwise_pd_only = pairwise_pd_only
+        self.no_pairwise_pd = no_pairwise_pd
+
+        if pairwise_pd_only and no_pairwise_pd:
+            raise Exception("Can't have only pd and no pd")
+
+        # this controls how much the pairwise rewards matter relative to the global rewards from the combined contrib pool. A very high value of this means the game approaches a 2p IPD tournament. A low value means this just becomes the original contrib game
+        # Or you can just set contrib factor to 0, and then it just becomes pairwise IPD
+        # self.pairwise_reward_scale_relative_to_global_contrib = 0.5 # 0.25
+        self.pairwise_reward_scale_relative_to_global_contrib = 1 # 0.25
+        if self.no_pairwise_pd:
+            self.pairwise_reward_scale_relative_to_global_contrib = 0
+        # self.pairwise_coop_bonus_to_other_agent = 2 * self.pairwise_reward_scale_relative_to_global_contrib
+        # self.pairwise_coop_cost_to_self = 1 * self.pairwise_reward_scale_relative_to_global_contrib
+        self.pairwise_coop_bonus_to_other_agent = 0.8 * self.pairwise_reward_scale_relative_to_global_contrib
+        self.pairwise_coop_cost_to_self = 0.2 * self.pairwise_reward_scale_relative_to_global_contrib
+
+        # if one_hot_states and using_mnist_states:
+        #     raise Exception("Not yet implemented")
+        # MNIST repr was fine, because it gives a specific class. So it is essentially one hot (or not, to the extent that different classes share similarity)
+
+        if self.using_mnist_states:
+            self.one_hot_states = False
+
+        if self.one_hot_states:
+            self.action_repr_dim = 3  # one hot with 3 dimensions, dimension 0 for defect, 1 for contrib/coop, 2 for start
+        else:
+            self.action_repr_dim = 1  # a single dimensional observation that can take on different vales e.g. 0, 1, init_state_repr
+            # self.dims = [n * history_len] * n
+
+        self.dims = [n * history_len * self.action_repr_dim * n] * n
+
+
+        if self.contribution_scale:
+            self.contribution_factor = contribution_factor * n
+        else:
+            if self.contribution_factor <= 1:
+                print("Warning: Contrib factor is less than 1")
+
+        self.dec_value_mask = (2 ** torch.arange(n - 1, -1, -1)).float()
+
+
+        if self.using_mnist_states:
+            from torchvision import datasets, transforms
+
+            mnist_train = datasets.MNIST('data', train=True, download=True,
+                                         transform=transforms.ToTensor())
+            # print(mnist_train[0][0])
+            self.coop_class = 1
+            self.defect_class = 0
+            idx_coop = (mnist_train.targets) == self.coop_class
+            idx_defect = (mnist_train.targets) == self.defect_class
+            idx_init = (mnist_train.targets) == init_state_representation
+
+            self.mnist_coop_class_dset = torch.utils.data.dataset.Subset(
+                mnist_train,
+                np.where(
+                    idx_coop == 1)[
+                    0])
+            self.mnist_defect_class_dset = torch.utils.data.dataset.Subset(
+                mnist_train,
+                np.where(
+                    idx_defect == 1)[
+                    0])
+            self.mnist_init_class_dset = torch.utils.data.dataset.Subset(
+                mnist_train,
+                np.where(
+                    idx_init == 1)[
+                    0])
+            self.len_mnist_coop_dset = len(self.mnist_coop_class_dset)
+            self.len_mnist_defect_dset = len(self.mnist_defect_class_dset)
+            self.len_mnist_init_dset = len(self.mnist_init_class_dset)
+            # print(torch.randint(0, self.len_mnist_init_dset, (self.batch_size,)))
+            #
+            # print(self.mnist_defect_class_dset[0][1])
+            #
+            # idx = torch.tensor(mnist_train.targets) == defect_class
+            # idx = mnist_train.train_labels == 1
+            # print(idx)
+            # labels = mnist_train.train_labels[idx]
+            # data = mnist_train.train_data[idx][0]
+            # print(labels)
+            # print(data)
+
+
+    def get_init_state_batch(self):
+        if self.using_mnist_states:
+            raise NotImplementedError
+            integer_state_batch = torch.ones(
+                (self.batch_size,
+                 self.n_agents * self.history_len)) * init_state_representation
+            init_state_batch = self.build_mnist_state_from_classes(integer_state_batch)
+
+        else:
+            # Maybe each agent should only see the interactions of other agents with them? Ie p1 doesn't care about how p2 interacted w p3.
+            # This just becomes a population based 2p game though...
+            # So maybe instead of the pairwise interactions alone, you also have a global effect
+            # For hawk/dove maybe this doesn't make sense but if you imagine modern human war
+            # War always has negative side effects on environment, which hurts everyone living near the area regardless of their participation
+            # So this is kind of like a combination of population IPD and contrib game
+            # In this case you may wish to view all agent interactions and punish another agent even if they coop with you if they are taking
+            # advantage of other agents / not cooperating with other agents
+            if self.one_hot_states:
+                init_state_batch = torch.zeros(
+                    (self.batch_size,
+                     self.n_agents * self.history_len, self.n_agents, self.action_repr_dim))
+                init_state_batch[:,:,:,init_state_representation] += 1
+                init_state_batch = init_state_batch.reshape(self.batch_size, self.n_agents * self.history_len * self.n_agents * self.action_repr_dim)
+                # print(init_state_batch)
+            else:
+                raise NotImplementedError
+                init_state_batch = torch.ones(
+                    (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
+        return init_state_batch
+
+    def build_one_hot_from_batch(self, curr_step_batch, one_hot_dim, one_at_a_time=True):
+
+        # if not one_at_a_time:
+        #     curr_step_batch = curr_step_batch.t()
+
+        curr_step_batch_one_hot = torch.nn.functional.one_hot(
+            curr_step_batch.long(), one_hot_dim).squeeze(dim=-2)
+
+
+        # TODO figure out how to print stuff in a meaningful way, then run expmts.
+        if not one_at_a_time:
+            # print(curr_step_batch)
+            # print(curr_step_batch_one_hot)
+            # 1/0
+            # print(curr_step_batch_one_hot.shape)
+            # curr_step_batch_one_hot = curr_step_batch_one_hot.transpose(0, -1)
+            # print(curr_step_batch_one_hot)
+            # print(curr_step_batch_one_hot.shape)
+            # 1/0
+
+            # curr_step_batch_one_hot = curr_step_batch_one_hot.view(self.n_agents * self.action_repr_dim, self.n_agents, -1 )
+            # curr_step_batch_one_hot = curr_step_batch_one_hot.view(self.n_agents, -1, self.n_agents * self.action_repr_dim)
+            pass
+
+        else:
+            # print(curr_step_batch)
+            # print(curr_step_batch_one_hot)
+            curr_step_batch_one_hot = curr_step_batch_one_hot.view(self.n_agents, self.batch_size, self.n_agents * self.action_repr_dim)
+            # print(curr_step_batch_one_hot)
+        # print(curr_step_batch_one_hot)
+        # print(curr_step_batch_one_hot.shape)
+
+        if one_at_a_time:
+            new_tens = curr_step_batch_one_hot[0]
+
+            range_end =  self.n_agents
+            for i in range(1, range_end):
+                new_tens = torch.cat((new_tens, curr_step_batch_one_hot[i]),
+                                     dim=-1)
+        else:
+            new_tens = curr_step_batch_one_hot[0]
+
+            range_end = curr_step_batch.shape[0]
+            for i in range(1, range_end):
+                new_tens = torch.cat((new_tens, curr_step_batch_one_hot[i]),
+                                     dim=-1)
+
+
+
+        # curr_step_batch_one_hot = torch.zeros(self.batch_size, self.n_agents, self.action_repr_dim)
+        # curr_step_batch_one_hot[curr_step_batch.long()] = 1
+        # print(curr_step_batch_one_hot)
+        # print(curr_step_batch_one_hot.shape)
+        #
+        # print(new_tens)
+        # print(new_tens.shape)
+        curr_step_batch = new_tens.float()
+
+        if not one_at_a_time:
+            print(curr_step_batch)
+            # 1/0
+
+        return curr_step_batch
+
+    def get_policy_vals_indices_for_iter(self, th, vals, state_batch, iter):
+        policies = torch.zeros((self.n_agents, self.batch_size, self.n_agents))
+        state_values = torch.zeros((self.n_agents, self.batch_size, 1))
+        # state_batch_indices = self.get_state_batch_indices(state_batch, iter)
+        for i in range(self.n_agents):
+
+            # print(state_batch.shape)
+
+            policy, state_value = self.get_policy_and_state_value(th[i],
+                                                                  vals[i],
+                                                                  state_batch,
+                                                                  iter)
+
+            # always no contrib with self - specific to this environment and makes calcs easier
+            mask = torch.ones_like(policy)
+            mask[:,i] = 0
+            masked_policy = policy * mask
+
+            # print(policy)
+            # print(masked_policy)
+
+            # policy[:,i] *= 0 # doesn't work because inplace operation
+
+            policies[i] = masked_policy
+            state_values[i] = state_value
+
+
+        return policies, state_values
+
+    def rollout(self, th, vals):
+
+        init_state_batch = self.get_init_state_batch()
+
+        state_batch = init_state_batch
+
+        if self.using_mnist_states:
+            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.history_len, 28, 28))
+        else:
+            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.n_agents * self.action_repr_dim * self.history_len))
+        # trajectory just tracks actions, doesn't track the init state
+        action_trajectory = torch.zeros((self.num_iters, self.n_agents, self.batch_size, self.n_agents), dtype=torch.int)
+        rewards = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
+        policy_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, self.n_agents))
+        val_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
+
+        # This loop can't be skipped due to sequential nature of environment
+        for iter in range(self.num_iters):
+
+            policies, state_values = self.get_policy_vals_indices_for_iter(th, vals, state_batch, iter)
+
+            policy_history[iter] = policies
+            val_history[iter] = state_values
+
+            # print(policies)
+
+            actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
+            # print(actions)
+            # print(actions.shape)
+
+            curr_step_batch = actions #.reshape(self.n_agents, self.batch_size, self.n_agents**2)
+            # print(curr_step_batch)
+
+            if self.one_hot_states:
+                curr_step_batch = self.build_one_hot_from_batch(curr_step_batch, self.action_repr_dim)
+            else:
+            # This awkward reshape and transpose stuff gets around some issues with reshaping not preserving the data in the ways I want
+            #     print(curr_step_batch)
+                curr_step_batch = curr_step_batch.reshape(self.n_agents, self.batch_size)
+                curr_step_batch = curr_step_batch.t()
+                # print(curr_step_batch)
+
+
+            # if not mnist_states:
+            #     state_batch = state_batch.reshape(self.n_agents * self.history_len, self.batch_size)
+            #     state_batch = state_batch.t()
+
+            if self.history_len > 1:
+                new_state_batch = torch.zeros_like(state_batch)
+                new_state_batch[:, :self.n_agents * self.action_repr_dim * (self.history_len-1)] = state_batch[:, self.n_agents * self.action_repr_dim :self.n_agents * self.action_repr_dim  * self.history_len]
+                new_state_batch[:, self.n_agents * self.action_repr_dim * (self.history_len - 1):] = curr_step_batch
+                # new_state_batch[:,
+                # :self.n_agents * (self.history_len - 1)] = state_batch[:,
+                #                                            self.n_agents:self.n_agents * self.history_len]
+                # new_state_batch[:,
+                # self.n_agents * (self.history_len - 1):] = curr_step_batch
+                state_batch = new_state_batch
+            else:
+                state_batch = curr_step_batch
+
+            if self.using_mnist_states:
+                state_batch = self.build_mnist_state_from_classes(state_batch)
+
+            action_trajectory[iter] = torch.Tensor(actions)
+            # print(trajectory[iter])
+
+            obs_history[iter] = state_batch
+
+            # print(actions)
+            # print(actions.shape)
+            contribs_by_agent = actions.sum(dim=-1) # no subtract 1 because assumed always 0 with self.
+
+            # Note negative rewards might help with exploration in PG formulation
+            total_contrib = contribs_by_agent.sum(dim=0)
+            # print(contribs_by_agent)
+
+            # total_contrib = actions.sum(dim=0)
+            if self.pairwise_pd_only:
+                agent_rewards = -self.pairwise_coop_cost_to_self * contribs_by_agent
+
+            else:
+                common_payout_per_agent = total_contrib * self.contribution_factor / self.n_agents
+
+                # This right here is just the common contribution game part
+                agent_rewards = -contribs_by_agent + common_payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
+                agent_rewards -= self.pairwise_coop_cost_to_self * contribs_by_agent
+
+                # print(agent_rewards)
+
+                # Then we have the pairwise PD on top of it:
+                # Consider a base starting point of reward of (1,1) which is like DD
+                # Then any coop agent loses 1 and gives 2 to the other agent. Thus CD results in (0,3) and CC in (2,2)
+                # That's where this 2 and -1 comes from
+
+            # print(agent_rewards)
+
+            # below part is also part of the pairwise pd
+            for i in range(self.n_agents):
+                # print(agent_rewards.shape)
+                # print(actions[i])
+                # print(actions[i].reshape(self.n_agents, self.batch_size)) # issues with reshape
+                # print(actions[i].t())
+                agent_rewards += actions[i].t() * self.pairwise_coop_bonus_to_other_agent
+
+            # print(agent_rewards)
+
+            agent_rewards /= (self.n_agents - 1) # normalization of rewards - because with n agents, we now have n-1 contribs per player instead of 1 contrib
+
+            # print(agent_rewards)
+
+            agent_rewards -= adjustment_to_make_rewards_negative
+            rewards[iter] = agent_rewards.unsqueeze(-1)
+
+            # print(rewards[iter])
+
+            # print(state_batch)
+
+
+        next_val_history = self.get_next_val_history(th, vals, val_history, state_batch, iter + 1) # iter doesn't even matter here as long as > 0
+
+        # print(trajectory.shape)
+        # print(trajectory.float().shape)
+        # print(trajectory.float())
+
+        # print(trajectory.float().mean(dim=2).mean(dim=0))
+
+        # print_policies_for_all_states(th)
+        # print(trajectory[:, :, 1, :].squeeze(-1))
+
+        # print(rewards)
+
+
+        return action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history
+
+    def get_loss_helper(self, trajectory, rewards, policy_history, old_policy_history = None):
+
+        num_iters = len(trajectory)
+
+        discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
+                                  dim=0) / self.gamma
+
+        # Discounted rewards, not sum of rewards which G_t is
+        gamma_t_r_ts = rewards * discounts.reshape(-1, 1, 1,
+                                                   1)  # implicit broadcasting done by
+
+        G_ts = reverse_cumsum(gamma_t_r_ts  , dim=0)
+        # G_ts = reverse_cumsum(rewards * discounts.reshape(-1, 1, 1, 1), dim=0)
+        # G_ts gives you the inner sum of discounted rewards
+
+        # print(gamma_t_r_ts)
+        # print(G_ts)
+        # 1/0
+
+        # print(trajectory.shape)
+
+
+        p_act_given_state = trajectory.float() * policy_history + (
+                1 - trajectory.float()) * (1 - policy_history)
+
+        # p_act_given_state = torch.prod(p_act_given_state, dim=-1)
+
+
+        if old_policy_history is None:
+
+            # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
+            # and when defect 0 is taken, we take 1-policy = prob of defect
+
+            log_p_act = torch.log(p_act_given_state)
+            # print(log_p_act)
+            log_p_act = torch.sum(log_p_act, dim=-1)
+            log_p_act = log_p_act.unsqueeze(-1)
+            # print(log_p_act)
+
+            return G_ts, gamma_t_r_ts, log_p_act, discounts
+        else:
+            p_act_given_state = torch.prod(p_act_given_state, dim=-1)
+
+            p_act_given_state_old = trajectory.float() * old_policy_history + (
+                    1 - trajectory.float()) * (1 - old_policy_history)
+
+            p_act_given_state_old = torch.prod(p_act_given_state_old, dim=-1)
+
+
+            p_act_ratio = p_act_given_state / p_act_given_state_old.detach()
+            # TODO is this detach necessary? Pretty sure it is.
+
+
+            return G_ts, gamma_t_r_ts, p_act_ratio, discounts
+
 
 
 
 
 # Of course these updates assume we have access to the reward model.
-
-def contrib_game_with_func_approx(n, gamma=0.96, contribution_factor=1.6,
-                                  contribution_scale=False):
-    # Contribution game
-    dims = [n] * n  # now each agent gets a vector observation, a n dimensional vector where each element is the action
-    # of an agent, either 0 (defect) or 1 (coop) or 2 at the start of the game
-    # print(dims)
-
-    # Each player can choose to contribute 0 or contribute 1.
-    # If you contribute 0 you get reward 1 as a baseline (or avoid losing 1)
-    # The contribution is multiplied by the contribution factor c and redistributed
-    # evenly among all agents, including those who didn't contribute
-    # In the 2 player case, c needs to be > 1.5 otherwise CC isn't better than DD
-    # And c needs to be < 2 otherwise C is not dominated by D for a selfish individual
-    # But as the number of agents scales, we may consider scaling the contribution factor
-    # contribution_factor = 1.7
-
-    if contribution_scale:
-        contribution_factor = contribution_factor * n
-    else:
-        assert contribution_factor > 1
-
-    def Ls(th, num_iters=rollout_len):
-
-        # stochastic rollout instead of matrix inversion (exact case)
-        # helps significantly because even though it only saves ~n^3 time
-        # the base n is already exponential in the number of agents as state space blows up exponentially
-        # Rollouts can allow us to get 10, even 15 agents
-        # But for 20 or 30 we will need func approx as well
-
-        init_state = torch.Tensor([[init_state_representation] * n])  # repeat -1 (init state representation) n times, where n is num agents
-        # Every agent sees same state; P1 [action, P2 action, P3 action ...]
-
-        state = init_state
-
-        trajectory = torch.zeros((num_iters, n_agents), dtype=torch.int)
-        rewards = torch.zeros((num_iters, n_agents))
-        policy_history = torch.zeros((num_iters, n_agents))
-
-        discounts = torch.cumprod(gamma * torch.ones((num_iters)),dim=0) / gamma
-
-
-        # TODO: rollout can be refactored as a function
-        # Lots of this code can be refactored as functions
-
-
-        for iter in range(num_iters):
-
-            policies = torch.zeros(n_agents)
-
-            for i in range(n_agents):
-                if isinstance(th[i], torch.Tensor):
-
-                    if (state - init_state).sum() == 0:
-                        policy = torch.sigmoid(th[i])[-1]
-                    else:
-
-                        policy = torch.sigmoid(th[i])[game.int_from_bin_inttensor(state)]
-                else:
-                    policy = th[i](state)
-                # policy prob of coop between 0 and 1
-                policies[i] = policy
-
-            policy_history[iter] = policies
-
-            actions = torch.distributions.binomial.Binomial(probs=policies.detach()).sample()
-
-            state = torch.Tensor(actions)
-
-            trajectory[iter] = torch.Tensor(actions)
-
-            # Note negative rewards might help with exploration in PG formulation
-            total_contrib = sum(actions)
-            payout_per_agent = total_contrib * contribution_factor / n
-            agent_rewards = -actions + payout_per_agent  # if agent contributed 1, subtract 1, that's what the -actions does
-            agent_rewards -= adjustment_to_make_rewards_negative
-            rewards[iter] = agent_rewards
-
-        G_ts = reverse_cumsum(rewards * discounts.reshape(-1,1), dim=0)
-
-        # Discounted rewards, not sum of rewards which G_t is
-        gamma_t_r_ts = rewards * discounts.reshape(-1,1)  # implicit broadcasting done by numpy
-
-        p_act_given_state = trajectory.float() * policy_history + (
-                    1 - trajectory.float()) * (
-                                        1 - policy_history)  # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
-        # and when defect 0 is taken, we take 1-policy = prob of defect
-
-        log_p_act = torch.log(p_act_given_state)
-
-        # These are basically grad_i E[R_0^i] - naive learning loss
-        # no LOLA loss here yet
-        losses_nl = (log_p_act * G_ts).sum(dim=0)
-        # G_ts gives you the inner sum of discounted rewards
-
-        log_p_times_G_t_matrix = torch.zeros((n_agents, n_agents))
-        # so entry 0,0 is - (log_p_act[:,0] * G_ts[:,0]).sum(dim=0)
-        # entry 1,1 is - (log_p_act[:,1] * G_ts[:,1]).sum(dim=0)
-        # and so on
-        # entry 0,1 is - (log_p_act[:,0] * G_ts[:,1]).sum(dim=0)
-        # and so on
-        # Be careful with dimensions/not to mix them up
-
-
-        for i in range(n_agents):
-            for j in range(n_agents):
-
-                log_p_times_G_t_matrix[i][j] = (
-                            log_p_act[:, i] * G_ts[:, j]).sum(dim=0)
-        # Remember that the grad corresponds to the log_p and the R_t corresponds to the G_t
-        # We can switch the log_p and G_t (swap log_p i to j and vice versa) if we want to change order
-
-        # For the first term, my own derivation showed that
-        # grad_2 E(R_1) = (prop to) Sum (grad_2 (log pi_2)) G_t(1)
-
-        # For the grad_1 grad_2 term:
-        # the way this will work is that the ith entry (row) in this log_p_act_sums_0_to_t
-        # will be the sum of log probs from time 0 to time i
-        # Then the dimension of each row is the number of agents - we have the sum of log probs
-        # for each agent
-        # later we will product them (but in pairwise combinations!)
-
-        log_p_act_sums_0_to_t = torch.cumsum(log_p_act, dim=0)
-
-        # Remember also that for p1 you want grad_1 grad_2 of R_2 (P2's return)
-        # So then you also want grad_1 grad_3 of R_3
-        # and so on
-
-        grad_1_grad_2_matrix = torch.zeros((n_agents, n_agents))
-        for i in range(n_agents):
-            for j in range(n_agents):
-                grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,
-                                              j] * log_p_act_sums_0_to_t[:,
-                                                   i] * log_p_act_sums_0_to_t[:,
-                                                        j]).sum(dim=0)
-        # Here entry i j is grad_i grad_j E[R_j]
-
-        losses = losses_nl
-
-        grad_log_p_act = []
-        for i in range(n_agents):
-            # TODO could probably get this without taking grad, could be more efficient
-            example_grad = get_gradient(log_p_act[0, i], th[i]) if isinstance(
-                th[i], torch.Tensor) else torch.cat(
-                [get_gradient(log_p_act[0, i], param).flatten() for
-                 param in
-                 th[i].parameters()])
-            grad_len = len(example_grad)
-            grad_log_p_act.append(torch.zeros((rollout_len, grad_len)))
-
-        for i in range(n_agents):
-
-            for t in range(rollout_len):
-
-                grad_t = get_gradient(log_p_act[t, i], th[i]) if isinstance(
-                    th[i], torch.Tensor) else torch.cat(
-                    [get_gradient(log_p_act[t, i], param).flatten() for
-                     param in
-                     th[i].parameters()])
-
-
-                grad_log_p_act[i][t] = grad_t
-
-        return losses, grad_1_grad_2_matrix, log_p_times_G_t_matrix, G_ts, gamma_t_r_ts, log_p_act_sums_0_to_t, log_p_act, grad_log_p_act
-
-        # TODO
-        # Later use actor critic and other architectures
-
-    return dims, Ls
 
 
 def ipd(gamma=0.96):
@@ -1295,6 +1551,7 @@ class RNN(nn.Module):
         return out
 
 
+# TODO maybe this should go into the game definition itself and be part of that class instead of separate
 def init_custom(dims, using_nn=True, using_rnn=False, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
     th = []
     f_th = []
@@ -1324,8 +1581,14 @@ def init_custom(dims, using_nn=True, using_rnn=False, env='ipd', nn_hidden_size=
                                            extra_hidden_layers=nn_extra_hidden_layers,
                                            output_size=4, final_sigmoid=False, final_softmax=True) # TODO probably should dynamically code this
                 else:
-                    policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
-                              output_size=1)
+                    if env == 'hawkdove':
+                        policy_net = NeuralNet(input_size=dims[i],
+                                               hidden_size=nn_hidden_size,
+                                               extra_hidden_layers=nn_extra_hidden_layers,
+                                               output_size=n_agents)
+                    else:
+                        policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
+                                  output_size=1)
 
             f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
                                      track_higher_grads=True)
@@ -1451,6 +1714,7 @@ def print_additional_policy_info(G_ts, discounted_sum_of_adjustments, truncated_
 
 
 def build_all_combs_state_batch(n, contrib_game):
+
     state_batch = torch.cat((build_bin_matrix(n, 2 ** n),
                              torch.Tensor([init_state_representation] * n).reshape(1, -1)))
 
@@ -1460,9 +1724,7 @@ def build_all_combs_state_batch(n, contrib_game):
     if contrib_game.one_hot_states:
         # print(state_batch)
         # print(state_batch.t())
-        state_batch = contrib_game.build_one_hot_from_batch(state_batch.t(), one_at_a_time=False)
-
-    # print(state_batch)
+        state_batch = contrib_game.build_one_hot_from_batch(state_batch.t(), contrib_game.action_repr_dim, one_at_a_time=False)
 
 
     return state_batch
@@ -1475,8 +1737,12 @@ def print_value_info(vals, agent_num_i, contrib_game):
     if isinstance(vals[i], torch.Tensor):
         values = vals[i]
     else:
-        state_batch = build_all_combs_state_batch(contrib_game.n_agents * args.history_len, contrib_game)
+        if args.env == 'hawkdove':
+            dim = contrib_game.n_agents ** 2 * args.history_len
+        else:
+            dim = contrib_game.n_agents * args.history_len
 
+        state_batch = build_all_combs_state_batch(dim, contrib_game)
 
         values = vals[i](state_batch)
     print(values)
@@ -1493,7 +1759,12 @@ def print_policies_for_all_states(th, contrib_game):
             policy = torch.sigmoid(th[i])
 
         else:
-            state_batch = build_all_combs_state_batch(n_agents * args.history_len, contrib_game)
+            if args.env == 'hawkdove':
+                dim = contrib_game.n_agents ** 2 * args.history_len
+            else:
+                dim = contrib_game.n_agents * args.history_len
+
+            state_batch = build_all_combs_state_batch(dim, contrib_game)
             # if contrib_game.using_mnist_states :
             #     state_batch = contrib_game.build_mnist_state_from_classes(
             #         state_batch)
@@ -1693,7 +1964,7 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
     parser.add_argument("--env", type=str, default="ipd",
-                        choices=["ipd", "coin"])
+                        choices=["ipd", "coin", "hawkdove"])
     parser.add_argument("--using_samples", action="store_true",
                         help="True for samples (with rollout_len), false for exact gradient (using matrix inverse for infinite length rollout)")
     parser.add_argument("--using_DiCE", action="store_true",
@@ -1794,6 +2065,14 @@ if __name__ == "__main__":
     n_agents_list = args.n_agents_list
     # n_agents_list = [5, 8]
 
+    if args.env != "ipd":
+        if not using_samples:
+            raise NotImplementedError("No exact gradient calcs done for this env yet")
+        if not args.using_nn:
+            raise NotImplementedError("No tabular built for this env yet")
+
+
+
 
     for n_agents in n_agents_list:
 
@@ -1884,7 +2163,7 @@ if __name__ == "__main__":
                                     contribution_scale=contribution_scale)
 
 
-                    std = 1
+                    std = 0.1
                     if theta_init_mode == 'tft':
                         # std = 0.1
                         # Basically with std higher, you're going to need higher logit shift (but only slightly, really), in order to reduce the variance
@@ -1899,9 +2178,6 @@ if __name__ == "__main__":
                     # Using samples instead of exact here
 
 
-                    # dims, Ls = contrib_game_with_func_approx(n=n_agents, gamma=gamma,
-                    #                                          contribution_factor=contribution_factor,
-                    #                                          contribution_scale=contribution_scale)
 
                     if args.env == "coin":
                         from coin_game import CoinGameVec
@@ -1909,6 +2185,15 @@ if __name__ == "__main__":
                         game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size, history_len=args.history_len)
                         dims = game.dims_with_history
 
+                    elif args.env == "hawkdove":
+                        game = HawkDoveGame(n=n_agents, gamma=gamma,
+                                                batch_size=batch_size,
+                                                num_iters=rollout_len,
+                                                contribution_factor=contribution_factor,
+                                                contribution_scale=contribution_scale,
+                                                history_len=args.history_len,
+                                                using_mnist_states=mnist_states)
+                        dims = game.dims
                     else:
                         game = ContributionGame(n=n_agents, gamma=gamma,
                                                 batch_size=batch_size,
@@ -2147,8 +2432,8 @@ if __name__ == "__main__":
 
 
                                             # print("---Agent {} Rollout {}---".format(i, step))
-                                            # print_policies_for_all_states(mixed_thetas)
-                                            # print_values_for_all_states(mixed_vals)
+                                            # print_policies_for_all_states(mixed_thetas, game)
+                                            # print_values_for_all_states(mixed_vals, game)
 
 
                                 # Now calculate outer step using for each player a mix of the theta_primes and old thetas
@@ -2327,7 +2612,7 @@ if __name__ == "__main__":
                                                          discounted_sum_of_adjustments,
                                                          truncated_coop_payout,
                                                          inf_coop_payout, args.env)
-                            if args.env == 'ipd':
+                            if args.env == 'ipd' or args.env == 'hawkdove':
                                 print_policies_for_all_states(th, game)
                                 print_values_for_all_states(vals, game)
                         else:
@@ -2339,7 +2624,11 @@ if __name__ == "__main__":
 
                 # % comparison of average individual reward to max average individual reward
                 # This gives us a rough idea of how close to optimal (how close to full cooperation) we are.
-                reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / truncated_coop_payout)
+                if using_samples:
+                    coop_divisor = truncated_coop_payout
+                else:
+                    coop_divisor = inf_coop_payout
+                reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_divisor)
 
                 # print(reward_percent_of_max)
                 # print(G_ts_record)
