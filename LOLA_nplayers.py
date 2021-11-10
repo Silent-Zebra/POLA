@@ -938,7 +938,7 @@ class HawkDoveGame(ContributionGame):
     """
     def __init__(self, n, batch_size, num_iters, gamma=0.96, contribution_factor=1.6,
                  contribution_scale=False, history_len=1, using_mnist_states=False,
-                 one_hot_states=True, pairwise_pd_only=True, no_pairwise_pd=False):
+                 one_hot_states=True, pairwise_pd_only=False, no_pairwise_pd=False):
 
         self.n_agents = n
         self.gamma = gamma
@@ -961,10 +961,11 @@ class HawkDoveGame(ContributionGame):
         self.pairwise_reward_scale_relative_to_global_contrib = 1 # 0.25
         if self.no_pairwise_pd:
             self.pairwise_reward_scale_relative_to_global_contrib = 0
-        # self.pairwise_coop_bonus_to_other_agent = 2 * self.pairwise_reward_scale_relative_to_global_contrib
-        # self.pairwise_coop_cost_to_self = 1 * self.pairwise_reward_scale_relative_to_global_contrib
+        # self.pairwise_coop_bonus_to_other_agent = 2./3. * self.pairwise_reward_scale_relative_to_global_contrib
+        # self.pairwise_coop_cost_to_self = 1./3. * self.pairwise_reward_scale_relative_to_global_contrib
         self.pairwise_coop_bonus_to_other_agent = 0.8 * self.pairwise_reward_scale_relative_to_global_contrib
         self.pairwise_coop_cost_to_self = 0.2 * self.pairwise_reward_scale_relative_to_global_contrib
+        # 0.8 and 0.2 essentially is the contrib game I had before.
 
         # if one_hot_states and using_mnist_states:
         #     raise Exception("Not yet implemented")
@@ -1122,8 +1123,8 @@ class HawkDoveGame(ContributionGame):
         # print(new_tens.shape)
         curr_step_batch = new_tens.float()
 
-        if not one_at_a_time:
-            print(curr_step_batch)
+        # if not one_at_a_time:
+        #     print(curr_step_batch)
             # 1/0
 
         return curr_step_batch
@@ -1738,6 +1739,9 @@ def print_value_info(vals, agent_num_i, contrib_game):
         values = vals[i]
     else:
         if args.env == 'hawkdove':
+            if contrib_game.n_agents > 2:
+                print("Not printing to save space")  # TODO can make the printing more succinct by removing the useless states
+                return
             dim = contrib_game.n_agents ** 2 * args.history_len
         else:
             dim = contrib_game.n_agents * args.history_len
@@ -1760,6 +1764,9 @@ def print_policies_for_all_states(th, contrib_game):
 
         else:
             if args.env == 'hawkdove':
+                if contrib_game.n_agents > 2:
+                    print("Not printing to save space") # TODO can make the printing more succinct by removing the useless states
+                    return
                 dim = contrib_game.n_agents ** 2 * args.history_len
             else:
                 dim = contrib_game.n_agents * args.history_len
@@ -2010,6 +2017,10 @@ if __name__ == "__main__":
                         help="value updates on the inner dice loop")
     parser.add_argument("--two_way_clip", action="store_true",
                         help="use 2 way clipping instead of PPO clip")
+    parser.add_argument("--base_cf_no_scale", type=float, default=1.6,
+                        help="base contribution factor for no scaling (right now for 2 agents)")
+    parser.add_argument("--base_cf_scale", type=float, default=0.6,
+                        help="base contribution factor with scaling (right now for >2 agents)")
 
     args = parser.parse_args()
 
@@ -2078,10 +2089,10 @@ if __name__ == "__main__":
 
         assert n_agents >= 2
         if n_agents == 2:
-            contribution_factor = 1.6
+            contribution_factor = args.base_cf_no_scale #1.6
             contribution_scale = False
         else:
-            contribution_factor = 0.6
+            contribution_factor = args.base_cf_scale #0.6
             contribution_scale = True
 
         if batch_size == n_agents or batch_size == rollout_len or rollout_len == n_agents:
@@ -2383,6 +2394,8 @@ if __name__ == "__main__":
                                             if args.env == 'coin':
                                                 obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
                                                     mixed_thetas, mixed_vals, full_seq_obs=args.using_rnn)
+
+
                                                 dice_loss, _, values_loss = game.get_dice_loss(rewards, policy_history, val_history, next_val_history, use_nl_loss=args.inner_nl_loss)
                                             else:
                                                 action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
@@ -2443,6 +2456,8 @@ if __name__ == "__main__":
                                         raise Exception("Repeat_train not yet supported for coin game")
                                     obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
                                         mixed_thetas, mixed_vals, full_seq_obs=args.using_rnn)
+
+
                                     dice_loss, G_ts, values_loss = game.get_dice_loss(
                                         rewards, policy_history, val_history,
                                         next_val_history)
@@ -2546,20 +2561,31 @@ if __name__ == "__main__":
                     if using_samples:
                         if using_DiCE:
                             # Reevaluate to get the G_ts from synchronous play
-                            action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                                th, vals)
+                            if args.env == 'coin':
+                                if repeat_train_on_same_samples:
+                                    raise NotImplementedError("AGAIN repeat train not yet supported here")
+                                obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                    th, vals,
+                                    full_seq_obs=args.using_rnn)
 
-                            if repeat_train_on_same_samples:
-                                _, G_ts, _ = game.get_dice_loss(
-                                    action_trajectory, rewards,
-                                    policy_history, val_history,
-                                    next_val_history,
-                                    old_policy_history=policy_history)
-                            else:
-                                _, G_ts, _ = game.get_dice_loss(
-                                    action_trajectory, rewards,
-                                    policy_history, val_history,
+                                dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                    rewards, policy_history, val_history,
                                     next_val_history)
+                            else:
+                                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                                    th, vals)
+
+                                if repeat_train_on_same_samples:
+                                    _, G_ts, _ = game.get_dice_loss(
+                                        action_trajectory, rewards,
+                                        policy_history, val_history,
+                                        next_val_history,
+                                        old_policy_history=policy_history)
+                                else:
+                                    _, G_ts, _ = game.get_dice_loss(
+                                        action_trajectory, rewards,
+                                        policy_history, val_history,
+                                        next_val_history)
 
                         assert G_ts is not None
                         G_ts_record[epoch] = G_ts[0]
