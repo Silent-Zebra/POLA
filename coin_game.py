@@ -119,27 +119,42 @@ class CoinGameVec(gym.Env):
         # Compute rewards
         reward_red = np.zeros(self.batch_size)
         reward_blue = np.zeros(self.batch_size)
+
+        same_colour_coins_picked_this_step = 0
+        diff_colour_coins_picked_this_step = 0
+
+
         for i in range(self.batch_size):
             generate = False
             if self.red_coin[i]:
                 if self._same_pos(self.red_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_red[i] += 1
+                    same_colour_coins_picked_this_step += 1
                 if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_red[i] += -2
                     reward_blue[i] += 1
+                    diff_colour_coins_picked_this_step += 1
             else:
                 if self._same_pos(self.red_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_red[i] += 1
                     reward_blue[i] += -2
+                    diff_colour_coins_picked_this_step += 1
                 if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_blue[i] += 1
+                    same_colour_coins_picked_this_step += 1
 
             if generate:
                 self._generate_coin(i)
+
+        coins_picked_this_step = same_colour_coins_picked_this_step + diff_colour_coins_picked_this_step
+
+        avg_same_colour_coins = same_colour_coins_picked_this_step / self.batch_size
+        avg_diff_colour_coins = diff_colour_coins_picked_this_step / self.batch_size
+        avg_coins_picked_this_step = coins_picked_this_step / self.batch_size
 
         reward = [reward_red, reward_blue]
         state = self._generate_state().reshape((self.batch_size, -1))
@@ -147,7 +162,7 @@ class CoinGameVec(gym.Env):
         done = (self.step_count == self.max_steps)
         info = [{'available_actions': aa} for aa in self.available_actions]
 
-        return observations, reward, done, info
+        return observations, reward, done, info, avg_same_colour_coins, avg_diff_colour_coins, avg_coins_picked_this_step
 
 
 
@@ -199,10 +214,18 @@ class CoinGameVec(gym.Env):
         iter = 0
 
         # Policy test
-        sample_obs = torch.FloatTensor([[[0,0,0],[0,1,0],[0,0,0]],
-                                  [[0, 0, 0], [1, 0, 0], [0, 0, 0]],
-                                  [[0, 0, 0], [0, 0, 1], [0, 0, 0]],
-                                  [[0, 0, 0], [0, 0, 0], [0, 0, 0]]]).reshape(1, 36)
+        sample_obs = torch.FloatTensor([[[0,0,0],
+                                         [0,1,0],
+                                         [0,0,0]], # agent 1
+                                  [[0, 0, 0],
+                                   [1, 0, 0],
+                                   [0, 0, 0]], # agent 2
+                                  [[0, 0, 0],
+                                   [0, 0, 1],
+                                   [0, 0, 0]], # red coin - so we should ideally want agent 1 to move right and agent 2 to not move left
+                                  [[0, 0, 0],
+                                   [0, 0, 0],
+                                   [0, 0, 0]]]).reshape(1, 36)
 
         if full_seq_obs:
             sample_obs = sample_obs.reshape(1,1,36)
@@ -211,8 +234,12 @@ class CoinGameVec(gym.Env):
             policy = th[i](sample_obs)
             print(policy)
 
+        avg_same_colour_coins_picked_total = 0
+        avg_diff_colour_coins_picked_total = 0
+        avg_coins_picked_total = 0
 
         while not done:
+            # print("Iter: {}".format(iter))
             # obs.append(ob)
             # infos.append(info)
 
@@ -289,14 +316,21 @@ class CoinGameVec(gym.Env):
                         # print(policy)
 
 
-
                 # TODO make sure that this works with batches
                 action = torch.distributions.categorical.Categorical(probs=policy.detach()).sample()
 
                 # print(action)
 
+                # print(policy.shape)
+                # print(action.shape)
+
+                # policy = policy.squeeze(1)
+                # action = action.squeeze(-1)
 
                 action_prob = policy[torch.arange(0,self.batch_size,1), action]
+
+                # print(action_prob.shape)
+
 
                 # action_prob = policy[:, action.unsqueeze(dim=1)]
                 # action_prob = torch.gather(policy, 0, action.unsqueeze(dim=1))
@@ -330,7 +364,11 @@ class CoinGameVec(gym.Env):
             # print(actions)
 
 
-            ob, rew, done, info = self.step(actions.numpy())
+            ob, rew, done, info, avg_same_colour_coins, avg_diff_colour_coins, avg_coins_picked_this_step = self.step(actions.numpy())
+
+            avg_same_colour_coins_picked_total += avg_same_colour_coins
+            avg_diff_colour_coins_picked_total += avg_diff_colour_coins
+            avg_coins_picked_total += avg_coins_picked_this_step
 
             # for i in range(self.NUM_AGENTS):
             #     print(ob[i].reshape(self.batch_size, 4, 3, 3))
@@ -348,8 +386,11 @@ class CoinGameVec(gym.Env):
         # 1/0
         next_val_history = self.get_next_val_history(val_history, ending_state_values=state_value) # iter doesn't even matter here as long as > 0
 
-        return obs_history.unsqueeze(-1), act_history.unsqueeze(-1), rewards.unsqueeze(-1), policy_history.unsqueeze(-1), val_history, next_val_history
+        return obs_history.unsqueeze(-1), act_history.unsqueeze(-1), rewards.unsqueeze(-1), \
+               policy_history.unsqueeze(-1), val_history, next_val_history, \
+               avg_same_colour_coins_picked_total, avg_diff_colour_coins_picked_total, avg_coins_picked_total
                # next_val_history
+
 
     def get_loss_helper(self, rewards, policy_history):
         num_iters = self.max_steps
@@ -357,9 +398,11 @@ class CoinGameVec(gym.Env):
         discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
                                   dim=0) / self.gamma
 
+
         # Discounted rewards, not sum of rewards which G_t is
         gamma_t_r_ts = rewards * discounts.reshape(-1, 1, 1,
                                                    1)  # implicit broadcasting done by numpy
+
 
 
         G_ts = reverse_cumsum(gamma_t_r_ts, dim=0)
@@ -372,7 +415,9 @@ class CoinGameVec(gym.Env):
 
 
 
-    def get_dice_loss(self, rewards, policy_history, val_history, next_val_history):
+    def get_dice_loss(self, rewards, policy_history, val_history, next_val_history, use_nl_loss=False):
+
+        # raise Exception("refactor this code and use the same/consistent one with IPD, and move it to a separate function so you don't have duplicate code")
 
         G_ts, gamma_t_r_ts, log_p_act_or_p_act_ratio, discounts = self.get_loss_helper(
             rewards, policy_history)
@@ -406,5 +451,11 @@ class CoinGameVec(gym.Env):
         # print(R_ts.shape)
 
         values_loss = ((R_ts + (self.gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape) - val_history) ** 2).sum(dim=0).mean(dim=1)
+
+        if use_nl_loss:
+            # No LOLA/opponent shaping or whatever, just naive learning
+            # But this is not right because we aren't using the advantage estimation scheme.
+            regular_nl_loss = -(log_p_act_or_p_act_ratio * advantages).sum(dim=0).mean(dim=1)
+            return regular_nl_loss, G_ts, values_loss
 
         return dice_loss, G_ts, values_loss

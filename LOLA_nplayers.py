@@ -2392,7 +2392,9 @@ if __name__ == "__main__":
 
                                         for step in range(K):
                                             if args.env == 'coin':
-                                                obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                                obs_history, act_history, rewards, policy_history, \
+                                                val_history, next_val_history, avg_same_colour_coins_picked_total, \
+                                                avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
                                                     mixed_thetas, mixed_vals, full_seq_obs=args.using_rnn)
 
 
@@ -2454,7 +2456,9 @@ if __name__ == "__main__":
                                 if args.env == 'coin':
                                     if repeat_train_on_same_samples:
                                         raise Exception("Repeat_train not yet supported for coin game")
-                                    obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
+                                    obs_history, act_history, rewards, policy_history, val_history, \
+                                    next_val_history, avg_same_colour_coins_picked_total, avg_diff_colour_coins_picked_total, \
+                                    avg_coins_picked_total = game.rollout(
                                         mixed_thetas, mixed_vals, full_seq_obs=args.using_rnn)
 
 
@@ -2564,9 +2568,10 @@ if __name__ == "__main__":
                             if args.env == 'coin':
                                 if repeat_train_on_same_samples:
                                     raise NotImplementedError("AGAIN repeat train not yet supported here")
-                                obs_history, act_history, rewards, policy_history, val_history, next_val_history = game.rollout(
-                                    th, vals,
-                                    full_seq_obs=args.using_rnn)
+                                obs_history, act_history, rewards, policy_history, val_history, \
+                                next_val_history, avg_same_colour_coins_picked_total, \
+                                avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
+                                    th, vals, full_seq_obs=args.using_rnn)
 
                                 dice_loss, G_ts, values_loss = game.get_dice_loss(
                                     rewards, policy_history, val_history,
@@ -2646,6 +2651,12 @@ if __name__ == "__main__":
                                 policy = torch.sigmoid(th[i])
                                 print("Policy {}".format(i))
                                 print(policy)
+
+                        if args.env == 'coin':
+                            avg_same_colour_coins_picked_total, avg_diff_colour_coins_picked_total, avg_coins_picked_total
+                            print("Same Colour Coins Picked (avg over batches): {:.3f}".format(avg_same_colour_coins_picked_total))
+                            print("Diff Colour Coins Picked (avg over batches): {:.3f}".format(avg_diff_colour_coins_picked_total))
+                            print("Total Coins Picked (avg over batches): {:.3f}".format(avg_coins_picked_total))
 
 
                 # % comparison of average individual reward to max average individual reward
