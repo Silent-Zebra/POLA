@@ -945,6 +945,10 @@ class ContributionGame(Game):
                 log_p_act_or_p_act_ratio = pos_adv * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + \
                                            (1-pos_adv) * torch.maximum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1-clip_epsilon)
 
+                # print(policy_history)
+                # print(old_policy_history)
+                # print(advantages)
+                # print(log_p_act_or_p_act_ratio)
 
             # # Below was the weird clipping I was using prior to Sep 22
             # probs_to_clip = (advantages > 0).float()
@@ -2477,8 +2481,8 @@ if __name__ == "__main__":
 
 
                                             # print("---Agent {} Rollout {}---".format(i, step))
-                                            # print_policies_for_all_states(
-                                                # mixed_thetas)
+                                            # game.print_policies_for_all_states(
+                                            #     mixed_thetas)
 
 
                                     else: # no repeat train on samples, this is the original DiCE formulation

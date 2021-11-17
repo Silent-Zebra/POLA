@@ -200,25 +200,26 @@ class CoinGameVec(gym.Env, Game):
 
     def print_policy_and_value_info(self, th, vals):
         # Policy test
-        print("Simple One Step Example")
-        sample_obs = torch.FloatTensor([[[0, 0, 0],
-                                         [0, 1, 0],
-                                         [0, 0, 0]],  # agent 1
-                                        [[0, 0, 0],
-                                         [1, 0, 0],
-                                         [0, 0, 0]],  # agent 2
-                                        [[0, 0, 0],
-                                         [0, 0, 1],
-                                         [0, 0, 0]],
-                                        # red coin - so we should ideally want agent 1 to move right and agent 2 to not move left
-                                        [[0, 0, 0],
-                                         [0, 0, 0],
-                                         [0, 0, 0]]]).reshape(1, 36)
-
-        self.print_info_on_sample_obs(sample_obs, th, vals)
-
-
         if self.full_seq_obs:
+
+            print("Simple One Step Example")
+            sample_obs = torch.FloatTensor([[[0, 0, 0],
+                                             [0, 1, 0],
+                                             [0, 0, 0]],  # agent 1
+                                            [[0, 0, 0],
+                                             [1, 0, 0],
+                                             [0, 0, 0]],  # agent 2
+                                            [[0, 0, 0],
+                                             [0, 0, 1],
+                                             [0, 0, 0]],
+                                            # red coin - so we should ideally want agent 1 to move right and agent 2 to not move left
+                                            [[0, 0, 0],
+                                             [0, 0, 0],
+                                             [0, 0, 0]]]).reshape(1, 36)
+
+            self.print_info_on_sample_obs(sample_obs, th, vals)
+
+
             # This one meant to test the idea of p2 defects by taking p1 coin - will p1 retaliate?
             print("P2 Defects")
             sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
