@@ -204,16 +204,17 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
 
 
 class Game():
-    def __init__(self, n, history_len=1, state_type='one_hot'):
+    def __init__(self, n, init_state_representation, history_len=1,  state_type='one_hot'):
         self.n_agents = n
         self.state_type = state_type
         self.history_len = history_len
+        self.init_state_representation = init_state_representation
 
     def print_policy_info(self, policy, i):
 
         print("Policy {}".format(i+1))
-        print(
-            "(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
+        # print(
+        #     "(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
 
         print(policy)
 
@@ -233,17 +234,17 @@ class Game():
 
     def build_all_combs_state_batch(self):
 
-        if args.env == 'hawkdove':
-            if self.n_agents > 2:
-                print(
-                    "Not printing to save space")  # TODO can make the printing more succinct by removing the useless states
-                return
-            dim = self.n_agents ** 2 * self.history_len
+        # if args.env == 'hawkdove':
+        #     if self.n_agents > 2:
+        #         print(
+        #             "Not printing to save space")  # TODO can make the printing more succinct by removing the useless states
+        #         return
+        #     dim = self.n_agents ** 2 * self.history_len
+        # else:
+        if self.state_type == 'majorTD4':
+            dim = 2 * args.history_len
         else:
-            if self.state_type == 'majorTD4':
-                dim = 2 * args.history_len
-            else:
-                dim = self.n_agents * self.history_len
+            dim = self.n_agents * self.history_len
 
         state_batch = torch.cat((build_bin_matrix(dim, 2 ** dim),
                                  torch.Tensor(
@@ -1041,6 +1042,7 @@ class ContributionGame(Game):
             # No LOLA/opponent shaping or whatever, just naive learning
             # But this is not right because we aren't using the advantage estimation scheme.
             regular_nl_loss = -(log_p_act_or_p_act_ratio * advantages).sum(dim=0).mean(dim=1)
+            # Well I mean obviously if you do this there is no shaping because you can't differentiate through the inner update step...
             return regular_nl_loss, G_ts, values_loss
 
 
@@ -2065,7 +2067,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
     parser.add_argument("--env", type=str, default="ipd",
                         # choices=["ipd", "coin", "hawkdove"])
-                        choices=["ipd", "coin"])
+                        choices=["ipd", "coin", "imp"])
     parser.add_argument("--state_type", type=str, default="one_hot",
                         choices=['mnist', 'one_hot', 'majorTD4'],
                         help="For IPD/social dilemma, choose the state/obs representation type. One hot is the default. MNIST feeds in MNIST digits (0 or 1) instead of one hot class 0, class 1, etc.")
@@ -2118,6 +2120,7 @@ if __name__ == "__main__":
                         help="base contribution factor for no scaling (right now for 2 agents)")
     parser.add_argument("--base_cf_scale", type=float, default=0.6,
                         help="base contribution factor with scaling (right now for >2 agents)")
+    parser.add_argument("--std", type=float, default=0.1, help="standard deviation for initialization of policy/value parameters")
 
     args = parser.parse_args()
 
@@ -2130,6 +2133,8 @@ if __name__ == "__main__":
     if args.set_seed:
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
+
+    std = args.std
 
     # Repeats for each hyperparam setting
     # repeats = 10
@@ -2270,7 +2275,7 @@ if __name__ == "__main__":
                                     contribution_scale=contribution_scale)
 
 
-                    std = 0.1
+                    # std = 0.1
                     if theta_init_mode == 'tft':
                         # std = 0.1
                         # Basically with std higher, you're going to need higher logit shift (but only slightly, really), in order to reduce the variance
@@ -2302,6 +2307,12 @@ if __name__ == "__main__":
                                                 history_len=args.history_len,
                                                 using_mnist_states=mnist_states)
                         dims = game.dims
+                    elif args.env == "imp":
+                        from matching_pennies import IteratedMatchingPennies
+                        game = IteratedMatchingPennies(n=n_agents, batch_size=batch_size,
+                                                    num_iters=rollout_len, history_len=args.history_len)
+                        dims = game.dims
+
                     else:
                         game = ContributionGame(n=n_agents, gamma=gamma,
                                                 batch_size=batch_size,
@@ -2496,6 +2507,18 @@ if __name__ == "__main__":
 
 
                                                 dice_loss, _, values_loss = game.get_dice_loss(rewards, policy_history, val_history, next_val_history, use_nl_loss=args.inner_nl_loss)
+                                            elif args.env == 'imp':
+                                                obs_history, act_history, rewards, policy_history, \
+                                                val_history, next_val_history = game.rollout(
+                                                    mixed_thetas, mixed_vals)
+
+                                                dice_loss, _, values_loss = game.get_dice_loss(
+                                                    act_history, rewards, policy_history,
+                                                    val_history,
+                                                    next_val_history,
+                                                    use_nl_loss=args.inner_nl_loss)
+
+
                                             else:
                                                 action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                                                     mixed_thetas, mixed_vals)
@@ -2562,6 +2585,18 @@ if __name__ == "__main__":
                                     dice_loss, G_ts, values_loss = game.get_dice_loss(
                                         rewards, policy_history, val_history,
                                         next_val_history)
+                                elif args.env == 'imp':
+                                    if repeat_train_on_same_samples:
+                                        raise Exception("Repeat_train not yet supported for coin game")
+                                    obs_history, act_history, rewards, policy_history, \
+                                    val_history, next_val_history = game.rollout(
+                                        mixed_thetas, mixed_vals)
+
+                                    dice_loss, _, values_loss = game.get_dice_loss(
+                                        act_history, rewards, policy_history,
+                                        val_history,
+                                        next_val_history,
+                                        use_nl_loss=args.inner_nl_loss)
                                 else:
                                     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                                         mixed_thetas, mixed_vals)
@@ -2673,6 +2708,18 @@ if __name__ == "__main__":
                                 dice_loss, G_ts, values_loss = game.get_dice_loss(
                                     rewards, policy_history, val_history,
                                     next_val_history)
+                            elif args.env == 'imp':
+                                if repeat_train_on_same_samples:
+                                    raise Exception(
+                                        "Repeat_train not yet supported for coin game")
+                                obs_history, act_history, rewards, policy_history, \
+                                val_history, next_val_history = game.rollout(
+                                    th, vals)
+
+                                dice_loss, G_ts, values_loss = game.get_dice_loss(
+                                    act_history, rewards, policy_history,
+                                    val_history, next_val_history,
+                                    use_nl_loss=args.inner_nl_loss)
                             else:
                                 action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                                     th, vals)
@@ -2740,6 +2787,11 @@ if __name__ == "__main__":
                                                          discounted_sum_of_adjustments,
                                                          truncated_coop_payout,
                                                          inf_coop_payout, args.env)
+
+                            # if args.env == "imp":
+                            #     print("Printing Policies not yet implemented")
+                            #     continue
+
                             game.print_policy_and_value_info(th, vals)
 
                             # if args.env == 'ipd' or args.env == 'hawkdove':
