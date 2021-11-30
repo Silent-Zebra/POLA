@@ -26,7 +26,11 @@ theta_init_mode = 'standard'
 
 
 
-
+def simple_fwd_solver(f, init_point, precision=1e-5):
+    prev_point, curr_point = init_point, f(init_point)
+    while np.linalg.norm(prev_point - curr_point) > precision:
+        prev_point, curr_point = curr_point, f(curr_point)
+    return curr_point
 
 
 def bin_inttensor_from_int(x, n):
@@ -201,6 +205,10 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
             L_all.append(L_i)
 
         return L_all
+
+        # TODO Right now these are positive values (e.g. rewards) rather than losses, which is somewhat confusing
+        # Should perhaps make things back to the original negative... I see why it was that way before.
+        # however have to be careful with the grad calculations
 
     return dims, Ls
 
@@ -1794,7 +1802,46 @@ def get_gradient(function, param):
     grad = torch.autograd.grad(function, param, create_graph=True)[0]
     return grad
 
+def get_jacobian(terms, param):
+    jac = []
+    for term in terms:
+        # print(term)
+        # print(terms)
+        grad = torch.autograd.grad(term, param, retain_graph=True, create_graph=False)[0]
+        jac.append(grad)
+        # print(grad)
+    # print(jac)
+    jac = torch.vstack(jac)
+    # print(jac)
+    return jac
 
+
+def get_th_copy(th):
+    static_th_copy = []
+    for i in range(len(th)):
+        if isinstance(th[i], torch.Tensor):
+            static_th_copy.append(th[i].detach().clone().requires_grad_())
+        else:
+            raise NotImplementedError(
+                "To be implemented, use copyNN function (need reconstruction of NNs?)")
+    return static_th_copy
+
+
+def build_policy_dist(coop_probs):
+    # This version just for ipdn/exact.
+    defect_probs = 1 - coop_probs
+    policy_dist = torch.vstack((coop_probs, defect_probs)).t()
+    # we need to do this because kl_div needs the full distribution
+    # and the way we have parameterized policy here is just a coop prob
+    # if you used categorical/multinomial you wouldn't have to go through this
+    # The way torch kldiv works is that the first dimension is the batch, the last dimension is the probabilities.
+    # print(policy_dist)
+    # 1/0
+    # The reshape just makes so that batchmean occurs over the first axis
+    policy_dist = policy_dist.reshape(1, -1, 2)
+    # print(policy_dist.shape)
+    # 1/0
+    return policy_dist
 
 
 def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
@@ -1938,25 +1985,206 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                         grads.append(grad_2_return_1[i][i])
 
         else:
-            # Look at pg 12, Stable Opponent Shaping paper
-            # This is literally the first line of the second set of equations
-            # sum over all j != i of grad_j L_i * grad_j L_j
-            # Then that's your lola term once you differentiate it with respect to theta_i
-            # Then add the naive learning term
-            # But this is the SOS formulation, not the LOLA one. SOS differentiates through
-            # more than the LOLA one does.
-            terms = [sum([torch.dot(grad_L[j][i], grad_L[j][j])
-                          for j in range(n) if j != i]) for i in range(n)]
+            if args.inner_exact_prox:
+                static_th_copy = get_th_copy(th)
 
-            lola_terms = [
-                # lr_policies[i] *
-                eta * get_gradient(terms[i], th[i])
-                for i in range(n)]
+                for i in range(n):
+                    new_th = get_th_copy(static_th_copy)
 
-            nl_terms = [grad_L[i][i]
-                        for i in range(n)]
+                    other_terms = []
 
-            grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
+                    for j in range(n):
+                        if j != i:
+                            inner_lookahead_th = get_th_copy(static_th_copy)
+
+                            # Inner loop essentially
+                            # Each player on the copied th does a naive update (doesn't have to be differentiable here because of fixed point/IFT)
+                            if not isinstance(new_th[j], torch.Tensor):
+                                raise NotImplementedError
+                            else:
+
+                                # For each other player, do the prox operator
+                                # We will do this by gradient descent on the proximal objective
+                                # Until we reach a fixed point, which tells use we have reached
+                                # the minimum of the prox objective, which is our prox operator result
+                                fixed_point_reached = False
+                                iters = 0
+                                max_iters = 100
+                                threshold = 1e-6
+                                curr_pol = inner_lookahead_th[j].detach().clone()
+                                # prev_pol = None
+                                while not fixed_point_reached:
+
+                                    inner_rews = gradient_terms_or_Ls(inner_lookahead_th)
+
+                                    policy_dist = build_policy_dist(torch.sigmoid(inner_lookahead_th[j]))
+                                    target_policy_dist = build_policy_dist(torch.sigmoid(static_th_copy[j].detach()))
+
+                                    kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
+                                                        target=target_policy_dist,
+                                                        reduction='batchmean',
+                                                        log_target=False)
+                                    # Again we have this awkward reward formulation
+                                    loss_j = - inner_rews[j] + args.beta * kl_div
+                                    # No eta here because we are going to solve it exactly anyway
+
+                                    with torch.no_grad():
+                                        inner_lookahead_th[j] -= lr_policies[j] * get_gradient(loss_j, inner_lookahead_th[j])
+
+                                    prev_pol = curr_pol.detach().clone()
+                                    curr_pol = inner_lookahead_th[j].detach().clone()
+
+                                    iters += 1
+
+                                    policy_dist = build_policy_dist(torch.sigmoid(curr_pol))
+                                    target_policy_dist = build_policy_dist(torch.sigmoid(prev_pol))
+
+                                    # print(policy_dist)
+                                    # print(target_policy_dist)
+
+                                    curr_prev_pol_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
+                                                        target=target_policy_dist,
+                                                        reduction='batchmean',
+                                                        log_target=False)
+                                    # print(curr_prev_pol_div)
+
+                                    if curr_prev_pol_div < threshold or iters > max_iters:
+                                        print(curr_prev_pol_div)
+                                        print(iters)
+                                        print(torch.sigmoid(prev_pol))
+                                        print(torch.sigmoid(curr_pol))
+                                        if iters >= max_iters:
+                                            print("Reached max prox iters. Something probably went wrong.")
+                                        fixed_point_reached = True
+
+                                new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
+                                # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
+                                # And then differentiate through the entire process
+                                # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unrol
+
+                            outer_losses = gradient_terms_or_Ls(new_th)
+
+                            nl_grad = get_gradient(outer_losses[i], new_th[i])
+
+                            grad2_V1 = get_gradient(outer_losses[i], new_th[j])
+
+                            rews_for_ift = gradient_terms_or_Ls(
+                                inner_lookahead_th) # Note that new_th has only agent j updated
+                            # Also note that this is exactly what we did earlier, do the exact same thing
+                            # This should also work with new_th instead of inner_lookahead_th here (TODO test, if not, something wrong)
+                            kl_div = torch.nn.functional.kl_div(
+                                input=torch.log(inner_lookahead_th[j]),
+                                target=static_th_copy[j].detach(),
+                                reduction='batchmean',
+                                log_target=False)
+                            # Again we have this awkward reward formulation
+                            loss_j = - rews_for_ift[j] + args.beta * kl_div
+                            f_at_fixed_point = inner_lookahead_th[j] - lr_policies[j] * get_gradient(loss_j, inner_lookahead_th[j])
+
+                            # print(f_at_fixed_point)
+
+                            grad0_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[i])
+                            grad1_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[j])
+
+                            # This inverse can fail when init_state_rep = 1
+                            # print(grad1_f)
+                            mat_to_inv = torch.eye(th[j].shape[0]) - grad1_f
+                            # print(mat_to_inv)
+                            if mat_to_inv[-1,-1] == 0:
+                                mat_to_inv[-1, -1] += 1e-6 # for numerical stability/to prevent inverse failing
+
+                            grad_th1_th2prime = torch.inverse(mat_to_inv) @ grad0_f
+
+                            # print(torch.inverse(torch.eye(th[j].shape[0]) - grad1_f))
+
+                            other_terms.append(grad2_V1 @ grad_th1_th2prime)
+
+                    with torch.no_grad():
+                        new_th[i] += lr_policies[i] * (nl_grad + sum(other_terms))
+
+                    # with torch.no_grad():
+                    #     new_th[i] += lr_policies[i] * (nl_grad + grad2_V1 @ grad_th1_th2prime )
+
+                    # Finally we rewrite the th by copying from the created copies
+                    th[i] = new_th[i]
+                return th, losses, G_ts, nl_terms, None, grad_2_return_1
+
+
+            elif args.no_taylor_approx:
+                # Do DiCE style rollouts except we can calculate exact Ls like follows
+
+                # So what we will do is each player will calc losses
+                # First copy the th
+                static_th_copy = get_th_copy(th)
+
+                for i in range(n):
+                    new_th = get_th_copy(static_th_copy)
+
+                    # Then each player calcs the losses
+                    inner_losses = gradient_terms_or_Ls(new_th)
+
+
+                    # nl_grads = [get_gradient(inner_losses[i], new_th[i]) for i in range(n)]
+
+                    for j in range(n):
+                        # Inner loop essentially
+                        # Each player on the copied th does a naive update (must be differentiable!)
+                        if j != i:
+                            if not isinstance(new_th[j], torch.Tensor):
+                                raise NotImplementedError
+                                # k = 0
+                                # for param in th[i].parameters():
+                                #     param += lr_policies[i] * grads[i][k]
+                                #     k += 1
+                            else:
+                                # print(torch.sigmoid(new_th[j]))
+                                new_th[j] = new_th[j] + lr_policies[j] * eta * get_gradient(inner_losses[j], new_th[j])
+                                # print(torch.sigmoid(new_th[j]))
+                                # print(get_gradient(torch.sigmoid(new_th[j][0]), new_th[i]))
+
+
+                    # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
+                    outer_losses = gradient_terms_or_Ls(new_th)
+
+                    # Finally each player updates their own (copied) th
+
+                    # print(get_gradient(outer_losses[i], new_th[i]))
+                    #
+                    # losses2 = gradient_terms_or_Ls(static_th_copy)
+                    # print(get_gradient(losses2[i], static_th_copy[i]))
+                    # 1/0
+
+                    with torch.no_grad():
+                        new_th[i] += lr_policies[i] * get_gradient(outer_losses[i], new_th[i])
+
+
+
+                    # Finally we rewrite the th by copying from the created copies
+                    th[i] = new_th[i]
+
+                return th, losses, G_ts, nl_terms, None, grad_2_return_1
+
+            else:
+
+                # Look at pg 12, Stable Opponent Shaping paper
+                # This is literally the first line of the second set of equations
+                # sum over all j != i of grad_j L_i * grad_j L_j
+                # Then that's your lola term once you differentiate it with respect to theta_i
+                # Then add the naive learning term
+                # But this is the SOS formulation, not the LOLA one. SOS differentiates through
+                # more than the LOLA one does.
+                terms = [sum([torch.dot(grad_L[j][i], grad_L[j][j])
+                              for j in range(n) if j != i]) for i in range(n)]
+
+                lola_terms = [
+                    # lr_policies[i] *
+                    eta * get_gradient(terms[i], th[i])
+                    for i in range(n)]
+
+                nl_terms = [grad_L[i][i]
+                            for i in range(n)]
+
+                grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
 
     else:  # Naive Learning
         grads = [grad_L[i][i] for i in range(n)]
@@ -2020,7 +2248,7 @@ if __name__ == "__main__":
                         help="same learning rate across all policies for now")
     parser.add_argument("--lr_values_scale", type=float, default=0.5,
                         help="scale lr_values relative to lr_policies")
-    parser.add_argument("--inner_steps", type=int, default=1)
+    parser.add_argument("--inner_steps", type=int, default=1, help="inner loop steps for DiCE")
     parser.add_argument("--outer_steps", type=int, default=1)
     parser.add_argument("--using_nn", action="store_true",
                         help="use neural net/func approx instead of tabular policy")
@@ -2052,7 +2280,10 @@ if __name__ == "__main__":
     parser.add_argument("--beta", type=float, default=1, help="beta determines how strong we want the KL penalty to be")
     parser.add_argument("--print_inner_rollouts", action="store_true")
     parser.add_argument("--print_outer_rollouts", action="store_true")
-
+    parser.add_argument("--inner_exact_prox", action="store_true",
+                        help="find exact prox solution in inner loop instead of x # of inner steps")
+    parser.add_argument("--no_taylor_approx", action="store_true",
+                        help="experimental: try DiCE style, direct update of policy and diff through it")
     args = parser.parse_args()
 
     torch.autograd.set_detect_anomaly(True)
@@ -2726,6 +2957,7 @@ if __name__ == "__main__":
                             th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
                                 update_th(th, gradient_terms, lr_policies, eta, algos, using_samples=using_samples)
                     else:
+
                         th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
                             update_th(th, Ls, lr_policies, eta, algos, using_samples=using_samples)
 
