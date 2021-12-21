@@ -146,13 +146,21 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
 
         init_pc = torch.zeros(n)
         for i in range(n):
+
+
             # p_i_0 = torch.sigmoid(th[i][0:1])
             if init_state_representation == 1:
-                p_i_0 = torch.sigmoid(th[i][
-                                      -2]) # force all coop at the beginning in this special case
+                if args.ill_condition:
+                    p_i_0 = torch.sigmoid((ill_cond_matrix @ th[i])[-2])
+                else:
+                    p_i_0 = torch.sigmoid(th[i][
+                                          -2]) # force all coop at the beginning in this special case
             else:
-                p_i_0 = torch.sigmoid(th[i][
-                                          -1])  # so start state is at the end, different from the 2p ipd formulation
+                if args.ill_condition:
+                    p_i_0 = torch.sigmoid((ill_cond_matrix @ th[i])[-1])
+                else:
+                    p_i_0 = torch.sigmoid(th[i][
+                                              -1])  # so start state is at the end, different from the 2p ipd formulation
             # Why did I do it this way? It's inconsistent with the 2p ipd setup
             # print(torch.sigmoid(th[i][-1]))
             init_pc[i] = p_i_0
@@ -173,7 +181,10 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
         # Probabilities in the states other than the start state
         all_p_is = torch.zeros((n, state_space - 1))
         for i in range(n):
-            p_i = torch.sigmoid(th[i][0:-1])
+            if args.ill_condition:
+                p_i = torch.sigmoid((ill_cond_matrix @ th[i])[0:-1])
+            else:
+                p_i = torch.sigmoid(th[i][0:-1])
             # p_i = torch.reshape(torch.sigmoid(th[i][0:-1]), (-1, 1)) # or just -1 instead of -1,1
             all_p_is[i] = p_i
         # print(all_p_is.shape)
@@ -1455,65 +1466,65 @@ class HawkDoveGame(ContributionGame):
 
 # Of course these updates assume we have access to the reward model.
 
-
-def ipd(gamma=0.96):
-    dims = [5, 5]
-    payout_mat_1 = torch.Tensor([[-2, -5], [0, -4]])
-
-    # payout_mat_1 = torch.Tensor([[-1, -3], [0, -2]])
-    payout_mat_2 = torch.t(payout_mat_1)
-
-    def Ls(th):
-        # Theta denotes (unnormalized) action probabilities at each of the states:
-        # start CC CD DC DD
-
-        # Action prob at start of the game (higher val = more likely to coop)
-        p_1_0 = torch.sigmoid(th[0][0:1])
-        p_2_0 = torch.sigmoid(th[1][0:1])
-
-        # Prob of each of the first states (after first action), CC CD DC DD
-        p = torch.cat([p_1_0 * p_2_0,
-                       p_1_0 * (1 - p_2_0),
-                       (1 - p_1_0) * p_2_0,
-                       (1 - p_1_0) * (1 - p_2_0)])
-        # print(p)
-
-        # Probabilities in the states other than the start state
-        p_1 = torch.reshape(torch.sigmoid(th[0][1:5]), (4, 1))
-        p_2 = torch.reshape(torch.sigmoid(th[1][1:5]), (4, 1))
-
-        # Concat the col vectors above into a matrix
-        # After multiplication, here we are creating the state transition matrix
-        # So we first have p_1 * p_2, coop prob * coop prob, in each of the 4 states
-        # Then we have CD prob in each of the 4 states, then DC prob, then DD prob
-        # So it is like:
-        #    CC CD DC DD
-        # CC x  x  x  x
-        # CD y  x  x  x
-        # DC x  x  x  x
-        # DD x  x  x  x
-        # Where the row is the start state, and the column is the next state. So entry
-        # y above denotes transition prob from CD to CC
-        P = torch.cat([p_1 * p_2,
-                       p_1 * (1 - p_2),
-                       (1 - p_1) * p_2,
-                       (1 - p_1) * (1 - p_2)], dim=1)
-
-        # Now this is the matrix inversion for calculating the value function
-        # (solving the bellman equation)
-        # and of course first have p for the first step
-        # The M is the (negative) discounted number of state visitations (?)
-        # so it's like the IPD played in perpetuity but with discounting
-        M = torch.matmul(p, torch.inverse(torch.eye(4) - gamma * P))
-
-        # Then dot product with the payout for each player to return the 'loss'
-        # which is actually just a negative reward
-        # but over the course of the entire game naturally
-        L_1 = torch.matmul(M, torch.reshape(payout_mat_1, (4, 1)))
-        L_2 = torch.matmul(M, torch.reshape(payout_mat_2, (4, 1)))
-        return [L_1, L_2]
-
-    return dims, Ls
+# Replaced by ipdn instead.
+# def ipd(gamma=0.96):
+#     dims = [5, 5]
+#     payout_mat_1 = torch.Tensor([[-2, -5], [0, -4]])
+#
+#     # payout_mat_1 = torch.Tensor([[-1, -3], [0, -2]])
+#     payout_mat_2 = torch.t(payout_mat_1)
+#
+#     def Ls(th):
+#         # Theta denotes (unnormalized) action probabilities at each of the states:
+#         # start CC CD DC DD
+#
+#         # Action prob at start of the game (higher val = more likely to coop)
+#         p_1_0 = torch.sigmoid(th[0][0:1])
+#         p_2_0 = torch.sigmoid(th[1][0:1])
+#
+#         # Prob of each of the first states (after first action), CC CD DC DD
+#         p = torch.cat([p_1_0 * p_2_0,
+#                        p_1_0 * (1 - p_2_0),
+#                        (1 - p_1_0) * p_2_0,
+#                        (1 - p_1_0) * (1 - p_2_0)])
+#         # print(p)
+#
+#         # Probabilities in the states other than the start state
+#         p_1 = torch.reshape(torch.sigmoid(th[0][1:5]), (4, 1))
+#         p_2 = torch.reshape(torch.sigmoid(th[1][1:5]), (4, 1))
+#
+#         # Concat the col vectors above into a matrix
+#         # After multiplication, here we are creating the state transition matrix
+#         # So we first have p_1 * p_2, coop prob * coop prob, in each of the 4 states
+#         # Then we have CD prob in each of the 4 states, then DC prob, then DD prob
+#         # So it is like:
+#         #    CC CD DC DD
+#         # CC x  x  x  x
+#         # CD y  x  x  x
+#         # DC x  x  x  x
+#         # DD x  x  x  x
+#         # Where the row is the start state, and the column is the next state. So entry
+#         # y above denotes transition prob from CD to CC
+#         P = torch.cat([p_1 * p_2,
+#                        p_1 * (1 - p_2),
+#                        (1 - p_1) * p_2,
+#                        (1 - p_1) * (1 - p_2)], dim=1)
+#
+#         # Now this is the matrix inversion for calculating the value function
+#         # (solving the bellman equation)
+#         # and of course first have p for the first step
+#         # The M is the (negative) discounted number of state visitations (?)
+#         # so it's like the IPD played in perpetuity but with discounting
+#         M = torch.matmul(p, torch.inverse(torch.eye(4) - gamma * P))
+#
+#         # Then dot product with the payout for each player to return the 'loss'
+#         # which is actually just a negative reward
+#         # but over the course of the entire game naturally
+#         L_1 = torch.matmul(M, torch.reshape(payout_mat_1, (4, 1)))
+#         L_2 = torch.matmul(M, torch.reshape(payout_mat_2, (4, 1)))
+#         return [L_1, L_2]
+#
+#     return dims, Ls
 
 
 # Gradient computations for each algorithm.
@@ -1843,7 +1854,25 @@ def build_policy_dist(coop_probs):
     # 1/0
     return policy_dist
 
-def prox_f(th_to_build_on, static_th_copy, Ls, j, iters = 0, max_iters = 100, threshold = 1e-6):
+def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build):
+    # Note the policy and targets are individual agent ones
+    if args.ill_condition:
+        policy_dist = build_policy_dist(
+            torch.sigmoid(ill_cond_matrix @ policy_to_build))
+
+        target_policy_dist = build_policy_dist(
+            torch.sigmoid(ill_cond_matrix @ target_pol_to_build.detach()))
+    else:
+        policy_dist = build_policy_dist(torch.sigmoid(policy_to_build))
+        target_policy_dist = build_policy_dist(
+            torch.sigmoid(target_pol_to_build.detach()))
+    return policy_dist, target_policy_dist
+
+
+
+# TODO perhaps the inner_loop step can pass the lr to this prox_f and we can scale the inner lr by eta, if we want more control over it
+
+def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0, max_iters = 1000, threshold = 1e-8):
     # For each other player, do the prox operator
     # (this function just does on a single player, it should be used within the loop iterating over all players)
     # We will do this by gradient descent on the proximal objective
@@ -1857,20 +1886,26 @@ def prox_f(th_to_build_on, static_th_copy, Ls, j, iters = 0, max_iters = 100, th
 
         inner_rews = Ls(th_to_build_on)
 
-        policy_dist = build_policy_dist(torch.sigmoid(th_to_build_on[j]))
-        target_policy_dist = build_policy_dist(
-            torch.sigmoid(static_th_copy[j].detach()))
+        # if args.ill_condition:
+        #     policy_dist = build_policy_dist(torch.sigmoid((ill_cond_matrix @ th_to_build_on)[j]))
+        #
+        #     target_policy_dist = build_policy_dist(torch.sigmoid((ill_cond_matrix @ kl_div_target_th.detach())[j]))
+        # else:
+        #     policy_dist = build_policy_dist(torch.sigmoid(th_to_build_on[j]))
+        #     target_policy_dist = build_policy_dist(
+        #         torch.sigmoid(kl_div_target_th[j].detach()))
+        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(th_to_build_on[j], kl_div_target_th[j])
 
         kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
                                             target=target_policy_dist,
                                             reduction='batchmean',
                                             log_target=False)
         # Again we have this awkward reward formulation
-        loss_j = - inner_rews[j] + args.beta * kl_div
+        loss_j = - inner_rews[j] + args.inner_beta * kl_div
         # No eta here because we are going to solve it exactly anyway
 
         with torch.no_grad():
-            th_to_build_on[j] -= lr_policies[j] * get_gradient(loss_j,
+            th_to_build_on[j] -= prox_f_step_sizes[j] * get_gradient(loss_j,
                                                                th_to_build_on[
                                                                        j])
 
@@ -1879,8 +1914,10 @@ def prox_f(th_to_build_on, static_th_copy, Ls, j, iters = 0, max_iters = 100, th
 
         iters += 1
 
-        policy_dist = build_policy_dist(torch.sigmoid(curr_pol))
-        target_policy_dist = build_policy_dist(torch.sigmoid(prev_pol))
+        # policy_dist = build_policy_dist(torch.sigmoid(curr_pol))
+        # target_policy_dist = build_policy_dist(torch.sigmoid(prev_pol))
+
+        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol)
 
         # print(policy_dist)
         # print(target_policy_dist)
@@ -1893,6 +1930,8 @@ def prox_f(th_to_build_on, static_th_copy, Ls, j, iters = 0, max_iters = 100, th
         # print(curr_prev_pol_div)
 
         if curr_prev_pol_div < threshold or iters > max_iters:
+            if args.print_proxloops_info:
+                print("Inner prox iters used: {}".format(iters))
             # print(curr_prev_pol_div)
             # print(iters)
             # print(torch.sigmoid(prev_pol))
@@ -1908,6 +1947,110 @@ def prox_f(th_to_build_on, static_th_copy, Ls, j, iters = 0, max_iters = 100, th
     # And then differentiate through the entire process
     # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unrol
 
+
+def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i, j):
+    rews_for_ift = gradient_terms_or_Ls(
+        inner_lookahead_th)  # Note that new_th has only agent j updated
+    # Also note that this is exactly what we did earlier, do the exact same thing
+
+    # nl_grad = get_gradient(outer_losses[i], new_th[i])
+
+    grad2_V1 = get_gradient(- rews_for_ift[i], inner_lookahead_th[j])
+
+    # We use inner_lookahead_th instead of new_th because inner_lookahead has only th[j] updated
+    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(inner_lookahead_th[j], kl_div_target_th[j])
+    # policy_dist = build_policy_dist(
+    #     torch.sigmoid(inner_lookahead_th[j]))
+    # target_policy_dist = build_policy_dist(
+    #     torch.sigmoid(kl_div_target_th[j].detach()))
+
+
+    kl_div = torch.nn.functional.kl_div(
+        input=torch.log(policy_dist),
+        target=target_policy_dist,
+        reduction='batchmean',
+        log_target=False)
+
+    # Again we have this awkward reward formulation
+    loss_j = - rews_for_ift[j] + args.inner_beta * kl_div
+    f_at_fixed_point = inner_lookahead_th[j] - lr_policies[j] * get_gradient(
+        loss_j, inner_lookahead_th[j])
+
+    print_info = args.print_proxloops_info
+    if print_info:
+        print(inner_lookahead_th[j])
+        print(get_gradient(loss_j, inner_lookahead_th[j]))
+        print(f_at_fixed_point)
+
+    # print(f_at_fixed_point)
+
+    grad0_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[i])
+    grad1_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[j])
+
+    # This inverse can fail when init_state_rep = 1
+    # print(grad1_f)
+    mat_to_inv = torch.eye(th[j].shape[0]) - grad1_f
+    if print_info:
+        print(mat_to_inv)
+    if mat_to_inv[-1, -1] == 0:
+        print("UHOH")
+        mat_to_inv[
+            -1, -1] += 1e-6  # for numerical stability/to prevent inverse failing
+
+    if print_info:
+        print(torch.inverse(mat_to_inv))
+    grad_th1_th2prime = torch.inverse(mat_to_inv) @ grad0_f
+
+    if print_info:
+        print(grad2_V1)
+
+        print(grad_th1_th2prime)
+
+        print(grad2_V1 @ grad_th1_th2prime)
+
+    # print(torch.inverse(torch.eye(th[j].shape[0]) - grad1_f))
+
+    return grad2_V1, grad_th1_th2prime
+
+
+def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i, n, prox_f_step_sizes):
+    other_terms = []
+    new_th = get_th_copy(starting_th)
+
+    # i is the agent doing the rolling out of the other agents
+    for j in range(n):
+        if j != i:
+            # Inner lookahead th has only agent j's th being updated
+            inner_lookahead_th = get_th_copy(starting_th)
+
+            # Inner loop essentially
+            # Each player on the copied th does a naive update (doesn't have to be differentiable here because of fixed point/IFT)
+            if not isinstance(inner_lookahead_th[j], torch.Tensor):
+                raise NotImplementedError
+            else:
+
+                # For each other player, do the prox operator
+
+                inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
+                                               gradient_terms_or_Ls, j, prox_f_step_sizes)
+                # new_th[j] = prox_f(inner_lookahead_th, starting_th, gradient_terms_or_Ls, j)
+                # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
+                # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
+                # And then differentiate through the entire process
+                # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unrol
+
+            grad2_V1, grad_th1_th2prime = get_ift_terms(inner_lookahead_th,
+                                                        kl_div_target_th,
+                                                        gradient_terms_or_Ls, i, j)
+
+            other_terms.append(grad2_V1 @ grad_th1_th2prime)
+
+            new_th[j] = inner_lookahead_th[j]
+
+    return new_th, other_terms
+
+
+# TODO There might be an issue with init state rep != 2 when using exact gradients
 
 def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
     n = len(th)
@@ -2017,7 +2160,7 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
             # because the j i switch was done during the construction of the matrix
             # TODO allow for different eta across agents?
             # And then account for that here.
-            lola_terms = [sum([eta * grad_2_return_1[i][j].t() @
+            lola_terms = [sum([eta * lr_policies[i] * grad_2_return_1[i][j].t() @
                                grad_1_grad_2_return_2[i][j].t() for j in
                                range(n) if j != i]) for i in range(n)]
 
@@ -2054,167 +2197,132 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                 static_th_copy = get_th_copy(th)
 
                 for i in range(n):
-                    new_th = get_th_copy(static_th_copy)
+                    if args.outer_exact_prox:
 
-                    other_terms = []
+                        new_th = get_th_copy(static_th_copy)
 
-                    for j in range(n):
-                        if j != i:
-                            inner_lookahead_th = get_th_copy(static_th_copy)
+                        # SO we need to put this in a loop, do inner_exact_loop_step, then take one outer grad step on proximal objective, redo, etc.
+                        # until diff between outer loop policies is small so outer loop has reached some fixed point.
+                        # Think carefully about the warm start here and whether this loop all works out well.
 
-                            # Inner loop essentially
-                            # Each player on the copied th does a naive update (doesn't have to be differentiable here because of fixed point/IFT)
-                            if not isinstance(inner_lookahead_th[j], torch.Tensor):
-                                raise NotImplementedError
-                            else:
+                        fixed_point_reached = False
 
-                                # # For each other player, do the prox operator
-                                # # We will do this by gradient descent on the proximal objective
-                                # # Until we reach a fixed point, which tells use we have reached
-                                # # the minimum of the prox objective, which is our prox operator result
-                                # fixed_point_reached = False
-                                # iters = 0
-                                # max_iters = 100
-                                # threshold = 1e-6
-                                # curr_pol = inner_lookahead_th[j].detach().clone()
-                                # # prev_pol = None
-                                # while not fixed_point_reached:
-                                #
-                                #     inner_rews = gradient_terms_or_Ls(inner_lookahead_th)
-                                #
-                                #     policy_dist = build_policy_dist(torch.sigmoid(inner_lookahead_th[j]))
-                                #     target_policy_dist = build_policy_dist(torch.sigmoid(static_th_copy[j].detach()))
-                                #
-                                #     kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
-                                #                         target=target_policy_dist,
-                                #                         reduction='batchmean',
-                                #                         log_target=False)
-                                #     # Again we have this awkward reward formulation
-                                #     loss_j = - inner_rews[j] + args.beta * kl_div
-                                #     # No eta here because we are going to solve it exactly anyway
-                                #
-                                #     with torch.no_grad():
-                                #         inner_lookahead_th[j] -= lr_policies[j] * get_gradient(loss_j, inner_lookahead_th[j])
-                                #
-                                #     prev_pol = curr_pol.detach().clone()
-                                #     curr_pol = inner_lookahead_th[j].detach().clone()
-                                #
-                                #     iters += 1
-                                #
-                                #     policy_dist = build_policy_dist(torch.sigmoid(curr_pol))
-                                #     target_policy_dist = build_policy_dist(torch.sigmoid(prev_pol))
-                                #
-                                #     # print(policy_dist)
-                                #     # print(target_policy_dist)
-                                #
-                                #     curr_prev_pol_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
-                                #                         target=target_policy_dist,
-                                #                         reduction='batchmean',
-                                #                         log_target=False)
-                                #     # print(curr_prev_pol_div)
-                                #
-                                #     if curr_prev_pol_div < threshold or iters > max_iters:
-                                #         # print(curr_prev_pol_div)
-                                #         # print(iters)
-                                #         # print(torch.sigmoid(prev_pol))
-                                #         # print(torch.sigmoid(curr_pol))
-                                #         if iters >= max_iters:
-                                #             print("Reached max prox iters. Something probably went wrong.")
-                                #         fixed_point_reached = True
+                        iters = 0
+                        threshold = 1e-8
+                        max_iters = 5000
 
-                                inner_lookahead_th[j] = prox_f(inner_lookahead_th, static_th_copy, gradient_terms_or_Ls, j)
-                                # new_th[j] = prox_f(inner_lookahead_th, static_th_copy, gradient_terms_or_Ls, j)
-                                # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
-                                # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
-                                # And then differentiate through the entire process
-                                # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unrol
+                        curr_pol = new_th[i].detach().clone()
+                        # prev_pol = None
+                        while not fixed_point_reached:
 
-                            rews_for_ift = gradient_terms_or_Ls(
-                                inner_lookahead_th)  # Note that new_th has only agent j updated
-                            # Also note that this is exactly what we did earlier, do the exact same thing
+                            print_info = False
 
-                            # nl_grad = get_gradient(outer_losses[i], new_th[i])
+                            if print_info:
+                                print("loop start")
+                                for j in range(len(new_th)):
+                                    if j != i:
+                                        print("Agent {}".format(j))
+                                        print(torch.sigmoid(new_th[j]))
 
-                            grad2_V1 = get_gradient(- rews_for_ift[i], inner_lookahead_th[j])
 
-                            # We use inner_lookahead_th instead of new_th because inner_lookahead has only th[j] updated
+                            new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy, gradient_terms_or_Ls, i, n,
+                                                                        prox_f_step_sizes=lr_policies * eta)
+
+                            if print_info:
+                                for j in range(len(new_th)):
+                                    if j != i:
+                                        print("Agent {}".format(j))
+                                        print(torch.sigmoid(new_th[j]))
+
+
+                            outer_rews = gradient_terms_or_Ls(new_th)
+
+                            # nl_grad = get_gradient(- outer_rews[i], new_th[i])
+                            # if args.ill_condition:
+                            #     policy_dist = build_policy_dist(
+                            #         torch.sigmoid((ill_cond_matrix @ new_th)[i]))
+                            #     target_policy_dist = build_policy_dist(
+                            #         torch.sigmoid((ill_cond_matrix @ static_th_copy.detach())[i]))
+                            # else:
+                            #     policy_dist = build_policy_dist(
+                            #         torch.sigmoid(new_th[i]))
+                            #     target_policy_dist = build_policy_dist(
+                            #         torch.sigmoid(static_th_copy[i].detach()))
+
+                            policy_dist, target_policy_dist = build_policy_and_target_policy_dists(new_th[i], static_th_copy[i])
+
                             kl_div = torch.nn.functional.kl_div(
-                                input=torch.log(inner_lookahead_th[j]),
-                                target=static_th_copy[j].detach(),
+                                input=torch.log(policy_dist),
+                                target=target_policy_dist,
                                 reduction='batchmean',
                                 log_target=False)
+
                             # Again we have this awkward reward formulation
-                            loss_j = - rews_for_ift[j] + args.beta * kl_div
-                            f_at_fixed_point = inner_lookahead_th[j] - lr_policies[j] * get_gradient(loss_j, inner_lookahead_th[j])
+                            loss_i = - outer_rews[i] + args.outer_beta * kl_div
 
-                            # print(f_at_fixed_point)
+                            with torch.no_grad():
+                                # new_th[i] -= lr_policies[i] * get_gradient(loss_i, new_th[i])
+                                new_th[i] -= lr_policies[i] * (get_gradient(loss_i, new_th[i]) + sum(other_terms))
 
-                            grad0_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[i])
-                            grad1_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[j])
+                            prev_pol = curr_pol.detach().clone()
+                            curr_pol = new_th[i].detach().clone()
 
-                            # This inverse can fail when init_state_rep = 1
-                            # print(grad1_f)
-                            mat_to_inv = torch.eye(th[j].shape[0]) - grad1_f
-                            # print(mat_to_inv)
-                            if mat_to_inv[-1,-1] == 0:
-                                mat_to_inv[-1, -1] += 1e-6 # for numerical stability/to prevent inverse failing
+                            iters += 1
 
-                            grad_th1_th2prime = torch.inverse(mat_to_inv) @ grad0_f
+                            if print_info:
+                                print(kl_div)
+                                print("Curr pol")
+                                print(torch.sigmoid(curr_pol))
+                                print("Iter:")
+                                print(iters)
 
-                            # print(torch.inverse(torch.eye(th[j].shape[0]) - grad1_f))
+                            # policy_dist = build_policy_dist(
+                            #     torch.sigmoid(curr_pol))
+                            # target_policy_dist = build_policy_dist(
+                            #     torch.sigmoid(prev_pol))
+                            policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol)
 
-                            other_terms.append(grad2_V1 @ grad_th1_th2prime)
+                            curr_prev_pol_div = torch.nn.functional.kl_div(
+                                input=torch.log(policy_dist),
+                                target=target_policy_dist,
+                                reduction='batchmean',
+                                log_target=False)
+                            # print(curr_prev_pol_div)
 
-                    if args.outer_exact_prox:
-                        # Actually, work through the derivation carefully including the proximal term here.
-                        # Is there a nontrivial interaction with the proximal term?
+                            if curr_prev_pol_div < threshold or iters > max_iters:
+                                print("Outer prox iters used: {}".format(iters))
+                                if iters >= max_iters:
+                                    print("Reached max prox iters")
+                                fixed_point_reached = True
 
-                        outer_rews = gradient_terms_or_Ls(new_th)
+                        th[i] = new_th[i]
 
-                        nl_grad = get_gradient(- outer_rews[i], new_th[i])
-
-                        for j in range(n):
-                            if j != i:
-                                raise NotImplementedError # Not yet done
-
-                                grad2_V1 = get_gradient(- outer_rews[i], new_th[j])
-                                # TODO THINK CAREFULLY here about what happens with n>2 agents. New_th vs inner_lookahead and what happens
-                                # We use inner_lookahead_th instead of new_th because inner_lookahead has only th[j] updated
-                                kl_div = torch.nn.functional.kl_div(
-                                    input=torch.log(new_th[j]),
-                                    target=static_th_copy[j].detach(),
-                                    reduction='batchmean',
-                                    log_target=False)
-                                # Again we have this awkward reward formulation
-                                loss_j = - outer_rews[j] + args.beta * kl_div
-                                f_at_fixed_point = new_th[j] - lr_policies[j] * get_gradient(loss_j, new_th[j])
-
-                                # print(f_at_fixed_point)
-
-                                grad0_f = get_jacobian(f_at_fixed_point,
-                                                       new_th[i])
-                                grad1_f = get_jacobian(f_at_fixed_point,
-                                                       new_th[j])
-
-                                # This inverse can fail when init_state_rep = 1
-                                # print(grad1_f)
-                                mat_to_inv = torch.eye(th[j].shape[0]) - grad1_f
-                                # print(mat_to_inv)
-                                if mat_to_inv[-1, -1] == 0:
-                                    mat_to_inv[
-                                        -1, -1] += 1e-6  # for numerical stability/to prevent inverse failing
-
-                                grad_th1_th2prime = torch.inverse(
-                                    mat_to_inv) @ grad0_f
-
-                                # print(torch.inverse(torch.eye(th[j].shape[0]) - grad1_f))
-
-                                other_terms.append(grad2_V1 @ grad_th1_th2prime)
+                        # while not fixed_point_reached:
+                        #
+                        #
+                        #     new_th, other_terms = inner_exact_loop_step(static_th_copy, gradient_terms_or_Ls, i, n)
+                        #
+                        #
+                        #     outer_rews = gradient_terms_or_Ls(new_th)
+                        #
+                        #     nl_grad = get_gradient(- outer_rews[i], new_th[i])
+                        #
+                        #     with torch.no_grad():
+                        #         new_th[i] -= lr_policies[i] * (
+                        #                     nl_grad + sum(other_terms))
 
 
-
-                        pass
                     else:
+
+                        # new_th will hold the original player i theta, but for all other players j,
+                        # their new theta after they do their INDIVIDUAL inner loop update in which
+                        # they only update their own theta (and not all the other players) (which is really player i imagining the other players individually doing updates)
+
+                        new_th, other_terms = inner_exact_loop_step(static_th_copy, static_th_copy, gradient_terms_or_Ls, i, n,
+                                                                    prox_f_step_sizes=lr_policies * eta)
+
+
+                        # else:
                         # This is just a single gradient step on the outer step:
                         # That is, we calc the inner loop exactly
                         # Use IFT to differentiate through and then get the outer gradient
@@ -2301,8 +2409,7 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                               for j in range(n) if j != i]) for i in range(n)]
 
                 lola_terms = [
-                    # lr_policies[i] *
-                    eta * get_gradient(terms[i], th[i])
+                    lr_policies[i] * eta * get_gradient(terms[i], th[i])
                     for i in range(n)]
 
                 nl_terms = [grad_L[i][i]
@@ -2367,7 +2474,9 @@ if __name__ == "__main__":
                         help="list of number of agents to try")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--etas", nargs="+", type=float, default=[20, 12],
-                        help="list of etas to try")
+                        help="list of etas to try. Eta is for the original LOLA setting how much the step size of the inner step is. "
+                             "Here I use it as a scaling factor on the lr_policies to make the inner step larger. "
+                             "For prox LOLA, this is a scaling on the inner loop prox_f step size")
     parser.add_argument("--lr_policies", type=float, default=0.05,
                         help="same learning rate across all policies for now")
     parser.add_argument("--lr_values_scale", type=float, default=0.5,
@@ -2401,7 +2510,8 @@ if __name__ == "__main__":
     parser.add_argument("--base_cf_scale", type=float, default=0.6,
                         help="base contribution factor with scaling (right now for >2 agents)")
     parser.add_argument("--std", type=float, default=0.1, help="standard deviation for initialization of policy/value parameters")
-    parser.add_argument("--beta", type=float, default=1, help="beta determines how strong we want the KL penalty to be")
+    parser.add_argument("--inner_beta", type=float, default=1, help="beta determines how strong we want the KL penalty to be")
+    parser.add_argument("--outer_beta", type=float, default=1, help="beta determines how strong we want the KL penalty to be")
     parser.add_argument("--print_inner_rollouts", action="store_true")
     parser.add_argument("--print_outer_rollouts", action="store_true")
     parser.add_argument("--inner_exact_prox", action="store_true",
@@ -2410,6 +2520,13 @@ if __name__ == "__main__":
                         help="find exact prox solution in outer loop instead of x # of outer steps")
     parser.add_argument("--no_taylor_approx", action="store_true",
                         help="experimental: try DiCE style, direct update of policy and diff through it")
+    parser.add_argument("--ill_condition", action="store_true",
+                        help="in exact case, add preconditioning to make the problem ill-conditioned. Used to test if prox-lola helps")
+    parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.3, 0.3, 3., 1.],
+                        help="The ill conditioning matrix (diagonal entries) to use for the ill_condition. Dim should match dims[0] (i.e. 2^n + 1)")
+    parser.add_argument("--print_proxloops_info", action="store_true",
+                        help="print some additional info for the prox loop iters")
+
     args = parser.parse_args()
 
     torch.autograd.set_detect_anomaly(True)
@@ -2428,7 +2545,16 @@ if __name__ == "__main__":
     # repeats = 10
     repeats = args.repeats
 
+    if args.outer_exact_prox:
+        assert args.inner_exact_prox
+
     # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
+
+    if args.ill_condition:
+        # ill_cond_matrix = torch.diag(torch.tensor([3., 0.3, 0.3, 3., 1.]))
+        ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
+        # torch.eye(dims[0]) @
+        print(ill_cond_matrix)
 
     # For each repeat/run:
     num_epochs = args.num_epochs
@@ -2496,8 +2622,9 @@ if __name__ == "__main__":
         # lr_values = lr_policies * 0.2
 
         # etas = [0.05 * 20, 0.05 * 12]  # for both exact and pg formulations
-        etas = [eta * args.lr_policies for eta in args.etas]
+        # etas = [eta * args.lr_policies for eta in args.etas]
         # etas = args.etas * args.lr_policies
+        etas = args.etas
 
         if using_DiCE:
             etas = args.etas  # [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
@@ -2592,7 +2719,7 @@ if __name__ == "__main__":
                                                 contribution_factor=contribution_factor,
                                                 contribution_scale=contribution_scale,
                                                 history_len=args.history_len,
-                                                using_mnist_states=mnist_states)
+                                                using_mnist_states=args.mnist_states)
                         dims = game.dims
                     elif args.env == "imp":
                         from matching_pennies import IteratedMatchingPennies
@@ -3201,6 +3328,9 @@ if __name__ == "__main__":
                                 policy = torch.sigmoid(th[i])
                                 print("Policy {}".format(i+1))
                                 print(policy)
+                                if args.ill_condition:
+                                    print("TRANSFORMED Policy {}".format(i))
+                                    print(torch.sigmoid(ill_cond_matrix @ th[i]))
 
                         if args.env == 'coin':
                             print("Same Colour Coins Picked (avg over batches): {:.3f}".format(avg_same_colour_coins_picked_total))
