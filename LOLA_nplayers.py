@@ -2551,10 +2551,46 @@ if __name__ == "__main__":
     # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
     if args.ill_condition:
-        # ill_cond_matrix = torch.diag(torch.tensor([3., 0.3, 0.3, 3., 1.]))
-        ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
+        # ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
+
+        # ill_cond_matrix = torch.tensor([[-2., -1., 0., 0., 0.],
+        #                                 [0., 0.1, -0.1, 0., 0.],
+        #                                 [0., 0., -0.1, -0.5, 0.],
+        #                                 [0., 0., 0., -0.3, -1.],
+        #                                 [0., 0., 0., 0., -1.]])
+        # ill_cond_matrix = torch.tensor([[1., 1./2., 1./3., 1./4., 1./5.],
+        #                                 [1./2., 1./3., 1./4., 1./5., 1./6.],
+        #                                 [1./3., 1./4., 1./5., 1./6., 1./7.],
+        #                                 [1./4., 1./5., 1./6., 1./7., 1./8.],
+        #                                 [1./5., 1./6., 1./7., 1./8., 1./9.]])
+        # ill_cond_matrix = torch.tensor([[2., 1.8, 1.6, 1.4, 1.2],
+        #                                 [1.8, 1.6, 1.4, 1.2, 1.],
+        #                                 [1.6, 1.4, 1.2, 1., 0.8],
+        #                                 [1.4, 1.2, 1., 0.8, 0.6],
+        #                                 [1.2, 1., 0.8, 0.6, 0.4]]) # this is not full rank...
+        # ill_cond_matrix = torch.tensor([[2., 1.6, 1.2, 0.8, 0.4],
+        #                                 [1.6, 1.3, 1., 0.7, 0.4],
+        #                                 [1.2, 1., 0.8, 0.6, 0.4],
+        #                                 [0.8, 0.7, 0.6, 0.5, 0.4],
+        #                                 [0.4, 0.4, 0.4, 0.4, 0.4]]) / 2. # also singular...
+        # ill_cond_matrix = torch.tensor([[2., 1.8, 1., 0.6, 0.2],
+        #                                 [1.6, 1.6, 1., 1., 0.4],
+        #                                 [1.2, 1.4, 1., 1.2, 0.8],
+        #                                 [0.8, 1.2, 1., 1.6, 1.6],
+        #                                 [0.4, 1., 1., 1.8, 2.0]])
+        ill_cond_matrix = torch.tensor([[3., 0., 0., 0., 0.],
+                                        [0., 0.1, 0, 0., 0.],
+                                        [0., 0., 0.1, 0, 0.],
+                                        [0., 0., 0., 0.1, 0.],
+                                        [0., 0., 0., 0., 1.]])
+        # ill_cond_matrix = torch.tensor([[1., 0., 0., 0.9, 0.],
+        #                                 [0., 1, 0.9, 0., 0.],
+        #                                 [0., 0.9, 1., 0, 0.],
+        #                                 [0.9, 0., 0., 1., 0.],
+        #                                 [0., 0., 0., 0., 1.]]) # this isn't bad condition, just confuses states a lot
         # torch.eye(dims[0]) @
         print(ill_cond_matrix)
+        print(torch.inverse(ill_cond_matrix))
 
     # For each repeat/run:
     num_epochs = args.num_epochs
@@ -3329,7 +3365,7 @@ if __name__ == "__main__":
                                 print("Policy {}".format(i+1))
                                 print(policy)
                                 if args.ill_condition:
-                                    print("TRANSFORMED Policy {}".format(i))
+                                    print("TRANSFORMED Policy {}".format(i+1))
                                     print(torch.sigmoid(ill_cond_matrix @ th[i]))
 
                         if args.env == 'coin':
