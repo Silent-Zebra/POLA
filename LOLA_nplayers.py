@@ -16,10 +16,9 @@ import argparse
 
 import random
 
+from timeit import default_timer as timer
 
 
-# init_state_representation = 2  # Change here if you want different number to represent the initial state
-# rollout_len = 50
 
 theta_init_modes = ['standard', 'tft']
 theta_init_mode = 'standard'
@@ -2634,8 +2633,9 @@ if __name__ == "__main__":
             raise NotImplementedError("No tabular built for this env yet")
 
 
-
     for n_agents in n_agents_list:
+
+        start = timer()
 
         assert n_agents >= 2
         if n_agents == 2:
@@ -3320,6 +3320,8 @@ if __name__ == "__main__":
 
                     if epoch % print_every == 0:
                         print("Epoch: " + str(epoch))
+                        curr = timer()
+                        print("Time Elapsed: {:.1f} seconds".format(curr - start))
                         print("Eta: " + str(eta))
                         print("Batch size: " + str(batch_size))
                         if using_DiCE:
