@@ -1929,7 +1929,7 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
         # print(curr_prev_pol_div)
 
         if curr_prev_pol_div < threshold or iters > max_iters:
-            if args.print_proxloops_info:
+            if args.print_prox_loops_info:
                 print("Inner prox iters used: {}".format(iters))
             # print(curr_prev_pol_div)
             # print(iters)
@@ -1975,7 +1975,7 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i,
     f_at_fixed_point = inner_lookahead_th[j] - lr_policies[j] * get_gradient(
         loss_j, inner_lookahead_th[j])
 
-    print_info = args.print_proxloops_info
+    print_info = args.print_prox_loops_info
     if print_info:
         print(inner_lookahead_th[j])
         print(get_gradient(loss_j, inner_lookahead_th[j]))
@@ -2047,6 +2047,83 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i
             new_th[j] = inner_lookahead_th[j]
 
     return new_th, other_terms
+
+
+def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, other_terms, curr_iter, max_iters, threshold):
+    if print_info:
+        for j in range(len(new_th)):
+            if j != i:
+                print("Agent {}".format(j))
+                print(torch.sigmoid(new_th[j]))
+
+    outer_rews = Ls(new_th)
+
+    # nl_grad = get_gradient(- outer_rews[i], new_th[i])
+    # if args.ill_condition:
+    #     policy_dist = build_policy_dist(
+    #         torch.sigmoid((ill_cond_matrix @ new_th)[i]))
+    #     target_policy_dist = build_policy_dist(
+    #         torch.sigmoid((ill_cond_matrix @ static_th_copy.detach())[i]))
+    # else:
+    #     policy_dist = build_policy_dist(
+    #         torch.sigmoid(new_th[i]))
+    #     target_policy_dist = build_policy_dist(
+    #         torch.sigmoid(static_th_copy[i].detach()))
+
+    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+        new_th[i], static_th_copy[i])
+
+    kl_div = torch.nn.functional.kl_div(
+        input=torch.log(policy_dist),
+        target=target_policy_dist,
+        reduction='batchmean',
+        log_target=False)
+
+    # Again we have this awkward reward formulation
+    loss_i = - outer_rews[i] + args.outer_beta * kl_div
+
+    with torch.no_grad():
+        if other_terms is not None:
+            # new_th[i] -= lr_policies[i] * get_gradient(loss_i, new_th[i])
+            new_th[i] -= lr_policies[i] * (
+                        get_gradient(loss_i, new_th[i]) + sum(other_terms))
+        else:
+            new_th[i] -= lr_policies[i] * (get_gradient(loss_i, new_th[i]))
+
+    prev_pol = curr_pol.detach().clone()
+    curr_pol = new_th[i].detach().clone()
+
+
+    if print_info:
+        print(kl_div)
+        print("Curr pol")
+        print(torch.sigmoid(curr_pol))
+        print("Iter:")
+        print(curr_iter)
+
+    # policy_dist = build_policy_dist(
+    #     torch.sigmoid(curr_pol))
+    # target_policy_dist = build_policy_dist(
+    #     torch.sigmoid(prev_pol))
+    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+        curr_pol, prev_pol)
+
+    curr_prev_pol_div = torch.nn.functional.kl_div(
+        input=torch.log(policy_dist),
+        target=target_policy_dist,
+        reduction='batchmean',
+        log_target=False)
+    # print(curr_prev_pol_div)
+
+    fixed_point_reached = False
+    if curr_prev_pol_div < threshold or curr_iter > max_iters:
+        print("Outer prox iters used: {}".format(curr_iter))
+        if curr_iter >= max_iters:
+            print("Reached max prox iters")
+        fixed_point_reached = True
+
+    return new_th, curr_pol, fixed_point_reached
+
 
 
 # TODO There might be an issue with init state rep != 2 when using exact gradients
@@ -2192,8 +2269,12 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                         grads.append(grad_2_return_1[i][i])
 
         else:
+
+            print_info = args.print_prox_loops_info
+
             if args.inner_exact_prox:
                 static_th_copy = get_th_copy(th)
+
 
                 for i in range(n):
                     if args.outer_exact_prox:
@@ -2205,16 +2286,11 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                         # Think carefully about the warm start here and whether this loop all works out well.
 
                         fixed_point_reached = False
-
-                        iters = 0
-                        threshold = 1e-8
-                        max_iters = 5000
+                        outer_iters = 0
 
                         curr_pol = new_th[i].detach().clone()
                         # prev_pol = None
                         while not fixed_point_reached:
-
-                            print_info = False
 
                             if print_info:
                                 print("loop start")
@@ -2227,72 +2303,11 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                             new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy, gradient_terms_or_Ls, i, n,
                                                                         prox_f_step_sizes=lr_policies * eta)
 
-                            if print_info:
-                                for j in range(len(new_th)):
-                                    if j != i:
-                                        print("Agent {}".format(j))
-                                        print(torch.sigmoid(new_th[j]))
+                            outer_iters += 1
+                            new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(print_info, i, new_th, static_th_copy, gradient_terms_or_Ls, curr_pol,
+                                                                                other_terms, outer_iters, args.prox_max_iters, args.prox_threshold)
 
-
-                            outer_rews = gradient_terms_or_Ls(new_th)
-
-                            # nl_grad = get_gradient(- outer_rews[i], new_th[i])
-                            # if args.ill_condition:
-                            #     policy_dist = build_policy_dist(
-                            #         torch.sigmoid((ill_cond_matrix @ new_th)[i]))
-                            #     target_policy_dist = build_policy_dist(
-                            #         torch.sigmoid((ill_cond_matrix @ static_th_copy.detach())[i]))
-                            # else:
-                            #     policy_dist = build_policy_dist(
-                            #         torch.sigmoid(new_th[i]))
-                            #     target_policy_dist = build_policy_dist(
-                            #         torch.sigmoid(static_th_copy[i].detach()))
-
-                            policy_dist, target_policy_dist = build_policy_and_target_policy_dists(new_th[i], static_th_copy[i])
-
-                            kl_div = torch.nn.functional.kl_div(
-                                input=torch.log(policy_dist),
-                                target=target_policy_dist,
-                                reduction='batchmean',
-                                log_target=False)
-
-                            # Again we have this awkward reward formulation
-                            loss_i = - outer_rews[i] + args.outer_beta * kl_div
-
-                            with torch.no_grad():
-                                # new_th[i] -= lr_policies[i] * get_gradient(loss_i, new_th[i])
-                                new_th[i] -= lr_policies[i] * (get_gradient(loss_i, new_th[i]) + sum(other_terms))
-
-                            prev_pol = curr_pol.detach().clone()
-                            curr_pol = new_th[i].detach().clone()
-
-                            iters += 1
-
-                            if print_info:
-                                print(kl_div)
-                                print("Curr pol")
-                                print(torch.sigmoid(curr_pol))
-                                print("Iter:")
-                                print(iters)
-
-                            # policy_dist = build_policy_dist(
-                            #     torch.sigmoid(curr_pol))
-                            # target_policy_dist = build_policy_dist(
-                            #     torch.sigmoid(prev_pol))
-                            policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol)
-
-                            curr_prev_pol_div = torch.nn.functional.kl_div(
-                                input=torch.log(policy_dist),
-                                target=target_policy_dist,
-                                reduction='batchmean',
-                                log_target=False)
-                            # print(curr_prev_pol_div)
-
-                            if curr_prev_pol_div < threshold or iters > max_iters:
-                                print("Outer prox iters used: {}".format(iters))
-                                if iters >= max_iters:
-                                    print("Reached max prox iters")
-                                fixed_point_reached = True
+                            # print(new_th[i])
 
                         th[i] = new_th[i]
 
@@ -2373,25 +2388,52 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                                 # print(torch.sigmoid(new_th[j]))
                                 # print(get_gradient(torch.sigmoid(new_th[j][0]), new_th[i]))
 
+                    if args.outer_exact_prox:
 
-                    # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
-                    outer_losses = gradient_terms_or_Ls(new_th)
+                        # TODO TEST THIS
 
-                    # Finally each player updates their own (copied) th
+                        fixed_point_reached = False
+                        outer_iters = 0
 
-                    # print(get_gradient(outer_losses[i], new_th[i]))
-                    #
-                    # losses2 = gradient_terms_or_Ls(static_th_copy)
-                    # print(get_gradient(losses2[i], static_th_copy[i]))
-                    # 1/0
+                        curr_pol = new_th[i].detach().clone()
+                        # prev_pol = None
+                        while not fixed_point_reached:
 
-                    with torch.no_grad():
-                        new_th[i] += lr_policies[i] * get_gradient(outer_losses[i], new_th[i])
+                            # # TESTING ONLY
+                            # for j in range(n):
+                            #     if j != i:
+                            #         print(get_gradient(new_th[j][0], new_th[i]))
+                            # Yes indeed this gradient is constant, which makes sense. Because theta^i' = theta^i + multiple gradient updates
+                            # So when you look at how theta^j' = theta^j + Delta theta^j  would change with respect to theta^i + multiple gradient updates,
+                            # It will only be affected by theta^i and not by the gradient updates on theta^i. So it makes sense
+                            # that even as theta^i has its gradient updates, the gradient of theta^j with respect to it won't change
+                            # because the gradient updates to theta^i have no bearing on how theta^j would have been updated.
 
 
+                            outer_iters += 1
 
-                    # Finally we rewrite the th by copying from the created copies
-                    th[i] = new_th[i]
+                            new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(print_info, i, new_th, static_th_copy,
+                                                                                gradient_terms_or_Ls, curr_pol,
+                                                                                None, outer_iters, args.prox_max_iters, args.prox_threshold)
+                        th[i] = new_th[i]
+
+                    else:
+                        # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
+                        outer_losses = gradient_terms_or_Ls(new_th)
+
+                        # Finally each player updates their own (copied) th
+
+                        # print(get_gradient(outer_losses[i], new_th[i]))
+                        #
+                        # losses2 = gradient_terms_or_Ls(static_th_copy)
+                        # print(get_gradient(losses2[i], static_th_copy[i]))
+                        # 1/0
+
+                        with torch.no_grad():
+                            new_th[i] += lr_policies[i] * get_gradient(outer_losses[i], new_th[i])
+
+                        # Finally we rewrite the th by copying from the created copies
+                        th[i] = new_th[i]
 
                 return th, losses, G_ts, nl_terms, None, grad_2_return_1
 
@@ -2523,8 +2565,10 @@ if __name__ == "__main__":
                         help="in exact case, add preconditioning to make the problem ill-conditioned. Used to test if prox-lola helps")
     parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.3, 0.3, 3., 1.],
                         help="The ill conditioning matrix (diagonal entries) to use for the ill_condition. Dim should match dims[0] (i.e. 2^n + 1)")
-    parser.add_argument("--print_proxloops_info", action="store_true",
+    parser.add_argument("--print_prox_loops_info", action="store_true",
                         help="print some additional info for the prox loop iters")
+    parser.add_argument("--prox_threshold", type=float, default=1e-8, help="Threshold for KL divergence below which we consider a fixed point to have been reached for the proximal LOLA")
+    parser.add_argument("--prox_max_iters", type=int, default=5000, help="Maximum proximal steps to take before timeout")
 
     args = parser.parse_args()
 
@@ -2545,7 +2589,7 @@ if __name__ == "__main__":
     repeats = args.repeats
 
     if args.outer_exact_prox:
-        assert args.inner_exact_prox
+        assert args.inner_exact_prox or args.no_taylor_approx
 
     # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
