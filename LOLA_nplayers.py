@@ -20,8 +20,7 @@ from timeit import default_timer as timer
 
 
 
-theta_init_modes = ['standard', 'tft']
-theta_init_mode = 'standard'
+
 
 
 
@@ -1636,6 +1635,21 @@ def init_th_tft(dims, std, logit_shift=3):
     return th
 
 
+def init_th_adversarial(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        # init[-1] += 2 * 1
+        init[0] -= 5
+        # init[0] = init[0] - 5
+        th.append(init)
+    # Dims [5,5] or something, len is num agents
+    # And each num represents the dim of the policy for that agent (equal to state space size with binary action/bernoulli dist)
+
+    return th
+
+
 class NeuralNet(nn.Module):
     def __init__(self, input_size, hidden_size, extra_hidden_layers,
                  output_size, final_sigmoid=False, final_softmax=False):
@@ -1803,7 +1817,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
         for i in range(len(dims)):
             # DONT FORGET THIS +1
             # Right now if you omit the +1 we get a bug where the first state is the prob in the all contrib state
-            th.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=0.1))
+            th.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=args.std))
 
 
     # TFT init
@@ -1844,7 +1858,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
 
             f_vals.append(f_vals_net)
         else:
-            vals.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=0.1))
+            vals.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=args.std))
 
     assert len(vals) == len(dims)
 
@@ -3420,7 +3434,9 @@ if __name__ == "__main__":
     parser.add_argument("--prox_max_iters", type=int, default=5000, help="Maximum proximal steps to take before timeout")
     parser.add_argument("--dd_stretch_factor", type=float, default=2., help="for ill conditioning in the func approx case, stretch logit of policy in DD state by this amount")
     parser.add_argument("--all_state_stretch_factor", type=float, default=0.33, help="for ill conditioning in the func approx case, stretch logit of policy in all states by this amount")
-
+    parser.add_argument("--theta_init_mode", type=str, default="standard",
+                        choices=['standard', 'tft', 'adv'],
+                        help="For IPD/social dilemma in the exact gradient/tabular setting, choose the policy initialization mode.")
 
     args = parser.parse_args()
 
@@ -3634,12 +3650,14 @@ if __name__ == "__main__":
 
 
                     # std = 0.1
-                    if theta_init_mode == 'tft':
+                    if args.theta_init_mode == 'tft':
                         # std = 0.1
                         # Basically with std higher, you're going to need higher logit shift (but only slightly, really), in order to reduce the variance
                         # and avoid random-like behaviour which could undermine the closeness/pull into the TFT basin of solutions
                         th = init_th_tft(dims, std, logit_shift=1.7)
                         # Need around 1.85 for NL and 1.7 for LOLA
+                    elif args.theta_init_mode == 'adv':
+                        th = init_th_adversarial(dims)
                     else:
                         th = init_th(dims, std)
 
@@ -3708,6 +3726,28 @@ if __name__ == "__main__":
                 # nl_terms_running_total = []
 
                 for epoch in range(num_epochs):
+                    if epoch == 0:
+                        print("Batch size: " + str(batch_size))
+                        if using_DiCE:
+                            print("Inner Steps: {}".format(inner_steps))
+                            print("Outer Steps: {}".format(outer_steps))
+                        else:
+                            print("Algos: {}".format(algos))
+                        print("lr_policies: {}".format(lr_policies))
+                        print("lr_values: {}".format(lr_values))
+                        print("Starting Policies:")
+                        if using_samples:
+                            game.print_policy_and_value_info(th, vals)
+                        else:
+                            for i in range(n_agents):
+                                policy = torch.sigmoid(th[i])
+                                print("Policy {}".format(i+1))
+                                print(policy)
+                                if args.ill_condition:
+                                    print("TRANSFORMED Policy {}".format(i+1))
+                                    print(torch.sigmoid(ill_cond_matrix @ th[i]))
+
+
                     if using_samples:
                         if using_DiCE:
                             th, vals = dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta, repeat_train_on_same_samples)
@@ -3795,19 +3835,11 @@ if __name__ == "__main__":
                     #     else:
                     #         nl_terms_running_total[i] += lr_policies[i] * nl_term
 
-                    if epoch % print_every == 0:
-                        print("Epoch: " + str(epoch))
+                    if (epoch + 1) % print_every == 0:
+                        print("Epoch: " + str(epoch + 1))
                         curr = timer()
                         print("Time Elapsed: {:.1f} seconds".format(curr - start))
-                        print("Eta: " + str(eta))
-                        print("Batch size: " + str(batch_size))
-                        if using_DiCE:
-                            print("Inner Steps: {}".format(inner_steps))
-                            print("Outer Steps: {}".format(outer_steps))
-                        else:
-                            print("Algos: {}".format(algos))
-                        print("lr_policies: {}".format(lr_policies))
-                        print("lr_values: {}".format(lr_values))
+
                         # print("LOLA Terms: ")
                         # print(lola_terms_running_total)
                         # print("NL Terms: ")
