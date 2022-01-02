@@ -1055,6 +1055,8 @@ class ContributionGame(Game):
                     # print(kl_div)
                     kl_divs[i] = kl_div
 
+                # print(kl_divs)
+
                 # 1/0
                 # print(kl_div)
                 # for param in th[0].parameters():
@@ -2003,6 +2005,7 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
             target=target_policy_dist,
             reduction='batchmean',
             log_target=False)
+        # print(torch.sigmoid(curr_pol))
         # print(curr_prev_pol_div)
 
         if curr_prev_pol_div < threshold or iters > max_iters:
@@ -2055,8 +2058,8 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i,
     print_info = args.print_prox_loops_info
     if print_info:
         print(inner_lookahead_th[j])
-        print(get_gradient(loss_j, inner_lookahead_th[j]))
-        print(f_at_fixed_point)
+        # print(get_gradient(loss_j, inner_lookahead_th[j]))
+        # print(f_at_fixed_point)
 
     # print(f_at_fixed_point)
 
@@ -2066,23 +2069,23 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i,
     # This inverse can fail when init_state_rep = 1
     # print(grad1_f)
     mat_to_inv = torch.eye(th[j].shape[0]) - grad1_f
-    if print_info:
-        print(mat_to_inv)
+    # if print_info:
+    #     print(mat_to_inv)
     if mat_to_inv[-1, -1] == 0:
         print("UHOH")
         mat_to_inv[
             -1, -1] += 1e-6  # for numerical stability/to prevent inverse failing
 
-    if print_info:
-        print(torch.inverse(mat_to_inv))
+    # if print_info:
+    #     print(torch.inverse(mat_to_inv))
     grad_th1_th2prime = torch.inverse(mat_to_inv) @ grad0_f
 
-    if print_info:
-        print(grad2_V1)
-
-        print(grad_th1_th2prime)
-
-        print(grad2_V1 @ grad_th1_th2prime)
+    # if print_info:
+    #     print(grad2_V1)
+    #
+    #     print(grad_th1_th2prime)
+    #
+    #     print(grad2_V1 @ grad_th1_th2prime)
 
     # print(torch.inverse(torch.eye(th[j].shape[0]) - grad1_f))
 
@@ -2439,12 +2442,12 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
 
                         nl_grad = get_gradient(-outer_rews[i], new_th[i])
 
-                        print("!NEW TH!")
-                        print_exact_policy(new_th, i)
-                        print("!!!NL TERMS!!!")
-                        print(nl_grad)
-                        print("!!!LOLA/IFT TERMS!!!")
-                        print(sum(other_terms))
+                        # print("!NEW TH!")
+                        # print_exact_policy(new_th, i)
+                        # print("!!!NL TERMS!!!")
+                        # print(nl_grad)
+                        # print("!!!LOLA/IFT TERMS!!!")
+                        # print(sum(other_terms))
 
                         with torch.no_grad():
                             new_th[i] -= lr_policies[i] * (nl_grad + sum(other_terms))
@@ -2476,32 +2479,34 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
 
                         curr_pol = new_th[i].detach().clone()
                         # prev_pol = None
+                        inner_losses = gradient_terms_or_Ls(new_th)
+
+                        # nl_grads = [get_gradient(inner_losses[i], new_th[i]) for i in range(n)]
+
+                        for j in range(n):
+                            # Inner loop essentially
+                            # Each player on the copied th does a naive update (must be differentiable!)
+                            if j != i:
+                                if not isinstance(new_th[j], torch.Tensor):
+                                    raise NotImplementedError
+                                    # k = 0
+                                    # for param in th[i].parameters():
+                                    #     param += lr_policies[i] * grads[i][k]
+                                    #     k += 1
+                                else:
+                                    # print(torch.sigmoid(new_th[j]))
+                                    new_th[j] = new_th[j] + lr_policies[
+                                        j] * eta * get_gradient(
+                                        inner_losses[j], new_th[j])
+                                    # print(torch.sigmoid(new_th[j]))
+                                    # print(get_gradient(torch.sigmoid(new_th[j][0]), new_th[i]))
+
+                        if args.print_inner_rollouts:
+                            print_exact_policy(new_th, i)
+
                         while not fixed_point_reached:
                             # Then each player calcs the losses
-                            inner_losses = gradient_terms_or_Ls(new_th)
 
-                            # nl_grads = [get_gradient(inner_losses[i], new_th[i]) for i in range(n)]
-
-                            for j in range(n):
-                                # Inner loop essentially
-                                # Each player on the copied th does a naive update (must be differentiable!)
-                                if j != i:
-                                    if not isinstance(new_th[j], torch.Tensor):
-                                        raise NotImplementedError
-                                        # k = 0
-                                        # for param in th[i].parameters():
-                                        #     param += lr_policies[i] * grads[i][k]
-                                        #     k += 1
-                                    else:
-                                        # print(torch.sigmoid(new_th[j]))
-                                        new_th[j] = new_th[j] + lr_policies[
-                                            j] * eta * get_gradient(
-                                            inner_losses[j], new_th[j])
-                                        # print(torch.sigmoid(new_th[j]))
-                                        # print(get_gradient(torch.sigmoid(new_th[j][0]), new_th[i]))
-
-                            if args.print_inner_rollouts:
-                                print_exact_policy(new_th, i)
 
                             # # TESTING ONLY
                             # for j in range(n):
@@ -2611,6 +2616,713 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
     return th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1
 
 
+def dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta, repeat_train_on_same_samples):
+
+    if args.using_nn:
+        static_th_copy = th
+        static_vals_copy = vals
+    else:
+        static_th_copy = copy.deepcopy(th)
+        static_vals_copy = copy.deepcopy(vals)
+
+    for i in range(n_agents):
+        K = inner_steps[i]
+        L = outer_steps[i]
+
+        if args.using_nn:
+            theta_primes = static_th_copy
+            val_primes = static_vals_copy  # should work if it is functional/stateless
+        else:
+            theta_primes = copy.deepcopy(static_th_copy)
+            val_primes = copy.deepcopy(static_vals_copy)
+
+        f_th_primes = []
+        if args.using_nn:
+            for ii in range(n_agents):
+                f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii],
+                                                            copy_initial_weights=True,
+                                                            track_higher_grads=True))
+
+        mixed_th_lr_policies = lr_policies * eta
+        mixed_th_lr_policies[i] = lr_policies[i]
+
+        optims_th_primes = construct_diff_optims(theta_primes,
+                                                 mixed_th_lr_policies,
+                                                 f_th_primes)
+        f_vals_primes = []
+        if args.using_nn:
+            for ii in range(n_agents):
+                f_vals_primes.append(
+                    higher.patch.monkeypatch(
+                        val_primes[ii],
+                        copy_initial_weights=True,
+                        track_higher_grads=True))
+        # optims_vals_primes = construct_diff_optims(
+        #     val_primes, lr_values * eta,
+        #     f_vals_primes)
+        optims_vals_primes = construct_diff_optims(
+            val_primes, lr_values,
+            f_vals_primes)
+
+        if args.using_nn:
+            mixed_thetas = f_th_primes
+            mixed_vals = f_vals_primes
+            # mixed_thetas[i] = th[i]
+            # mixed_vals[i] = vals[i]
+
+            # mixed_thetas[i] = f_th[i]
+            # mixed_vals[i] = f_vals[i]
+
+        else:
+            mixed_thetas = theta_primes
+            mixed_vals = val_primes
+            mixed_thetas[i] = th[i]
+            mixed_vals[i] = vals[i]
+
+        # print(mixed_thetas)
+        if eta != 0:
+            # --- INNER STEPS ---
+            if repeat_train_on_same_samples:
+                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                    mixed_thetas, mixed_vals)
+                for step in range(K):
+                    # print(step)
+                    if step == 0:
+                        dice_loss, _, values_loss = game.get_dice_loss(
+                            action_trajectory, rewards,
+                            policy_history, val_history, next_val_history,
+                            old_policy_history=policy_history,
+                            use_nl_loss=args.inner_nl_loss,
+                            use_penalty=args.inner_penalty,
+                            use_clipping=args.inner_clip, beta=args.inner_beta)
+
+                    else:
+                        new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                            mixed_thetas, mixed_vals, obs_history)
+                        # Using the new policies and vals now
+                        # Always be careful not to overwrite/reuse names of existing variables
+                        dice_loss, _, values_loss = game.get_dice_loss(
+                            action_trajectory, rewards, new_policies, new_vals,
+                            next_new_vals, old_policy_history=policy_history,
+                            use_nl_loss=args.inner_nl_loss,
+                            use_penalty=args.inner_penalty,
+                            use_clipping=args.inner_clip, beta=args.inner_beta)
+
+                    # grads = [None] * n_agents
+
+                    # Note only policy update, no value update here
+                    # because we are updating off policy
+                    # We need to keep the advantage consistent with the policy that
+                    # collected the data we are training on
+                    # So no value update in between policy updates on the same data
+                    for j in range(n_agents):
+                        if j != i:
+                            if isinstance(mixed_thetas[j], torch.Tensor):
+                                # Higher with diffopt on the tensor can work too
+                                # I think what needs to be done is a simpler formulation
+                                # Where you just construct the diffopt, no fmodel stuff on the tensor
+                                # and then directly use that diffopt. I had it working before
+
+                                # print(mixed_thetas[j])
+
+                                grad = get_gradient(
+                                    dice_loss[j],
+                                    mixed_thetas[j])
+                                mixed_thetas[j] = mixed_thetas[j] - lr_policies[
+                                    j] * eta * grad  # This step is critical to allow the gradient to flow through
+                                # You cannot use torch.no_grad on this step
+
+                                if args.inner_val_updates:
+                                    grad_val = get_gradient(
+                                        values_loss[j],
+                                        mixed_vals[j])
+                                    mixed_vals[j] = mixed_vals[j] - lr_policies[
+                                        j] * eta * grad_val
+
+                            else:
+
+                                optim_update(optims_th_primes[j],
+                                             dice_loss[j],
+                                             mixed_thetas[j].parameters())
+                                if args.inner_val_updates:
+                                    optim_update(optims_vals_primes[j],
+                                                 values_loss[j],
+                                                 mixed_vals[j].parameters())
+
+                    # Also TODO Aug 23 is do an outer loop with number of steps also
+
+                    if args.print_inner_rollouts:
+                        print(
+                            "---Agent {} Rollout {}---".format(i + 1, step + 1))
+                        game.print_policies_for_all_states(
+                            mixed_thetas)
+                        game.print_values_for_all_states(mixed_vals)
+
+            # STILL DOING INNER STEPS HERE
+            else:  # no repeat train on samples, this is the original DiCE formulation
+
+                for step in range(K):
+                    if args.env == 'coin':
+                        obs_history, act_history, rewards, policy_history, \
+                        val_history, next_val_history, avg_same_colour_coins_picked_total, \
+                        avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
+                            mixed_thetas, mixed_vals)
+
+                        dice_loss, _, values_loss = \
+                            game.get_dice_loss(rewards, policy_history,
+                                               val_history,
+                                               next_val_history,
+                                               use_nl_loss=args.inner_nl_loss)
+                        # use_penalty=args.inner_penalty,
+                        # use_clipping=args.inner_clip,
+                        # beta=args.inner_beta)
+                    elif args.env == 'imp':
+                        obs_history, act_history, rewards, policy_history, \
+                        val_history, next_val_history = game.rollout(
+                            mixed_thetas, mixed_vals)
+
+                        dice_loss, _, values_loss = game.get_dice_loss(
+                            act_history, rewards, policy_history,
+                            val_history,
+                            next_val_history,
+                            use_nl_loss=args.inner_nl_loss)
+                        # use_penalty=args.inner_penalty,
+                        # use_clipping=args.inner_clip,
+                        # beta=args.inner_beta)
+
+
+                    else:
+                        action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                            mixed_thetas, mixed_vals)
+                        dice_loss, _, values_loss = game.get_dice_loss(
+                            action_trajectory,
+                            rewards,
+                            policy_history, val_history, next_val_history,
+                            use_nl_loss=args.inner_nl_loss)
+                        # use_penalty=args.inner_penalty,
+                        # use_clipping=args.inner_clip, beta=args.inner_beta)
+
+                    # grads = [None] * n_agents
+                    # grad_vals = [None] * n_agents # For stability don't do this
+
+                    for j in range(n_agents):
+                        if j != i:
+                            if isinstance(mixed_thetas[j], torch.Tensor):
+                                # Higher with diffopt on the tensor can work too
+                                # I think what needs to be done is a simpler formulation
+                                # Where you just construct the diffopt, no fmodel stuff on the tensor
+                                # and then directly use that diffopt. I had it working before
+
+                                # print(mixed_thetas[j])
+
+                                grad = get_gradient(
+                                    dice_loss[j],
+                                    mixed_thetas[j])
+                                mixed_thetas[j] = mixed_thetas[j] - lr_policies[
+                                    j] * eta * grad  # This step is critical to allow the gradient to flow through
+                                # You cannot use torch.no_grad on this step
+
+                                if args.inner_val_updates:
+                                    grad_val = get_gradient(
+                                        values_loss[j],
+                                        mixed_vals[j])
+                                    mixed_vals[j] = mixed_vals[j] - lr_policies[
+                                        j] * eta * grad_val
+
+                                # TODO The regular DiCE formulation should have value updates on this inner loop too
+                                # However either 1) it is hard to choose the right hyperparameter
+                                # or 2) you end up using small value updates which don't do much
+                                # or 3) you require multiple value update iterations which is going to require more time/make training slower
+
+                            else:
+
+                                optim_update(optims_th_primes[j],
+                                             dice_loss[j],
+                                             mixed_thetas[j].parameters())
+
+                                if args.inner_val_updates:
+                                    optim_update(optims_vals_primes[j],
+                                                 values_loss[j],
+                                                 mixed_vals[j].parameters())
+
+                    if args.print_inner_rollouts:
+                        print("---Agent {} Rollout {}---".format(
+                            i + 1, step + 1))
+                        game.print_policies_for_all_states(
+                            mixed_thetas)
+                        game.print_values_for_all_states(
+                            mixed_vals)
+
+        # --- OUTER STEPS ---
+        # Now calculate outer step using for each player a mix of the theta_primes and old thetas
+        # mixed thetas and mixed vals contain the new constructed thetas and vals for all the other players
+        # only the agent doing the rollout has the original th/val in the mixed theta/val
+        # so then the gradient step afterwards on the original th/val makes sense
+
+        # diff_optims_th = construct_diff_optims(th, lr_policies, f_th)
+        # diff_optims_vals = construct_diff_optims(vals, lr_values, f_vals)
+
+        for step in range(L):
+            # print(step)
+            if repeat_train_on_same_samples:
+                if args.env != 'ipd':
+                    raise Exception(
+                        "Repeat_train not yet supported for other games")
+                if step == 0:
+                    # This structure is a bit different from the inner loop one... I could make consistent
+                    # The key point is you need to roll out once at the beginning and then repeat train afterwards
+                    action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                        mixed_thetas, mixed_vals)
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        use_nl_loss=args.inner_nl_loss,
+                        use_penalty=args.outer_penalty,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
+
+                else:
+                    new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals,
+                        obs_history)
+                    # Using the new policies and vals now
+                    # Always be careful not to overwrite/reuse names of existing variables
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        new_policies, new_vals,
+                        next_new_vals,
+                        old_policy_history=policy_history,
+                        use_nl_loss=args.inner_nl_loss,
+                        use_penalty=args.outer_penalty,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
+            else:
+                # No repeat train on same samples
+                if args.env == 'coin':
+                    obs_history, act_history, rewards, policy_history, val_history, \
+                    next_val_history, avg_same_colour_coins_picked_total, avg_diff_colour_coins_picked_total, \
+                    avg_coins_picked_total = game.rollout(
+                        mixed_thetas, mixed_vals)
+
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        rewards, policy_history, val_history,
+                        next_val_history)
+                elif args.env == 'imp':
+                    if repeat_train_on_same_samples:
+                        raise Exception(
+                            "Repeat_train not yet supported for coin game")
+                    obs_history, act_history, rewards, policy_history, \
+                    val_history, next_val_history = game.rollout(
+                        mixed_thetas, mixed_vals)
+
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        act_history, rewards, policy_history,
+                        val_history,
+                        next_val_history)
+                    # use_nl_loss=args.inner_nl_loss,
+                    # use_penalty=args.outer_penalty,
+                    # use_clipping=args.outer_clip,
+                    # beta=args.outer_beta)
+                else:
+                    action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                        mixed_thetas, mixed_vals)
+
+                    # no_penalty_on_outer_step = False
+                    # use_pen = args.use_penalty
+                    # if no_penalty_on_outer_step:
+                    #     use_pen = False
+
+                    # if repeat_train_on_same_samples:
+                    #     dice_loss, G_ts, values_loss = game.get_dice_loss(
+                    #         action_trajectory, rewards,
+                    #         policy_history, val_history, next_val_history,
+                    #         old_policy_history=policy_history,
+                    #         use_penalty=args.outer_penalty, use_clipping=args.outer_clip)
+                    # else:
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history, next_val_history)
+                    # use_penalty=args.outer_penalty, use_clipping=args.outer_clip,
+                    # beta=args.outer_beta)
+
+            # print("---Agent {} Rollout---".format(i+1))
+            # game.print_policies_for_all_states(mixed_thetas)
+            # game.print_reward_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
+
+            if isinstance(mixed_thetas[i], torch.Tensor):
+                # optim_update(optims_th[i], dice_loss[i], [th[i]])
+                # optim_update(optims_vals[i], values_loss[i], [vals[i]])
+
+                grad = get_gradient(dice_loss[i], mixed_thetas[i])
+                grad_val = get_gradient(values_loss[i], mixed_vals[i])
+
+                with torch.no_grad():
+                    mixed_thetas[i] -= lr_policies[i] * grad
+                    mixed_vals[i] -= lr_values[i] * grad_val
+                    # th[i] -= lr_policies[i] * (b-a)
+
+                    1 / 0
+                    # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
+
+                # TODO Be careful with +/- formulation now...
+                # TODO rename the non-DiCE terms as rewards
+                # And keep the DiCE terms as losses
+
+
+            else:
+                optim_update(optims_th_primes[i], dice_loss[i],
+                             mixed_thetas[i].parameters())
+                optim_update(optims_vals_primes[i], values_loss[i],
+                             mixed_vals[i].parameters())
+
+                copyNN(th[i], mixed_thetas[i])
+                copyNN(vals[i], mixed_vals[i])
+
+            # TODO note mixed_th[i] should be == th[i] here
+            # if isinstance(th[i], torch.Tensor):
+            #     # optim_update(optims_th[i], dice_loss[i], [th[i]])
+            #     # optim_update(optims_vals[i], values_loss[i], [vals[i]])
+            #
+            #     grad = get_gradient(dice_loss[i], th[i])
+            #     grad_val = get_gradient(values_loss[i], vals[i])
+            #
+            #
+            #     with torch.no_grad():
+            #         th[i] -= lr_policies[i] * grad
+            #         vals[i] -= lr_values[i] * grad_val
+            #         # th[i] -= lr_policies[i] * (b-a)
+            #
+            #     # TODO Be careful with +/- formulation now...
+            #     # TODO rename the non-DiCE terms as rewards
+            #     # And keep the DiCE terms as losses
+            #
+            #
+            # else:
+            #     # print(step)
+            #     # optim_update(optims_th[i], dice_loss[i])
+            #     optim_update(optims_vals[i], values_loss[i])
+            #
+            #     # print("A")
+            #     # for param in th[i].parameters():
+            #     #     print(param)
+            #     # for param in f_th[i].parameters():
+            #     #     print(param)
+            #
+            #     # optim_update(diff_optims_th[i], dice_loss[i], f_th[i].parameters())
+            #     # optim_update(diff_optims_vals[i], values_loss[i], f_vals[i].parameters())
+            #
+            #     # print("B")
+            #     # for param in th[i].parameters():
+            #     #     print(param)
+            #     # for param in f_th[i].parameters():
+            #     #     print(param)
+            #
+            #     # TODO should be able to move this outside the loop at the end since
+            #     # th and vals aren't used until afterwards
+            #     # copyNN(th[i], f_th[i])
+            #     # copyNN(vals[i], f_vals[i])
+            #
+            #     # print("C")
+            #     # for param in th[i].parameters():
+            #     #     print(param)
+            #     # for param in f_th[i].parameters():
+            #     #     print(param)
+            #
+            #     # print("hi")
+            #     # print(step)
+
+            for _ in range(args.extra_value_updates):
+                _, val_history, next_val_history = game.get_policies_vals_for_states(
+                    mixed_thetas, mixed_vals, obs_history)
+
+                if repeat_train_on_same_samples:
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        use_penalty=args.outer_penalty,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
+                else:
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history)
+                    # use_penalty=args.outer_penalty, use_clipping=args.outer_clip,
+                    # beta=args.outer_beta)
+
+                if isinstance(vals[i], torch.Tensor):
+                    grad_val = get_gradient(values_loss[i],
+                                            vals[i])
+                    with torch.no_grad():
+                        vals[i] -= lr_values[i] * grad_val
+                else:
+                    optim_update(optims_vals[i],
+                                 values_loss[i])
+
+            if args.print_outer_rollouts:
+                print("---Agent {} Rollout {}---".format(
+                    i + 1, step + 1))
+                game.print_policies_for_all_states(
+                    mixed_thetas)
+                game.print_values_for_all_states(
+                    mixed_vals)
+
+    return th, vals
+
+#
+# def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta):
+#     # Assumed repeat_train_on_same_samples
+#     # (and using_nn?)
+#
+#     if args.using_nn:
+#         static_th_copy = th
+#         static_vals_copy = vals
+#     else:
+#         static_th_copy = copy.deepcopy(th)
+#         static_vals_copy = copy.deepcopy(vals)
+#
+#     for i in range(n_agents):
+#         K = inner_steps[i]
+#         L = outer_steps[i]
+#
+#         if args.using_nn:
+#             theta_primes = static_th_copy
+#             val_primes = static_vals_copy  # should work if it is functional/stateless
+#         else:
+#             theta_primes = copy.deepcopy(static_th_copy)
+#             val_primes = copy.deepcopy(static_vals_copy)
+#
+#         f_th_primes = []
+#         if args.using_nn:
+#             for ii in range(n_agents):
+#                 f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii],
+#                                                             copy_initial_weights=True,
+#                                                             track_higher_grads=True))
+#
+#         mixed_th_lr_policies = lr_policies * eta
+#         mixed_th_lr_policies[i] = lr_policies[i]
+#
+#         optims_th_primes = construct_diff_optims(theta_primes,
+#                                                  mixed_th_lr_policies,
+#                                                  f_th_primes)
+#         f_vals_primes = []
+#         if args.using_nn:
+#             for ii in range(n_agents):
+#                 f_vals_primes.append(
+#                     higher.patch.monkeypatch(
+#                         val_primes[ii],
+#                         copy_initial_weights=True,
+#                         track_higher_grads=True))
+#         # optims_vals_primes = construct_diff_optims(
+#         #     val_primes, lr_values * eta,
+#         #     f_vals_primes)
+#         optims_vals_primes = construct_diff_optims(
+#             val_primes, lr_values,
+#             f_vals_primes)
+#
+#         if args.using_nn:
+#             mixed_thetas = f_th_primes
+#             mixed_vals = f_vals_primes
+#             # mixed_thetas[i] = th[i]
+#             # mixed_vals[i] = vals[i]
+#
+#             # mixed_thetas[i] = f_th[i]
+#             # mixed_vals[i] = f_vals[i]
+#
+#         else:
+#             mixed_thetas = theta_primes
+#             mixed_vals = val_primes
+#             mixed_thetas[i] = th[i]
+#             mixed_vals[i] = vals[i]
+#
+#         # print(mixed_thetas)
+#         if eta != 0:
+#             # --- INNER STEPS ---
+#             assert repeat_train_on_same_samples
+#             action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+#                 mixed_thetas, mixed_vals)
+#             for outer_step in range(L):
+#                 # INNER LOOP
+#                 for inner_step in range(K):
+#                     # print(step)
+#                     if inner_step == 0:
+#                         dice_loss, _, values_loss = game.get_dice_loss(
+#                             action_trajectory, rewards,
+#                             policy_history, val_history, next_val_history,
+#                             old_policy_history=policy_history,
+#                             use_nl_loss=args.inner_nl_loss,
+#                             use_penalty=args.inner_penalty,
+#                             use_clipping=args.inner_clip, beta=args.inner_beta)
+#
+#                     else:
+#                         new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+#                             mixed_thetas, mixed_vals, obs_history)
+#                         # Using the new policies and vals now
+#                         # Always be careful not to overwrite/reuse names of existing variables
+#                         dice_loss, _, values_loss = game.get_dice_loss(
+#                             action_trajectory, rewards, new_policies, new_vals,
+#                             next_new_vals, old_policy_history=policy_history,
+#                             use_nl_loss=args.inner_nl_loss,
+#                             use_penalty=args.inner_penalty,
+#                             use_clipping=args.inner_clip, beta=args.inner_beta)
+#
+#                     # grads = [None] * n_agents
+#
+#                     # Note only policy update, no value update here
+#                     # because we are updating off policy
+#                     # We need to keep the advantage consistent with the policy that
+#                     # collected the data we are training on
+#                     # So no value update in between policy updates on the same data
+#                     for j in range(n_agents):
+#                         if j != i:
+#                             if isinstance(mixed_thetas[j], torch.Tensor):
+#                                 # Higher with diffopt on the tensor can work too
+#                                 # I think what needs to be done is a simpler formulation
+#                                 # Where you just construct the diffopt, no fmodel stuff on the tensor
+#                                 # and then directly use that diffopt. I had it working before
+#
+#                                 # print(mixed_thetas[j])
+#
+#                                 grad = get_gradient(
+#                                     dice_loss[j],
+#                                     mixed_thetas[j])
+#                                 mixed_thetas[j] = mixed_thetas[j] - lr_policies[
+#                                     j] * eta * grad  # This step is critical to allow the gradient to flow through
+#                                 # You cannot use torch.no_grad on this step
+#
+#                                 if args.inner_val_updates:
+#                                     grad_val = get_gradient(
+#                                         values_loss[j],
+#                                         mixed_vals[j])
+#                                     mixed_vals[j] = mixed_vals[j] - lr_policies[
+#                                         j] * eta * grad_val
+#
+#                             else:
+#
+#                                 optim_update(optims_th_primes[j],
+#                                              dice_loss[j],
+#                                              mixed_thetas[j].parameters())
+#                                 if args.inner_val_updates:
+#                                     optim_update(optims_vals_primes[j],
+#                                                  values_loss[j],
+#                                                  mixed_vals[j].parameters())
+#
+#                     # Also TODO Aug 23 is do an outer loop with number of steps also
+#
+#                     if args.print_inner_rollouts:
+#                         print(
+#                             "---Agent {} Rollout {}---".format(i + 1, step + 1))
+#                         game.print_policies_for_all_states(
+#                             mixed_thetas)
+#                         game.print_values_for_all_states(mixed_vals)
+#
+#                 # --- OUTER STEP ---
+#
+#                 # print(step)
+#                 if args.env != 'ipd':
+#                     raise Exception(
+#                         "Repeat_train not yet supported for other games")
+#                 if outer_step == 0:
+#                     # This structure is a bit different from the inner loop one... I could make consistent
+#                     # The key point is you need to roll out once at the beginning and then repeat train afterwards
+#                     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+#                         mixed_thetas, mixed_vals)
+#                     dice_loss, _, values_loss = game.get_dice_loss(
+#                         action_trajectory, rewards,
+#                         policy_history, val_history,
+#                         next_val_history,
+#                         old_policy_history=policy_history,
+#                         use_nl_loss=args.inner_nl_loss,
+#                         use_penalty=args.outer_penalty,
+#                         use_clipping=args.outer_clip,
+#                         beta=args.outer_beta)
+#
+#                 else:
+#                     new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+#                         mixed_thetas, mixed_vals,
+#                         obs_history)
+#                     # Using the new policies and vals now
+#                     # Always be careful not to overwrite/reuse names of existing variables
+#                     dice_loss, _, values_loss = game.get_dice_loss(
+#                         action_trajectory, rewards,
+#                         new_policies, new_vals,
+#                         next_new_vals,
+#                         old_policy_history=policy_history,
+#                         use_nl_loss=args.inner_nl_loss,
+#                         use_penalty=args.outer_penalty,
+#                         use_clipping=args.outer_clip,
+#                         beta=args.outer_beta)
+#
+#                 # print("---Agent {} Rollout---".format(i+1))
+#                 # game.print_policies_for_all_states(mixed_thetas)
+#                 # game.print_reward_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
+#
+#                 if isinstance(mixed_thetas[i], torch.Tensor):
+#                     # optim_update(optims_th[i], dice_loss[i], [th[i]])
+#                     # optim_update(optims_vals[i], values_loss[i], [vals[i]])
+#
+#                     grad = get_gradient(dice_loss[i], mixed_thetas[i])
+#                     grad_val = get_gradient(values_loss[i], mixed_vals[i])
+#
+#                     with torch.no_grad():
+#                         mixed_thetas[i] -= lr_policies[i] * grad
+#                         mixed_vals[i] -= lr_values[i] * grad_val
+#                         # th[i] -= lr_policies[i] * (b-a)
+#
+#                         1 / 0
+#                         # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
+#
+#                     # TODO Be careful with +/- formulation now...
+#                     # TODO rename the non-DiCE terms as rewards
+#                     # And keep the DiCE terms as losses
+#
+#
+#                 else:
+#                     optim_update(optims_th_primes[i], dice_loss[i],
+#                                  mixed_thetas[i].parameters())
+#                     optim_update(optims_vals_primes[i], values_loss[i],
+#                                  mixed_vals[i].parameters())
+#
+#                     copyNN(th[i], mixed_thetas[i])
+#                     copyNN(vals[i], mixed_vals[i])
+#
+#                 for _ in range(args.extra_value_updates):
+#                     _, val_history, next_val_history = game.get_policies_vals_for_states(
+#                         mixed_thetas, mixed_vals, obs_history)
+#
+#                     dice_loss, G_ts, values_loss = game.get_dice_loss(
+#                         action_trajectory, rewards,
+#                         policy_history, val_history,
+#                         next_val_history,
+#                         old_policy_history=policy_history,
+#                         use_penalty=args.outer_penalty,
+#                         use_clipping=args.outer_clip,
+#                         beta=args.outer_beta)
+#
+#                     if isinstance(vals[i], torch.Tensor):
+#                         grad_val = get_gradient(values_loss[i],
+#                                                 vals[i])
+#                         with torch.no_grad():
+#                             vals[i] -= lr_values[i] * grad_val
+#                     else:
+#                         optim_update(optims_vals[i],
+#                                      values_loss[i])
+#
+#                 if args.print_outer_rollouts:
+#                     print("---Agent {} Rollout {}---".format(
+#                         i + 1, step + 1))
+#                     game.print_policies_for_all_states(
+#                         mixed_thetas)
+#                     game.print_values_for_all_states(
+#                         mixed_vals)
+#
+#     return th, vals
+
+
 
 
 # Main loop/code
@@ -2655,8 +3367,10 @@ if __name__ == "__main__":
                              "For prox LOLA, this is a scaling on the inner loop prox_f step size")
     parser.add_argument("--lr_policies", type=float, default=0.05,
                         help="same learning rate across all policies for now")
-    parser.add_argument("--lr_values_scale", type=float, default=0.5,
-                        help="scale lr_values relative to lr_policies")
+    # parser.add_argument("--lr_values_scale", type=float, default=0.5,
+    #                     help="scale lr_values relative to lr_policies")
+    parser.add_argument("--lr_values", type=float, default=0.025,
+                        help="same learning rate across all policies for now")
     parser.add_argument("--inner_steps", type=int, default=1, help="inner loop steps for DiCE")
     parser.add_argument("--outer_steps", type=int, default=1)
     parser.add_argument("--using_nn", action="store_true",
@@ -2698,7 +3412,7 @@ if __name__ == "__main__":
                         help="experimental: try DiCE style, direct update of policy and diff through it")
     parser.add_argument("--ill_condition", action="store_true",
                         help="in exact case, add preconditioning to make the problem ill-conditioned. Used to test if prox-lola helps")
-    parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.3, 0.3, 3., 1.],
+    parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.1, 0.1, 0.1, 1.],
                         help="The ill conditioning matrix (diagonal entries) to use for the ill_condition. Dim should match dims[0] (i.e. 2^n + 1)")
     parser.add_argument("--print_prox_loops_info", action="store_true",
                         help="print some additional info for the prox loop iters")
@@ -2729,10 +3443,15 @@ if __name__ == "__main__":
     if args.outer_exact_prox:
         assert args.inner_exact_prox or args.no_taylor_approx
 
+    if args.inner_penalty or args.outer_penalty or args.inner_clip or args.outer_clip:
+        assert args.repeat_train_on_same_samples # Otherwise these don't do anything if you just take 1 step on samples
+
+    if args.repeat_train_on_same_samples:
+        assert args.using_DiCE
     # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
     if args.ill_condition:
-        # ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
+        ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
 
         # ill_cond_matrix = torch.tensor([[-2., -1., 0., 0., 0.],
         #                                 [0., 0.1, -0.1, 0., 0.],
@@ -2759,12 +3478,12 @@ if __name__ == "__main__":
         #                                 [1.2, 1.4, 1., 1.2, 0.8],
         #                                 [0.8, 1.2, 1., 1.6, 1.6],
         #                                 [0.4, 1., 1., 1.8, 2.0]])
-        print("IF USING FUNC APPROX DO NOT EDIT THIS MATRIX, EDIT THE SECTION IN THE CONTRIB GAME")
-        ill_cond_matrix = torch.tensor([[3., 0., 0., 0., 0.],
-                                        [0., 0.1, 0, 0., 0.],
-                                        [0., 0., 0.1, 0, 0.],
-                                        [0., 0., 0., 0.1, 0.],
-                                        [0., 0., 0., 0., 1.]])
+        # print("IF USING FUNC APPROX DO NOT EDIT THIS MATRIX, EDIT THE SECTION IN THE CONTRIB GAME")
+        # ill_cond_matrix = torch.tensor([[3., 0., 0., 0., 0.],
+        #                                 [0., 0.1, 0, 0., 0.],
+        #                                 [0., 0., 0.1, 0, 0.],
+        #                                 [0., 0., 0., 0.1, 0.],
+        #                                 [0., 0., 0., 0., 1.]])
         # ill_cond_matrix = torch.tensor([[1., 0., 0., 0.9, 0.],
         #                                 [0., 1, 0.9, 0., 0.],
         #                                 [0., 0.9, 1., 0, 0.],
@@ -2841,8 +3560,9 @@ if __name__ == "__main__":
         # Testing only
         # lr_policies[-1] = 0
 
-        lr_values = lr_policies * args.lr_values_scale
+        # lr_values = lr_policies * args.lr_values_scale
         # lr_values = lr_policies * 0.2
+        lr_values = torch.tensor([args.lr_values] * n_agents)
 
         # etas = [0.05 * 20, 0.05 * 12]  # for both exact and pg formulations
         # etas = [eta * args.lr_policies for eta in args.etas]
@@ -2906,6 +3626,7 @@ if __name__ == "__main__":
             for run in range(repeats):
 
                 if not using_samples:
+                    # Exact gradient case
 
                     dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                     contribution_factor=contribution_factor,
@@ -2983,466 +3704,23 @@ if __name__ == "__main__":
                 else:
                     G_ts_record = torch.zeros(
                         (num_epochs, n_agents))
-                lola_terms_running_total = []
-                nl_terms_running_total = []
+                # lola_terms_running_total = []
+                # nl_terms_running_total = []
 
-
-                # th_out = []
-
-                accum_diffs = [None]*n_agents
-                for i in range(n_agents):
-                    accum_diffs[i] = torch.zeros(5)
                 for epoch in range(num_epochs):
                     if using_samples:
                         if using_DiCE:
-                            if args.using_nn:
-                                static_th_copy = th
-                                static_vals_copy = vals
-                            else:
-                                static_th_copy = copy.deepcopy(th)
-                                static_vals_copy = copy.deepcopy(vals)
-
-
-                            for i in range(n_agents):
-                                K = inner_steps[i]
-                                L = outer_steps[i]
-
-                                # TODO later confirm that this deepcopy is working properly for NN also
-                                if args.using_nn:
-                                    theta_primes = static_th_copy
-                                    val_primes = static_vals_copy # should work if it is functional/stateless
-                                else:
-                                    theta_primes = copy.deepcopy(static_th_copy)
-                                    val_primes = copy.deepcopy(static_vals_copy)
-
-
-                                f_th_primes = []
-                                if args.using_nn:
-                                    for ii in range(n_agents):
-                                        f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii], copy_initial_weights=True, track_higher_grads=True))
-
-                                mixed_th_lr_policies = lr_policies * eta
-                                mixed_th_lr_policies[i] = lr_policies[i]
-
-                                optims_th_primes = construct_diff_optims(theta_primes, mixed_th_lr_policies, f_th_primes)
-                                f_vals_primes = []
-                                if args.using_nn:
-                                    for ii in range(n_agents):
-                                        f_vals_primes.append(
-                                            higher.patch.monkeypatch(
-                                                val_primes[ii],
-                                                copy_initial_weights=True,
-                                                track_higher_grads=True))
-                                # optims_vals_primes = construct_diff_optims(
-                                #     val_primes, lr_values * eta,
-                                #     f_vals_primes)
-                                optims_vals_primes = construct_diff_optims(
-                                    val_primes, lr_values,
-                                    f_vals_primes)
-
-                                if args.using_nn:
-                                    mixed_thetas = f_th_primes
-                                    mixed_vals = f_vals_primes
-                                    # mixed_thetas[i] = th[i]
-                                    # mixed_vals[i] = vals[i]
-
-                                    # mixed_thetas[i] = f_th[i]
-                                    # mixed_vals[i] = f_vals[i]
-
-                                else:
-                                    mixed_thetas = theta_primes
-                                    mixed_vals = val_primes
-                                    mixed_thetas[i] = th[i]
-                                    mixed_vals[i] = vals[i]
-
-                                # print(mixed_thetas)
-                                if eta != 0:
-                                    # --- INNER STEPS ---
-                                    if repeat_train_on_same_samples:
-                                        action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                                            mixed_thetas, mixed_vals)
-                                        for step in range(K):
-                                            # print(step)
-                                            if step == 0:
-                                                dice_loss, _, values_loss = game.get_dice_loss(action_trajectory, rewards,
-                                                    policy_history, val_history, next_val_history, old_policy_history=policy_history,
-                                                    use_nl_loss=args.inner_nl_loss, use_penalty=args.inner_penalty,
-                                                    use_clipping=args.inner_clip, beta=args.inner_beta)
-
-                                            else:
-                                                new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-                                                    mixed_thetas, mixed_vals, obs_history)
-                                                # Using the new policies and vals now
-                                                # Always be careful not to overwrite/reuse names of existing variables
-                                                dice_loss, _, values_loss = game.get_dice_loss(
-                                                    action_trajectory, rewards, new_policies, new_vals,
-                                                    next_new_vals, old_policy_history=policy_history,
-                                                    use_nl_loss=args.inner_nl_loss, use_penalty=args.inner_penalty,
-                                                    use_clipping=args.inner_clip, beta=args.inner_beta)
-
-                                            grads = [None] * n_agents
-
-                                            # Note only policy update, no value update here
-                                            # because we are updating off policy
-                                            # We need to keep the advantage consistent with the policy that
-                                            # collected the data we are training on
-                                            # So no value update in between policy updates on the same data
-                                            for j in range(n_agents):
-                                                if j != i:
-                                                    if isinstance(mixed_thetas[j], torch.Tensor):
-                                                        # Higher with diffopt on the tensor can work too
-                                                        # I think what needs to be done is a simpler formulation
-                                                        # Where you just construct the diffopt, no fmodel stuff on the tensor
-                                                        # and then directly use that diffopt. I had it working before
-
-                                                        # print(mixed_thetas[j])
-
-                                                        grad = get_gradient(
-                                                            dice_loss[j],
-                                                            mixed_thetas[j])
-                                                        mixed_thetas[j] = mixed_thetas[j] - lr_policies[j] * eta * grad  # This step is critical to allow the gradient to flow through
-                                                        # You cannot use torch.no_grad on this step
-
-                                                        if args.inner_val_updates:
-                                                            grad_val = get_gradient(
-                                                                values_loss[j],
-                                                                mixed_vals[j])
-                                                            mixed_vals[j] = mixed_vals[j] - lr_policies[j] * eta * grad_val
-
-                                                    else:
-
-                                                        optim_update(optims_th_primes[j],
-                                                            dice_loss[j], mixed_thetas[j].parameters())
-                                                        if args.inner_val_updates:
-                                                            optim_update(optims_vals_primes[j],
-                                                                values_loss[j],
-                                                                mixed_vals[j].parameters())
-
-
-                                            # Also TODO Aug 23 is do an outer loop with number of steps also
-
-                                            if args.print_inner_rollouts:
-                                                print("---Agent {} Rollout {}---".format(i+1, step+1))
-                                                game.print_policies_for_all_states(
-                                                    mixed_thetas)
-                                                game.print_values_for_all_states(mixed_vals)
-
-                                    # STILL DOING INNER STEPS HERE
-                                    else: # no repeat train on samples, this is the original DiCE formulation
-
-                                        for step in range(K):
-                                            if args.env == 'coin':
-                                                obs_history, act_history, rewards, policy_history, \
-                                                val_history, next_val_history, avg_same_colour_coins_picked_total, \
-                                                avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
-                                                    mixed_thetas, mixed_vals)
-
-
-                                                dice_loss, _, values_loss = \
-                                                    game.get_dice_loss(rewards, policy_history, val_history,
-                                                                       next_val_history, use_nl_loss=args.inner_nl_loss,
-                                                                       use_penalty=args.inner_penalty,
-                                                                       use_clipping=args.inner_clip,
-                                                                       beta=args.inner_beta)
-                                            elif args.env == 'imp':
-                                                obs_history, act_history, rewards, policy_history, \
-                                                val_history, next_val_history = game.rollout(
-                                                    mixed_thetas, mixed_vals)
-
-                                                dice_loss, _, values_loss = game.get_dice_loss(
-                                                    act_history, rewards, policy_history,
-                                                    val_history,
-                                                    next_val_history,
-                                                    use_nl_loss=args.inner_nl_loss,
-                                                    use_penalty=args.inner_penalty,
-                                                    use_clipping=args.inner_clip,
-                                                    beta=args.inner_beta)
-
-
-                                            else:
-                                                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                                                    mixed_thetas, mixed_vals)
-                                                dice_loss, _, values_loss = game.get_dice_loss(
-                                                    action_trajectory,
-                                                    rewards,
-                                                    policy_history, val_history, next_val_history, use_nl_loss=args.inner_nl_loss,
-                                                    use_penalty=args.inner_penalty,
-                                                    use_clipping=args.inner_clip, beta=args.inner_beta)
-
-                                            grads = [None] * n_agents
-                                            # grad_vals = [None] * n_agents # For stability don't do this
-
-                                            for j in range(n_agents):
-                                                if j != i:
-                                                    if isinstance(mixed_thetas[j], torch.Tensor):
-                                                        # Higher with diffopt on the tensor can work too
-                                                        # I think what needs to be done is a simpler formulation
-                                                        # Where you just construct the diffopt, no fmodel stuff on the tensor
-                                                        # and then directly use that diffopt. I had it working before
-
-                                                        # print(mixed_thetas[j])
-
-                                                        grad = get_gradient(
-                                                            dice_loss[j],
-                                                            mixed_thetas[j])
-                                                        mixed_thetas[j] = mixed_thetas[j] - lr_policies[j] * eta * grad  # This step is critical to allow the gradient to flow through
-                                                        # You cannot use torch.no_grad on this step
-
-                                                        if args.inner_val_updates:
-                                                            grad_val = get_gradient(
-                                                                values_loss[j],
-                                                                mixed_vals[j])
-                                                            mixed_vals[j] = mixed_vals[j] - lr_policies[j] * eta * grad_val
-
-                                                        # TODO The regular DiCE formulation should have value updates on this inner loop too
-                                                        # However either 1) it is hard to choose the right hyperparameter
-                                                        # or 2) you end up using small value updates which don't do much
-                                                        # or 3) you require multiple value update iterations which is going to require more time/make training slower
-
-                                                    else:
-
-                                                        optim_update(optims_th_primes[j],
-                                                            dice_loss[j], mixed_thetas[j].parameters())
-
-                                                        if args.inner_val_updates:
-                                                            optim_update(optims_vals_primes[j], values_loss[j], mixed_vals[j].parameters())
-
-                                            if args.print_inner_rollouts:
-                                                print("---Agent {} Rollout {}---".format(
-                                                        i+1, step+1))
-                                                game.print_policies_for_all_states(
-                                                    mixed_thetas)
-                                                game.print_values_for_all_states(
-                                                    mixed_vals)
-
-
-                                # --- OUTER STEPS ---
-                                # Now calculate outer step using for each player a mix of the theta_primes and old thetas
-                                # mixed thetas and mixed vals contain the new constructed thetas and vals for all the other players
-                                # only the agent doing the rollout has the original th/val in the mixed theta/val
-                                # so then the gradient step afterwards on the original th/val makes sense
-
-                                # diff_optims_th = construct_diff_optims(th, lr_policies, f_th)
-                                # diff_optims_vals = construct_diff_optims(vals, lr_values, f_vals)
-
-                                for step in range(L):
-                                    # print(step)
-                                    if repeat_train_on_same_samples:
-                                        if args.env != 'ipd':
-                                            raise Exception("Repeat_train not yet supported for other games")
-                                        if step == 0:
-                                            # This structure is a bit different from the inner loop one... I could make consistent
-                                            # The key point is you need to roll out once at the beginning and then repeat train afterwards
-                                            action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                                                mixed_thetas, mixed_vals)
-                                            dice_loss, _, values_loss = game.get_dice_loss(
-                                                action_trajectory, rewards,
-                                                policy_history, val_history,
-                                                next_val_history,
-                                                old_policy_history=policy_history,
-                                                use_nl_loss=args.inner_nl_loss,
-                                                use_penalty=args.outer_penalty,
-                                                use_clipping=args.outer_clip,
-                                                beta=args.outer_beta)
-
-                                        else:
-                                            new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-                                                mixed_thetas, mixed_vals,
-                                                obs_history)
-                                            # Using the new policies and vals now
-                                            # Always be careful not to overwrite/reuse names of existing variables
-                                            dice_loss, _, values_loss = game.get_dice_loss(
-                                                action_trajectory, rewards,
-                                                new_policies, new_vals,
-                                                next_new_vals,
-                                                old_policy_history=policy_history,
-                                                use_nl_loss=args.inner_nl_loss,
-                                                use_penalty=args.outer_penalty,
-                                                use_clipping=args.outer_clip,
-                                                beta=args.outer_beta)
-                                    else:
-                                        if args.env == 'coin':
-                                            obs_history, act_history, rewards, policy_history, val_history, \
-                                            next_val_history, avg_same_colour_coins_picked_total, avg_diff_colour_coins_picked_total, \
-                                            avg_coins_picked_total = game.rollout(
-                                                mixed_thetas, mixed_vals)
-
-
-                                            dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                                rewards, policy_history, val_history,
-                                                next_val_history)
-                                        elif args.env == 'imp':
-                                            if repeat_train_on_same_samples:
-                                                raise Exception("Repeat_train not yet supported for coin game")
-                                            obs_history, act_history, rewards, policy_history, \
-                                            val_history, next_val_history = game.rollout(
-                                                mixed_thetas, mixed_vals)
-
-                                            dice_loss, _, values_loss = game.get_dice_loss(
-                                                act_history, rewards, policy_history,
-                                                val_history,
-                                                next_val_history,
-                                                use_nl_loss=args.inner_nl_loss,
-                                                use_penalty=args.outer_penalty,
-                                                use_clipping=args.outer_clip,
-                                                beta=args.outer_beta)
-                                        else:
-                                            action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                                                mixed_thetas, mixed_vals)
-
-                                            # no_penalty_on_outer_step = False
-                                            # use_pen = args.use_penalty
-                                            # if no_penalty_on_outer_step:
-                                            #     use_pen = False
-
-                                            # if repeat_train_on_same_samples:
-                                            #     dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                            #         action_trajectory, rewards,
-                                            #         policy_history, val_history, next_val_history,
-                                            #         old_policy_history=policy_history,
-                                            #         use_penalty=args.outer_penalty, use_clipping=args.outer_clip)
-                                            # else:
-                                            dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                                action_trajectory, rewards,
-                                                policy_history, val_history, next_val_history,
-                                                use_penalty=args.outer_penalty, use_clipping=args.outer_clip,
-                                                beta=args.outer_beta)
-
-                                    # print("---Agent {} Rollout---".format(i+1))
-                                    # game.print_policies_for_all_states(mixed_thetas)
-                                    # game.print_reward_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
-
-
-                                    if isinstance(mixed_thetas[i], torch.Tensor):
-                                        # optim_update(optims_th[i], dice_loss[i], [th[i]])
-                                        # optim_update(optims_vals[i], values_loss[i], [vals[i]])
-
-                                        grad = get_gradient(dice_loss[i], mixed_thetas[i])
-                                        grad_val = get_gradient(values_loss[i], mixed_vals[i])
-
-
-                                        with torch.no_grad():
-                                            mixed_thetas[i] -= lr_policies[i] * grad
-                                            mixed_vals[i] -= lr_values[i] * grad_val
-                                            # th[i] -= lr_policies[i] * (b-a)
-
-                                            1/0
-                                            # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
-
-                                        # TODO Be careful with +/- formulation now...
-                                        # TODO rename the non-DiCE terms as rewards
-                                        # And keep the DiCE terms as losses
-
-
-                                    else:
-                                        optim_update(optims_th_primes[i], dice_loss[i], mixed_thetas[i].parameters())
-                                        optim_update(optims_vals_primes[i], values_loss[i], mixed_vals[i].parameters())
-
-                                        copyNN(th[i], mixed_thetas[i])
-                                        copyNN(vals[i], mixed_vals[i])
-
-
-
-                                    # TODO note mixed_th[i] should be == th[i] here
-                                    # if isinstance(th[i], torch.Tensor):
-                                    #     # optim_update(optims_th[i], dice_loss[i], [th[i]])
-                                    #     # optim_update(optims_vals[i], values_loss[i], [vals[i]])
-                                    #
-                                    #     grad = get_gradient(dice_loss[i], th[i])
-                                    #     grad_val = get_gradient(values_loss[i], vals[i])
-                                    #
-                                    #
-                                    #     with torch.no_grad():
-                                    #         th[i] -= lr_policies[i] * grad
-                                    #         vals[i] -= lr_values[i] * grad_val
-                                    #         # th[i] -= lr_policies[i] * (b-a)
-                                    #
-                                    #     # TODO Be careful with +/- formulation now...
-                                    #     # TODO rename the non-DiCE terms as rewards
-                                    #     # And keep the DiCE terms as losses
-                                    #
-                                    #
-                                    # else:
-                                    #     # print(step)
-                                    #     # optim_update(optims_th[i], dice_loss[i])
-                                    #     optim_update(optims_vals[i], values_loss[i])
-                                    #
-                                    #     # print("A")
-                                    #     # for param in th[i].parameters():
-                                    #     #     print(param)
-                                    #     # for param in f_th[i].parameters():
-                                    #     #     print(param)
-                                    #
-                                    #     # optim_update(diff_optims_th[i], dice_loss[i], f_th[i].parameters())
-                                    #     # optim_update(diff_optims_vals[i], values_loss[i], f_vals[i].parameters())
-                                    #
-                                    #     # print("B")
-                                    #     # for param in th[i].parameters():
-                                    #     #     print(param)
-                                    #     # for param in f_th[i].parameters():
-                                    #     #     print(param)
-                                    #
-                                    #     # TODO should be able to move this outside the loop at the end since
-                                    #     # th and vals aren't used until afterwards
-                                    #     # copyNN(th[i], f_th[i])
-                                    #     # copyNN(vals[i], f_vals[i])
-                                    #
-                                    #     # print("C")
-                                    #     # for param in th[i].parameters():
-                                    #     #     print(param)
-                                    #     # for param in f_th[i].parameters():
-                                    #     #     print(param)
-                                    #
-                                    #     # print("hi")
-                                    #     # print(step)
-
-                                    for _ in range(args.extra_value_updates):
-                                        _, val_history, next_val_history = game.get_policies_vals_for_states(mixed_thetas, mixed_vals, obs_history)
-
-                                        if repeat_train_on_same_samples:
-                                            dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                                action_trajectory, rewards,
-                                                policy_history, val_history,
-                                                next_val_history,
-                                                old_policy_history=policy_history,
-                                                use_penalty=args.outer_penalty,
-                                                use_clipping=args.outer_clip,
-                                                beta=args.outer_beta)
-                                        else:
-                                            dice_loss, G_ts, values_loss = game.get_dice_loss(
-                                                action_trajectory, rewards,
-                                                policy_history, val_history,
-                                                next_val_history,
-                                                use_penalty=args.outer_penalty, use_clipping=args.outer_clip,
-                                                beta=args.outer_beta)
-
-                                        if isinstance(vals[i], torch.Tensor):
-                                            grad_val = get_gradient(values_loss[i],
-                                                                    vals[i])
-                                            with torch.no_grad():
-                                                vals[i] -= lr_values[i] * grad_val
-                                        else:
-                                            optim_update(optims_vals[i],
-                                                         values_loss[i])
-
-                                    if args.print_outer_rollouts:
-                                        print("---Agent {} Rollout {}---".format(
-                                                i + 1, step + 1))
-                                        game.print_policies_for_all_states(
-                                            mixed_thetas)
-                                        game.print_values_for_all_states(
-                                            mixed_vals)
-
+                            th, vals = dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta, repeat_train_on_same_samples)
 
                         else:
-
+                            # Samples but no DiCE, this is the LOLA-PG formulation
                             action_trajectory, rewards, policy_history = game.rollout(th)
                             gradient_terms = game.get_gradient_terms(action_trajectory, rewards, policy_history)
 
                             th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
                                 update_th(th, gradient_terms, lr_policies, eta, algos, using_samples=using_samples)
                     else:
-
+                        # Exact gradient case
                         th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
                             update_th(th, Ls, lr_policies, eta, algos, using_samples=using_samples)
 
@@ -3454,7 +3732,7 @@ if __name__ == "__main__":
                             # usually correlates with the sync play results but is sometimes a bit weird)
                             if args.env == 'coin':
                                 if repeat_train_on_same_samples:
-                                    raise NotImplementedError("AGAIN repeat train not yet supported here")
+                                    raise NotImplementedError("Again repeat train not yet supported here")
                                 obs_history, act_history, rewards, policy_history, val_history, \
                                 next_val_history, avg_same_colour_coins_picked_total, \
                                 avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
@@ -3489,8 +3767,9 @@ if __name__ == "__main__":
                                     _, G_ts, _ = game.get_dice_loss(
                                         action_trajectory, rewards,
                                         policy_history, val_history,
-                                        next_val_history, use_penalty=args.outer_penalty,
-                                        use_clipping=args.outer_clip, beta=args.outer_beta)
+                                        next_val_history)
+                                        # use_penalty=args.outer_penalty,
+                                        # use_clipping=args.outer_clip, beta=args.outer_beta)
 
                         assert G_ts is not None
                         G_ts_record[epoch] = G_ts[0]
