@@ -149,13 +149,13 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
             # p_i_0 = torch.sigmoid(th[i][0:1])
             if init_state_representation == 1:
                 if args.ill_condition:
-                    p_i_0 = torch.sigmoid((ill_cond_matrix @ th[i])[-2])
+                    p_i_0 = torch.sigmoid((ill_cond_matrices[i] @ th[i])[-2])
                 else:
                     p_i_0 = torch.sigmoid(th[i][
                                           -2]) # force all coop at the beginning in this special case
             else:
                 if args.ill_condition:
-                    p_i_0 = torch.sigmoid((ill_cond_matrix @ th[i])[-1])
+                    p_i_0 = torch.sigmoid((ill_cond_matrices[i] @ th[i])[-1])
                 else:
                     p_i_0 = torch.sigmoid(th[i][
                                               -1])  # so start state is at the end, different from the 2p ipd formulation
@@ -180,7 +180,7 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
         all_p_is = torch.zeros((n, state_space - 1))
         for i in range(n):
             if args.ill_condition:
-                p_i = torch.sigmoid((ill_cond_matrix @ th[i])[0:-1])
+                p_i = torch.sigmoid((ill_cond_matrices[i] @ th[i])[0:-1])
             else:
                 p_i = torch.sigmoid(th[i][0:-1])
             # p_i = torch.reshape(torch.sigmoid(th[i][0:-1]), (-1, 1)) # or just -1 instead of -1,1
@@ -317,7 +317,7 @@ class Game():
         for i in range(len(th)):
             if isinstance(th[i], torch.Tensor):
                 if args.ill_condition:
-                    ill_cond_policy = torch.sigmoid(ill_cond_matrix @ th[i])
+                    ill_cond_policy = torch.sigmoid(ill_cond_matrices[i] @ th[i])
                 policy = torch.sigmoid(th[i])
 
             else:
@@ -531,7 +531,7 @@ class ContributionGame(Game):
             indices = list(map(self.int_from_bin_inttensor, state_batch))
         return indices
 
-    def get_policy_and_state_value(self, pol, val, state_batch, iter):
+    def get_policy_and_state_value(self, pol, val, i, state_batch, iter):
 
         if isinstance(pol, torch.Tensor) or isinstance(val, torch.Tensor):
             state_batch_indices = self.get_state_batch_indices(state_batch,
@@ -542,7 +542,7 @@ class ContributionGame(Game):
                 # print(pol)
                 # print(ill_cond_matrix @ pol)
                 # 1/0
-                policy = torch.sigmoid(ill_cond_matrix @ pol)[state_batch_indices].reshape(-1, 1)
+                policy = torch.sigmoid(ill_cond_matrices[i] @ pol)[state_batch_indices].reshape(-1, 1)
             else:
                 policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
         else:
@@ -586,14 +586,14 @@ class ContributionGame(Game):
             if self.state_type == 'majorTD4':
                 # Different obs for each agent
                 policy, state_value = self.get_policy_and_state_value(th[i],
-                                                                      vals[i],
+                                                                      vals[i], i,
                                                                       state_batch[i],
                                                                       iter)
 
             else:
                 # same state batch for all agents
                 policy, state_value = self.get_policy_and_state_value(th[i],
-                                                                      vals[i],
+                                                                      vals[i], i,
                                                                       state_batch,
                                                                       iter)
 
@@ -984,7 +984,7 @@ class ContributionGame(Game):
         return policy_dist_i
 
     def get_dice_loss(self, trajectory, rewards, policy_history, val_history, next_val_history,
-                      old_policy_history=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
+                      old_policy_history=None, kl_div_target_policy=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
 
         if old_policy_history is not None:
             old_policy_history = old_policy_history.detach()
@@ -1039,16 +1039,19 @@ class ContributionGame(Game):
 
                 # print(policy_history.shape)
 
-                assert old_policy_history is not None
+                # assert kl_div_target_policy is not None
+                if kl_div_target_policy is None:
+                    assert old_policy_history is not None
+                    kl_div_target_policy = old_policy_history
 
                 for i in range(self.n_agents):
 
                     policy_dist_i = self.build_policy_dist(policy_history, i)
-                    old_policy_dist_i = self.build_policy_dist(old_policy_history, i)
+                    kl_target_dist_i = self.build_policy_dist(kl_div_target_policy, i)
                     # print(policy_dist_i.shape)
                     # print(policy_dist_i)
                     kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist_i),
-                                                    target=old_policy_dist_i.detach(),
+                                                    target=kl_target_dist_i.detach(),
                                                     reduction='batchmean',
                                                     log_target=False)
                     # print(kl_div)
@@ -1640,13 +1643,16 @@ def init_th_adversarial(dims):
     for i in range(len(dims)):
         # For some reason this -0 is needed
         init = torch.zeros(dims[i], requires_grad=True) - 0
-        # init[-1] += 2 * 1
         init[0] -= 5
-        # init[0] = init[0] - 5
         th.append(init)
-    # Dims [5,5] or something, len is num agents
-    # And each num represents the dim of the policy for that agent (equal to state space size with binary action/bernoulli dist)
+    return th
 
+def init_th_adversarial2(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 2
+        th.append(init)
     return th
 
 
@@ -1946,14 +1952,14 @@ def build_policy_dist(coop_probs):
     # 1/0
     return policy_dist
 
-def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build):
+def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build, i):
     # Note the policy and targets are individual agent ones
     if args.ill_condition:
         policy_dist = build_policy_dist(
-            torch.sigmoid(ill_cond_matrix @ policy_to_build))
+            torch.sigmoid(ill_cond_matrices[i] @ policy_to_build))
 
         target_policy_dist = build_policy_dist(
-            torch.sigmoid(ill_cond_matrix @ target_pol_to_build.detach()))
+            torch.sigmoid(ill_cond_matrices[i] @ target_pol_to_build.detach()))
     else:
         policy_dist = build_policy_dist(torch.sigmoid(policy_to_build))
         target_policy_dist = build_policy_dist(
@@ -1986,7 +1992,7 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
         #     policy_dist = build_policy_dist(torch.sigmoid(th_to_build_on[j]))
         #     target_policy_dist = build_policy_dist(
         #         torch.sigmoid(kl_div_target_th[j].detach()))
-        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(th_to_build_on[j], kl_div_target_th[j])
+        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(th_to_build_on[j], kl_div_target_th[j], j)
 
         kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
                                             target=target_policy_dist,
@@ -2009,7 +2015,7 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
         # policy_dist = build_policy_dist(torch.sigmoid(curr_pol))
         # target_policy_dist = build_policy_dist(torch.sigmoid(prev_pol))
 
-        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol)
+        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol, j)
 
         # print(policy_dist)
         # print(target_policy_dist)
@@ -2051,7 +2057,7 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i,
     grad2_V1 = get_gradient(- rews_for_ift[i], inner_lookahead_th[j])
 
     # We use inner_lookahead_th instead of new_th because inner_lookahead has only th[j] updated
-    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(inner_lookahead_th[j], kl_div_target_th[j])
+    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(inner_lookahead_th[j], kl_div_target_th[j], j)
     # policy_dist = build_policy_dist(
     #     torch.sigmoid(inner_lookahead_th[j]))
     # target_policy_dist = build_policy_dist(
@@ -2165,7 +2171,7 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, o
     #         torch.sigmoid(static_th_copy[i].detach()))
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        new_th[i], static_th_copy[i])
+        new_th[i], static_th_copy[i], i)
 
     kl_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -2201,7 +2207,7 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, o
     # target_policy_dist = build_policy_dist(
     #     torch.sigmoid(prev_pol))
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        curr_pol, prev_pol)
+        curr_pol, prev_pol, i)
 
     curr_prev_pol_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -2231,7 +2237,7 @@ def print_exact_policy(th, i):
 
         if args.ill_condition:
             print("Agent {} Transformed Policy".format(j + 1))
-            print(torch.sigmoid(ill_cond_matrix @ th[j]))
+            print(torch.sigmoid(ill_cond_matrices[j] @ th[j]))
         # else:
 
 
@@ -2605,10 +2611,16 @@ def update_th(th, gradient_terms_or_Ls, lr_policies, eta, algos, using_samples):
                 nl_terms = [grad_L[i][i]
                             for i in range(n)]
 
-                # print("!!!NL TERMS!!!")
-                # print(nl_terms)
-                # print("!!!LOLA TERMS!!!")
-                # print(lola_terms)
+                print("!!!NL TERMS!!!")
+                print(nl_terms)
+                if args.ill_condition:
+                    for i in range(n):
+                        print(ill_cond_matrices[i] @ nl_terms[i])
+                print("!!!LOLA TERMS!!!")
+                print(lola_terms)
+                if args.ill_condition:
+                    for i in range(n):
+                        print(ill_cond_matrices[i] @ lola_terms[i])
 
                 grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
 
@@ -2961,10 +2973,6 @@ def dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr
                     # use_penalty=args.outer_penalty, use_clipping=args.outer_clip,
                     # beta=args.outer_beta)
 
-            # print("---Agent {} Rollout---".format(i+1))
-            # game.print_policies_for_all_states(mixed_thetas)
-            # game.print_reward_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
-
             if isinstance(mixed_thetas[i], torch.Tensor):
                 # optim_update(optims_th[i], dice_loss[i], [th[i]])
                 # optim_update(optims_vals[i], values_loss[i], [vals[i]])
@@ -3087,259 +3095,353 @@ def dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr
 
     return th, vals
 
-#
-# def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta):
-#     # Assumed repeat_train_on_same_samples
-#     # (and using_nn?)
-#
-#     if args.using_nn:
-#         static_th_copy = th
-#         static_vals_copy = vals
-#     else:
-#         static_th_copy = copy.deepcopy(th)
-#         static_vals_copy = copy.deepcopy(vals)
-#
-#     for i in range(n_agents):
-#         K = inner_steps[i]
-#         L = outer_steps[i]
-#
-#         if args.using_nn:
-#             theta_primes = static_th_copy
-#             val_primes = static_vals_copy  # should work if it is functional/stateless
-#         else:
-#             theta_primes = copy.deepcopy(static_th_copy)
-#             val_primes = copy.deepcopy(static_vals_copy)
-#
-#         f_th_primes = []
-#         if args.using_nn:
-#             for ii in range(n_agents):
-#                 f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii],
-#                                                             copy_initial_weights=True,
-#                                                             track_higher_grads=True))
-#
-#         mixed_th_lr_policies = lr_policies * eta
-#         mixed_th_lr_policies[i] = lr_policies[i]
-#
-#         optims_th_primes = construct_diff_optims(theta_primes,
-#                                                  mixed_th_lr_policies,
-#                                                  f_th_primes)
-#         f_vals_primes = []
-#         if args.using_nn:
-#             for ii in range(n_agents):
-#                 f_vals_primes.append(
-#                     higher.patch.monkeypatch(
-#                         val_primes[ii],
-#                         copy_initial_weights=True,
-#                         track_higher_grads=True))
-#         # optims_vals_primes = construct_diff_optims(
-#         #     val_primes, lr_values * eta,
-#         #     f_vals_primes)
-#         optims_vals_primes = construct_diff_optims(
-#             val_primes, lr_values,
-#             f_vals_primes)
-#
-#         if args.using_nn:
-#             mixed_thetas = f_th_primes
-#             mixed_vals = f_vals_primes
-#             # mixed_thetas[i] = th[i]
-#             # mixed_vals[i] = vals[i]
-#
-#             # mixed_thetas[i] = f_th[i]
-#             # mixed_vals[i] = f_vals[i]
-#
-#         else:
-#             mixed_thetas = theta_primes
-#             mixed_vals = val_primes
-#             mixed_thetas[i] = th[i]
-#             mixed_vals[i] = vals[i]
-#
-#         # print(mixed_thetas)
-#         if eta != 0:
-#             # --- INNER STEPS ---
-#             assert repeat_train_on_same_samples
-#             action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-#                 mixed_thetas, mixed_vals)
-#             for outer_step in range(L):
-#                 # INNER LOOP
-#                 for inner_step in range(K):
-#                     # print(step)
-#                     if inner_step == 0:
-#                         dice_loss, _, values_loss = game.get_dice_loss(
-#                             action_trajectory, rewards,
-#                             policy_history, val_history, next_val_history,
-#                             old_policy_history=policy_history,
-#                             use_nl_loss=args.inner_nl_loss,
-#                             use_penalty=args.inner_penalty,
-#                             use_clipping=args.inner_clip, beta=args.inner_beta)
-#
-#                     else:
-#                         new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-#                             mixed_thetas, mixed_vals, obs_history)
-#                         # Using the new policies and vals now
-#                         # Always be careful not to overwrite/reuse names of existing variables
-#                         dice_loss, _, values_loss = game.get_dice_loss(
-#                             action_trajectory, rewards, new_policies, new_vals,
-#                             next_new_vals, old_policy_history=policy_history,
-#                             use_nl_loss=args.inner_nl_loss,
-#                             use_penalty=args.inner_penalty,
-#                             use_clipping=args.inner_clip, beta=args.inner_beta)
-#
-#                     # grads = [None] * n_agents
-#
-#                     # Note only policy update, no value update here
-#                     # because we are updating off policy
-#                     # We need to keep the advantage consistent with the policy that
-#                     # collected the data we are training on
-#                     # So no value update in between policy updates on the same data
-#                     for j in range(n_agents):
-#                         if j != i:
-#                             if isinstance(mixed_thetas[j], torch.Tensor):
-#                                 # Higher with diffopt on the tensor can work too
-#                                 # I think what needs to be done is a simpler formulation
-#                                 # Where you just construct the diffopt, no fmodel stuff on the tensor
-#                                 # and then directly use that diffopt. I had it working before
-#
-#                                 # print(mixed_thetas[j])
-#
-#                                 grad = get_gradient(
-#                                     dice_loss[j],
-#                                     mixed_thetas[j])
-#                                 mixed_thetas[j] = mixed_thetas[j] - lr_policies[
-#                                     j] * eta * grad  # This step is critical to allow the gradient to flow through
-#                                 # You cannot use torch.no_grad on this step
-#
-#                                 if args.inner_val_updates:
-#                                     grad_val = get_gradient(
-#                                         values_loss[j],
-#                                         mixed_vals[j])
-#                                     mixed_vals[j] = mixed_vals[j] - lr_policies[
-#                                         j] * eta * grad_val
-#
-#                             else:
-#
-#                                 optim_update(optims_th_primes[j],
-#                                              dice_loss[j],
-#                                              mixed_thetas[j].parameters())
-#                                 if args.inner_val_updates:
-#                                     optim_update(optims_vals_primes[j],
-#                                                  values_loss[j],
-#                                                  mixed_vals[j].parameters())
-#
-#                     # Also TODO Aug 23 is do an outer loop with number of steps also
-#
-#                     if args.print_inner_rollouts:
-#                         print(
-#                             "---Agent {} Rollout {}---".format(i + 1, step + 1))
-#                         game.print_policies_for_all_states(
-#                             mixed_thetas)
-#                         game.print_values_for_all_states(mixed_vals)
-#
-#                 # --- OUTER STEP ---
-#
-#                 # print(step)
-#                 if args.env != 'ipd':
-#                     raise Exception(
-#                         "Repeat_train not yet supported for other games")
-#                 if outer_step == 0:
-#                     # This structure is a bit different from the inner loop one... I could make consistent
-#                     # The key point is you need to roll out once at the beginning and then repeat train afterwards
-#                     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-#                         mixed_thetas, mixed_vals)
-#                     dice_loss, _, values_loss = game.get_dice_loss(
-#                         action_trajectory, rewards,
-#                         policy_history, val_history,
-#                         next_val_history,
-#                         old_policy_history=policy_history,
-#                         use_nl_loss=args.inner_nl_loss,
-#                         use_penalty=args.outer_penalty,
-#                         use_clipping=args.outer_clip,
-#                         beta=args.outer_beta)
-#
-#                 else:
-#                     new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-#                         mixed_thetas, mixed_vals,
-#                         obs_history)
-#                     # Using the new policies and vals now
-#                     # Always be careful not to overwrite/reuse names of existing variables
-#                     dice_loss, _, values_loss = game.get_dice_loss(
-#                         action_trajectory, rewards,
-#                         new_policies, new_vals,
-#                         next_new_vals,
-#                         old_policy_history=policy_history,
-#                         use_nl_loss=args.inner_nl_loss,
-#                         use_penalty=args.outer_penalty,
-#                         use_clipping=args.outer_clip,
-#                         beta=args.outer_beta)
-#
-#                 # print("---Agent {} Rollout---".format(i+1))
-#                 # game.print_policies_for_all_states(mixed_thetas)
-#                 # game.print_reward_info(G_ts, discounted_sum_of_adjustments, truncated_coop_payout, inf_coop_payout)
-#
-#                 if isinstance(mixed_thetas[i], torch.Tensor):
-#                     # optim_update(optims_th[i], dice_loss[i], [th[i]])
-#                     # optim_update(optims_vals[i], values_loss[i], [vals[i]])
-#
-#                     grad = get_gradient(dice_loss[i], mixed_thetas[i])
-#                     grad_val = get_gradient(values_loss[i], mixed_vals[i])
-#
-#                     with torch.no_grad():
-#                         mixed_thetas[i] -= lr_policies[i] * grad
-#                         mixed_vals[i] -= lr_values[i] * grad_val
-#                         # th[i] -= lr_policies[i] * (b-a)
-#
-#                         1 / 0
-#                         # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
-#
-#                     # TODO Be careful with +/- formulation now...
-#                     # TODO rename the non-DiCE terms as rewards
-#                     # And keep the DiCE terms as losses
-#
-#
-#                 else:
-#                     optim_update(optims_th_primes[i], dice_loss[i],
-#                                  mixed_thetas[i].parameters())
-#                     optim_update(optims_vals_primes[i], values_loss[i],
-#                                  mixed_vals[i].parameters())
-#
-#                     copyNN(th[i], mixed_thetas[i])
-#                     copyNN(vals[i], mixed_vals[i])
-#
-#                 for _ in range(args.extra_value_updates):
-#                     _, val_history, next_val_history = game.get_policies_vals_for_states(
-#                         mixed_thetas, mixed_vals, obs_history)
-#
-#                     dice_loss, G_ts, values_loss = game.get_dice_loss(
-#                         action_trajectory, rewards,
-#                         policy_history, val_history,
-#                         next_val_history,
-#                         old_policy_history=policy_history,
-#                         use_penalty=args.outer_penalty,
-#                         use_clipping=args.outer_clip,
-#                         beta=args.outer_beta)
-#
-#                     if isinstance(vals[i], torch.Tensor):
-#                         grad_val = get_gradient(values_loss[i],
-#                                                 vals[i])
-#                         with torch.no_grad():
-#                             vals[i] -= lr_values[i] * grad_val
-#                     else:
-#                         optim_update(optims_vals[i],
-#                                      values_loss[i])
-#
-#                 if args.print_outer_rollouts:
-#                     print("---Agent {} Rollout {}---".format(
-#                         i + 1, step + 1))
-#                     game.print_policies_for_all_states(
-#                         mixed_thetas)
-#                     game.print_values_for_all_states(
-#                         mixed_vals)
-#
-#     return th, vals
+def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_vals, lr_policies, lr_values, eta):
+    # if args.using_nn:
+    #     theta_primes = starting_th
+    #     val_primes = starting_vals  # should work if it is functional/stateless
+    # else:
+    theta_primes = copy.deepcopy(starting_th)
+    val_primes = copy.deepcopy(starting_vals)
+
+    # theta_primes, _, val_primes, _, _, _ = init_custom(dims,
+    #                                                            args.state_type,
+    #                                                            args.using_nn,
+    #                                                            args.using_rnn,
+    #                                                            args.env,
+    #                                                            args.nn_hidden_size,
+    #                                                            args.nn_extra_layers)
+    # for j in range(n_agents):
+    #     copyNN(theta_primes[j], starting_th[j])
+    #     copyNN(val_primes[j], starting_vals[j])
+
+    f_th_primes = []
+    if args.using_nn:
+        for ii in range(n_agents):
+            f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii],
+                                                        copy_initial_weights=True,
+                                                        track_higher_grads=True))
+
+    mixed_th_lr_policies = lr_policies * eta
+    mixed_th_lr_policies[i] = lr_policies[i]
+
+    optims_th_primes = construct_diff_optims(theta_primes,
+                                             mixed_th_lr_policies,
+                                             f_th_primes)
+
+    f_vals_primes = []
+    if args.using_nn:
+        for ii in range(n_agents):
+            f_vals_primes.append(
+                higher.patch.monkeypatch(
+                    val_primes[ii],
+                    copy_initial_weights=True,
+                    track_higher_grads=True))
+
+    optims_vals_primes = construct_diff_optims(
+        val_primes, lr_values,
+        f_vals_primes)
+
+
+    if args.using_nn:
+        mixed_thetas = f_th_primes
+        mixed_vals = f_vals_primes
+
+    else:
+        mixed_thetas = theta_primes
+        mixed_vals = val_primes
+
+    # optims_th_primes_nodiff = construct_optims(mixed_thetas, mixed_th_lr_policies)
+    # optims_vals_primes_nodiff = construct_optims(mixed_vals, lr_values)
+    optims_th_primes_nodiff = construct_optims(theta_primes,
+                                               mixed_th_lr_policies)
+    optims_vals_primes_nodiff = construct_optims(val_primes, lr_values)
+    mixed_thetas[i] = theta_primes[i]
+    mixed_vals[i] = val_primes[i]
+
+    return mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, optims_th_primes_nodiff, optims_vals_primes_nodiff
+
+def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
+                    val_history, next_val_history, mixed_thetas, mixed_vals,
+                    obs_history, kl_div_target_policy_inner,
+                    optims_th_primes, optims_vals_primes):
+    if inner_step == 0:
+        dice_loss, _, values_loss = game.get_dice_loss(
+            action_trajectory, rewards,
+            policy_history, val_history, next_val_history,
+            old_policy_history=policy_history,
+            use_nl_loss=args.inner_nl_loss,
+            use_penalty=args.inner_penalty,
+            use_clipping=args.inner_clip, beta=args.inner_beta)
+
+    else:
+        new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+            mixed_thetas, mixed_vals, obs_history)
+        # Using the new policies and vals now
+        # Always be careful not to overwrite/reuse names of existing variables
+        dice_loss, _, values_loss = game.get_dice_loss(
+            action_trajectory, rewards, new_policies, new_vals,
+            next_new_vals, old_policy_history=policy_history,
+            kl_div_target_policy=kl_div_target_policy_inner,
+            use_nl_loss=args.inner_nl_loss,
+            use_penalty=args.inner_penalty,
+            use_clipping=args.inner_clip, beta=args.inner_beta)
+
+    for j in range(n_agents):
+        if j != i:
+            if isinstance(mixed_thetas[j], torch.Tensor):
+                # Higher with diffopt on the tensor can work too
+                # I think what needs to be done is a simpler formulation
+                # Where you just construct the diffopt, no fmodel stuff on the tensor
+                # and then directly use that diffopt. I had it working before
+
+                # print(mixed_thetas[j])
+
+                grad = get_gradient(
+                    dice_loss[j],
+                    mixed_thetas[j])
+                mixed_thetas[j] = mixed_thetas[j] - lr_policies[
+                    j] * eta * grad  # This step is critical to allow the gradient to flow through
+                # You cannot use torch.no_grad on this step
+
+                if args.inner_val_updates:
+                    grad_val = get_gradient(
+                        values_loss[j],
+                        mixed_vals[j])
+                    mixed_vals[j] = mixed_vals[j] - lr_policies[
+                        j] * eta * grad_val
+
+            else:
+
+                optim_update(optims_th_primes[j],
+                             dice_loss[j],
+                             mixed_thetas[j].parameters())
+                if args.inner_val_updates:
+                    optim_update(optims_vals_primes[j],
+                                 values_loss[j],
+                                 mixed_vals[j].parameters())
+
+    if args.print_inner_rollouts:
+        print(
+            "---Agent {} Rollout {}---".format(i + 1, inner_step + 1))
+        game.print_policies_for_all_states(mixed_thetas)
+        game.print_values_for_all_states(mixed_vals)
+
+
+def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta):
+    # Assumed repeat_train_on_same_samples
+    # (and using_nn?)
+
+    # if args.using_nn:
+    #     static_th_copy = th
+    #     static_vals_copy = vals
+    # else:
+    static_th_copy = copy.deepcopy(th)
+    static_vals_copy = copy.deepcopy(vals)
+
+    # static_th_copy, _, static_vals_copy, _, _, _ = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env, args.nn_hidden_size, args.nn_extra_layers)
+    # for i in range(n_agents):
+    #     copyNN(static_th_copy[i], th[i])
+    #     copyNN(static_vals_copy[i], vals[i])
+
+    for i in range(n_agents):
+        K = inner_steps[i]
+        L = outer_steps[i]
+
+        # print(mixed_thetas)
+        if eta != 0:
+            assert repeat_train_on_same_samples
+
+            for outer_step in range(L):
+
+                th_with_only_agent_i_updated = copy.deepcopy(static_th_copy)
+                th_with_only_agent_i_updated[i] = th[i]
+                vals_with_only_agent_i_updated = copy.deepcopy(static_vals_copy)
+                vals_with_only_agent_i_updated[i] = vals[i]
+
+                # mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, \
+                # optims_th_primes_nodiff, optims_vals_primes_nodiff = \
+                #     construct_mixed_th_vals_and_diffoptims(n_agents, i,
+                #                                            static_th_copy,
+                #                                            static_vals_copy,
+                #                                            lr_policies,
+                #                                            lr_values, eta)
+
+                # Reconstruct on ever outer loop iter. The idea is this:
+                # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
+                # Then update own policy, ONCE
+                # Then we repeat, starting from the static th for all other players' policies
+                # BUT now we have the old policies of all other players but our own updated policy
+                # Then the other players again solve the prox objective, but with our new policy
+                # And then we take another step
+                # And repeat
+                # Starting from the old th for all other players again and diff through those steps
+                # Is analogous to what the IFT does after we have found a fixed point
+                # We can't warm start here though if I am resolving/recreating the optims/gradient tape at each outer step
+                # And the reason I do this resolve instead of just one long gradient tape
+                # Is because otherwise the memory blows up way too quickly
+                mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, \
+                optims_th_primes_nodiff, optims_vals_primes_nodiff = \
+                    construct_mixed_th_vals_and_diffoptims(n_agents, i,
+                                                           th_with_only_agent_i_updated,
+                                                           vals_with_only_agent_i_updated,
+                                                           lr_policies,
+                                                           lr_values, eta)
+
+                # print("HEY")
+                # game.print_policies_for_all_states(static_th_copy)
+                # game.print_policies_for_all_states(th_with_only_agent_i_updated)
+                # game.print_policies_for_all_states(mixed_thetas)
+
+
+
+                # INNER LOOP
+
+                # if outer_step == 0:
+                #     mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes = \
+                #         construct_mixed_th_vals_and_diffoptims(n_agents, i,
+                #                                                static_th_copy,
+                #                                                static_vals_copy,
+                #                                                lr_policies,
+                #                                                lr_values, eta)
+                # else:
+                #     # No I don't think you can do this. Well you can but then by resetting gradient tape
+                #     # The later inner steps won't really have much gradient signal for the higher order gradient
+                #     mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes = \
+                #         construct_mixed_th_vals_and_diffoptims(n_agents, i,
+                #                                                mixed_thetas,
+                #                                                mixed_vals,
+                #                                                lr_policies,
+                #                                                lr_values, eta)
+
+
+                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                    mixed_thetas, mixed_vals)
+                if outer_step == 0:
+                    kl_div_target_policy_inner = policy_history.detach().clone()
+
+                for inner_step in range(K):
+
+                    # print(inner_step)
+                    dice_inner_step(i, inner_step, action_trajectory, rewards,
+                                        policy_history,
+                                        val_history, next_val_history,
+                                        mixed_thetas, mixed_vals,
+                                        obs_history, kl_div_target_policy_inner,
+                                        optims_th_primes, optims_vals_primes)
+
+
+                # --- OUTER STEP ---
+
+                # print(step)
+                if args.env != 'ipd':
+                    raise Exception(
+                        "Repeat_train not yet supported for other games")
+
+                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                    mixed_thetas, mixed_vals)
+                if outer_step == 0:
+                    kl_div_target_policy_outer = policy_history.detach().clone()
+
+                dice_loss, _, values_loss = game.get_dice_loss(
+                    action_trajectory, rewards,
+                    policy_history, val_history,
+                    next_val_history,
+                    old_policy_history=policy_history,
+                    kl_div_target_policy=kl_div_target_policy_outer,
+                    use_nl_loss=args.inner_nl_loss,
+                    use_penalty=args.outer_penalty,
+                    use_clipping=args.outer_clip,
+                    beta=args.outer_beta)
+
+                # If no new rollout
+                # new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                #     mixed_thetas, mixed_vals,
+                #     obs_history)
+                # # Using the new policies and vals now
+                # # Always be careful not to overwrite/reuse names of existing variables
+                # dice_loss, _, values_loss = game.get_dice_loss(
+                #     action_trajectory, rewards,
+                #     new_policies, new_vals,
+                #     next_new_vals,
+                #     old_policy_history=policy_history,
+                #     use_nl_loss=args.inner_nl_loss,
+                #     use_penalty=args.outer_penalty,
+                #     use_clipping=args.outer_clip,
+                #     beta=args.outer_beta)
+
+
+                if isinstance(mixed_thetas[i], torch.Tensor):
+                    # optim_update(optims_th[i], dice_loss[i], [th[i]])
+                    # optim_update(optims_vals[i], values_loss[i], [vals[i]])
+
+                    grad = get_gradient(dice_loss[i], mixed_thetas[i])
+                    grad_val = get_gradient(values_loss[i], mixed_vals[i])
+
+                    with torch.no_grad():
+                        mixed_thetas[i] -= lr_policies[i] * grad
+                        mixed_vals[i] -= lr_values[i] * grad_val
+                        # th[i] -= lr_policies[i] * (b-a)
+
+                        1 / 0
+                        # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
+
+                    # TODO Be careful with +/- formulation now...
+                    # TODO rename the non-DiCE terms as rewards
+                    # And keep the DiCE terms as losses
+
+
+                else:
+                    # game.print_policies_for_all_states(
+                    #     mixed_thetas)
+                    optim_update(optims_th_primes_nodiff[i], dice_loss[i],)
+                    optim_update(optims_vals_primes_nodiff[i], values_loss[i],)
+                    # optim_update(optims_th_primes[i], dice_loss[i],
+                    #              mixed_thetas[i].parameters())
+                    # optim_update(optims_vals_primes[i], values_loss[i],
+                    #              mixed_vals[i].parameters())
+
+                    # game.print_policies_for_all_states(
+                    #     mixed_thetas)
+                    # 1/0
+
+                    copyNN(th[i], mixed_thetas[i])
+                    copyNN(vals[i], mixed_vals[i])
+
+                for _ in range(args.extra_value_updates):
+                    _, val_history, next_val_history = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals, obs_history)
+
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        use_penalty=args.outer_penalty,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
+
+                    if isinstance(vals[i], torch.Tensor):
+                        grad_val = get_gradient(values_loss[i],
+                                                vals[i])
+                        with torch.no_grad():
+                            vals[i] -= lr_values[i] * grad_val
+                    else:
+                        optim_update(optims_vals[i],
+                                     values_loss[i])
+
+                if args.print_outer_rollouts:
+                    print("---Agent {} Rollout {}---".format(
+                        i + 1, outer_step + 1))
+                    game.print_policies_for_all_states(
+                        mixed_thetas)
+                    game.print_values_for_all_states(
+                        mixed_vals)
+
+    return th, vals
 
 
 
 
-# Main loop/code
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
     parser.add_argument("--env", type=str, default="ipd",
@@ -3426,8 +3528,8 @@ if __name__ == "__main__":
                         help="experimental: try DiCE style, direct update of policy and diff through it")
     parser.add_argument("--ill_condition", action="store_true",
                         help="in exact case, add preconditioning to make the problem ill-conditioned. Used to test if prox-lola helps")
-    parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.1, 0.1, 0.1, 1.],
-                        help="The ill conditioning matrix (diagonal entries) to use for the ill_condition. Dim should match dims[0] (i.e. 2^n + 1)")
+    # parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.1, 0.1, 0.1, 1.],
+    #                     help="The ill conditioning matrix (diagonal entries) to use for the ill_condition. Dim should match dims[0] (i.e. 2^n + 1)")
     parser.add_argument("--print_prox_loops_info", action="store_true",
                         help="print some additional info for the prox loop iters")
     parser.add_argument("--prox_threshold", type=float, default=1e-8, help="Threshold for KL divergence below which we consider a fixed point to have been reached for the proximal LOLA. Recommended not to go to higher than 1e-8 if you want something resembling an actual fixed point")
@@ -3435,7 +3537,7 @@ if __name__ == "__main__":
     parser.add_argument("--dd_stretch_factor", type=float, default=2., help="for ill conditioning in the func approx case, stretch logit of policy in DD state by this amount")
     parser.add_argument("--all_state_stretch_factor", type=float, default=0.33, help="for ill conditioning in the func approx case, stretch logit of policy in all states by this amount")
     parser.add_argument("--theta_init_mode", type=str, default="standard",
-                        choices=['standard', 'tft', 'adv'],
+                        choices=['standard', 'tft', 'adv', 'adv2'],
                         help="For IPD/social dilemma in the exact gradient/tabular setting, choose the policy initialization mode.")
 
     args = parser.parse_args()
@@ -3467,7 +3569,7 @@ if __name__ == "__main__":
     # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
     if args.ill_condition:
-        ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
+        # ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
 
         # ill_cond_matrix = torch.tensor([[-2., -1., 0., 0., 0.],
         #                                 [0., 0.1, -0.1, 0., 0.],
@@ -3505,9 +3607,83 @@ if __name__ == "__main__":
         #                                 [0., 0.9, 1., 0, 0.],
         #                                 [0.9, 0., 0., 1., 0.],
         #                                 [0., 0., 0., 0., 1.]]) # this isn't bad condition, just confuses states a lot
+        # ill_cond_matrix = torch.tensor([[.5, 0., 0., 0, 0.],
+        #                                 [.5, .1, 0, 0., 0.],
+        #                                 [.5, 0, .1, 0, 0.],
+        #                                 [.5, 0., 0., .1, 0.],
+        #                                 [.5, 0., 0., 0., 1.]])
+
+        # ill_cond_matrix = torch.tensor([[.2, 1., 0., 0, 0.],
+        #                                 [0., 1, 0, 0., 0.],
+        #                                 [0, 1., .2, 0, 0.],
+        #                                 [0, 1., 0., .2, 0.],
+        #                                 [0, 1., 0., 0., 1.]])
+        # ill_cond_matrices = torch.stack((ill_cond_matrix, ill_cond_matrix)) # hardcoded 2 agents for now
+
+        # ill_cond_matrix1 = torch.tensor([[.2, 0, 1., 0, 0.],
+        #                                  [0., .2, 1, 0., 0.],
+        #                                  [0, 0., 1, 0, 0.],
+        #                                  [0, 0., 1., .2, 0.],
+        #                                  [0, 0., 1., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.2, 1., 0., 0, 0.],
+        #                                  [0., 1, 0, 0., 0.],
+        #                                  [0, 1., .2, 0, 0.],
+        #                                  [0, 1., 0., .2, 0.],
+        #                                  [0, 1., 0., 0., 1.]])
+        # ill_cond_matrix1 = torch.tensor([[.1, 0, 3., 0, 0.],
+        #                                  [0., .1, 3, 0., 0.],
+        #                                  [0, 0., 3, 0, 0.],
+        #                                  [0, 0., 3., .1, 0.],
+        #                                  [0, 0., 3., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.1, 3., 0., 0, 0.],
+        #                                  [0., 3, 0, 0., 0.],
+        #                                  [0, 3., .1, 0, 0.],
+        #                                  [0, 3., 0., .1, 0.],
+        #                                  [0, 3., 0., 0., 1.]])
+        ill_cond_matrix1 = torch.tensor([[.14, 0, 1., 0, 0.],
+                                         [0., .14, 1, 0., 0.],
+                                         [0, 0., 1, 0, 0.],
+                                         [0, 0., 1., .14, 0.],
+                                         [0, 0., 1., 0., 1.]])
+        ill_cond_matrix2 = torch.tensor([[.14, 1., 0., 0, 0.],
+                                         [0., 1, 0, 0., 0.],
+                                         [0, 1., .14, 0, 0.],
+                                         [0, 1., 0., .14, 0.],
+                                         [0, 1., 0., 0., 1.]])
+        # ill_cond_matrix1 = torch.tensor([[1, 2, 0., 0, 0.],
+        #                                  [2., 1, 0, 0., 0.],
+        #                                  [0, 0., 1, 2, 0.],
+        #                                  [0, 0., 2, 1, 0.],
+        #                                  [0, 0., 0., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[1, 0, 2, 0, 0.],
+        #                                  [0., 1, 0, 2., 0.],
+        #                                  [2, 0., 1, 0, 0.],
+        #                                  [0, 2, 0., 1, 0.],
+        #                                  [0, 0., 0., 0., 1.]])
+        # ill_cond_matrix1 = torch.tensor([[1, 1, 1, 1, 1.],
+        #                                  [0., 1, 1, 1., 1.],
+        #                                  [0, 0., 1, 1, 1.],
+        #                                  [0, 0, 0., 1, 1.],
+        #                                  [0, 0., 0., 0., 1.]])
+        # ill_cond_matrix2 = ill_cond_matrix1
+        # ill_cond_matrix1 = torch.tensor([[1, 0, 0, 0, 0.],
+        #                                  [1., 1, 0, 0., 0.],
+        #                                  [1, 1., 1, 0, 0.],
+        #                                  [1, 1, 1., 1, 0.],
+        #                                  [1, 1., 1., 1., 1.]])
+        # ill_cond_matrix2 = ill_cond_matrix1
+        # ill_cond_matrix1 = torch.tensor([[1, 0., 0., 0, 0.],
+        #                                 [1, .1, 0, 0., 0.],
+        #                                 [1, 0, .1, 0, 0.],
+        #                                 [1, 0., 0., .1, 0.],
+        #                                 [1, 0., 0., 0., 1.]])
+        # ill_cond_matrix2 = ill_cond_matrix1
+        ill_cond_matrices = torch.stack((ill_cond_matrix1, ill_cond_matrix2)) # hardcoded 2 agents for now
+
         # torch.eye(dims[0]) @
-        print(ill_cond_matrix)
-        print(torch.inverse(ill_cond_matrix))
+        print(ill_cond_matrices[0])
+        print(ill_cond_matrices[1])
+        # print(torch.inverse(ill_cond_matrix))
 
     # For each repeat/run:
     num_epochs = args.num_epochs
@@ -3658,6 +3834,8 @@ if __name__ == "__main__":
                         # Need around 1.85 for NL and 1.7 for LOLA
                     elif args.theta_init_mode == 'adv':
                         th = init_th_adversarial(dims)
+                    elif args.theta_init_mode == 'adv2':
+                        th = init_th_adversarial2(dims)
                     else:
                         th = init_th(dims, std)
 
@@ -3745,12 +3923,16 @@ if __name__ == "__main__":
                                 print(policy)
                                 if args.ill_condition:
                                     print("TRANSFORMED Policy {}".format(i+1))
-                                    print(torch.sigmoid(ill_cond_matrix @ th[i]))
+                                    print(torch.sigmoid(ill_cond_matrices[i] @ th[i]))
 
 
                     if using_samples:
                         if using_DiCE:
-                            th, vals = dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta, repeat_train_on_same_samples)
+                            if inner_steps[0] > 1 and outer_steps[0] > 1: # TODO either just use this new update loop or find a better condition to check
+                                th, vals = dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta)
+
+                            else:
+                                th, vals = dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies, lr_values, eta, repeat_train_on_same_samples)
 
                         else:
                             # Samples but no DiCE, this is the LOLA-PG formulation
@@ -3877,7 +4059,7 @@ if __name__ == "__main__":
                                 print(policy)
                                 if args.ill_condition:
                                     print("TRANSFORMED Policy {}".format(i+1))
-                                    print(torch.sigmoid(ill_cond_matrix @ th[i]))
+                                    print(torch.sigmoid(ill_cond_matrices[i] @ th[i]))
 
                         if args.env == 'coin':
                             print("Same Colour Coins Picked (avg over batches): {:.3f}".format(avg_same_colour_coins_picked_total))
