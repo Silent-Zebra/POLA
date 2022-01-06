@@ -3873,6 +3873,9 @@ if __name__ == "__main__":
                     print("% TFT direction for LOLA terms")
                     print(total_is_in_tft_direction_p1 / (iter + 1))
                     print(total_is_in_tft_direction_p2 / (iter + 1))
+                    print("P1: {}".format(total_is_in_tft_direction_p1))
+                    print("P2: {}".format(total_is_in_tft_direction_p2))
+                    print("Iters: {}".format(iter+1))
 
                 1/0
 
