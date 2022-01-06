@@ -142,6 +142,11 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
         # Theta denotes (unnormalized) action probabilities at each of the states:
         # start CC CD DC DD
 
+        # sorry I think I flipped it, now it is 00 01 10 11 start
+        # which is DD DC CD CC start
+        # There is a reason for this though, which is that binary construction is easier in order from 0 upwards
+        # And 0 = defect makes sense when you think of the contribution game
+
         init_pc = torch.zeros(n)
         for i in range(n):
 
@@ -203,6 +208,7 @@ def ipdn(n=2, gamma=0.96, contribution_factor=1.6, contribution_scale=False):
 
         M = torch.matmul(p,
                          torch.inverse(torch.eye(state_space - 1) - gamma * P))
+
 
         # Remember M is just the steady state probabilities for each of the states
         # It is a vector, not a matrix.
@@ -1620,6 +1626,15 @@ def init_th(dims, std):
 
     return th
 
+def init_th_uniform(dims):
+    th = []
+    for i in range(len(dims)):
+        init = torch.rand(dims[i], requires_grad=True)
+        th.append(init)
+    print("Policies:")
+    print(th)
+    return th
+
 
 def init_th_tft(dims, std, logit_shift=3):
     th = []
@@ -2239,6 +2254,42 @@ def print_exact_policy(th, i):
             print("Agent {} Transformed Policy".format(j + 1))
             print(torch.sigmoid(ill_cond_matrices[j] @ th[j]))
         # else:
+
+
+def exact_grad_calc(th, gradient_terms_or_Ls, lr_policies, eta):
+    n = len(th)
+    losses = gradient_terms_or_Ls(th)
+
+    grad_L = [[get_gradient(losses[j], th[i]) for j in range(n)] for i in
+              range(n)]
+
+    terms = [sum([torch.dot(grad_L[j][i], grad_L[j][j])
+                  for j in range(n) if j != i]) for i in range(n)]
+
+    lola_terms = [
+        lr_policies[i] * eta * get_gradient(terms[i], th[i])
+        for i in range(n)]
+
+    nl_terms = [grad_L[i][i]
+                for i in range(n)]
+
+    print("!!!NL TERMS!!!")
+    print(nl_terms)
+    print("!!!LOLA TERMS!!!")
+    print(lola_terms)
+
+    assert n == 2 # not yet supporting more agents
+
+    lola_terms_p1 = lola_terms[0]
+    lola_terms_p2 = lola_terms[1]
+
+    is_in_tft_direction_p1 = lola_terms_p1[0] < 0 and lola_terms_p1[1] > 0 and lola_terms_p1[2] < 0 and lola_terms_p1[3] > 0
+    is_in_tft_direction_p2 = lola_terms_p2[0] < 0 and lola_terms_p2[1] < 0 and lola_terms_p2[2] > 0 and lola_terms_p2[3] > 0
+    print("P1 LOLA TFT Direction? {}".format(is_in_tft_direction_p1))
+    print("P2 LOLA TFT Direction? {}".format(is_in_tft_direction_p2))
+    # grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
+
+    return is_in_tft_direction_p1, is_in_tft_direction_p2
 
 
 # TODO There might be an issue with init state rep != 2 when using exact gradients
@@ -3539,6 +3590,9 @@ if __name__ == "__main__":
     parser.add_argument("--theta_init_mode", type=str, default="standard",
                         choices=['standard', 'tft', 'adv', 'adv2'],
                         help="For IPD/social dilemma in the exact gradient/tabular setting, choose the policy initialization mode.")
+    parser.add_argument("--exact_grad_calc", action="store_true",
+                        help="Only calc exact gradients, don't run the algo")
+
 
     args = parser.parse_args()
 
@@ -3793,6 +3847,7 @@ if __name__ == "__main__":
                                         (1 - gamma ** rollout_len)
 
 
+
         for eta in etas:
 
             print("Number of agents: {}".format(n_agents))
@@ -3801,6 +3856,27 @@ if __name__ == "__main__":
             print("Eta: {}".format(eta))
             # print(reward_percent_of_max)
             # Average over all runs
+
+            if args.exact_grad_calc:
+                total_is_in_tft_direction_p1 = 0
+                total_is_in_tft_direction_p2 = 0
+
+                for iter in range(repeats):
+
+                    dims, Ls = ipdn(n=n_agents, gamma=gamma,
+                                    contribution_factor=contribution_factor,
+                                    contribution_scale=contribution_scale)
+                    th = init_th_uniform(dims)  # TODO init uniform
+                    is_in_tft_direction_p1, is_in_tft_direction_p2 = exact_grad_calc(th, Ls, lr_policies, eta)
+                    total_is_in_tft_direction_p1 += is_in_tft_direction_p1
+                    total_is_in_tft_direction_p2 += is_in_tft_direction_p2
+                    print("% TFT direction for LOLA terms")
+                    print(total_is_in_tft_direction_p1 / (iter + 1))
+                    print(total_is_in_tft_direction_p2 / (iter + 1))
+
+                1/0
+
+
             if not using_samples:
                 print("Exact Gradients")
             else:
