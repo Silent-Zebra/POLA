@@ -1694,6 +1694,15 @@ def init_th_adversarial2(dims):
         th.append(init)
     return th
 
+def init_th_adversarial3(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        th.append(init)
+    th[0][3] += 0.5
+    th[1][2] += 0.5
+    return th
 
 class NeuralNet(nn.Module):
     def __init__(self, input_size, hidden_size, extra_hidden_layers,
@@ -2366,14 +2375,30 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
         lola_terms_p1 = lola_terms[0]
         lola_terms_p2 = lola_terms[1]
 
-    is_in_tft_direction_p1 = lola_terms_p1[0] < 0 and lola_terms_p1[1] > 0 and lola_terms_p1[2] < 0 and lola_terms_p1[3] > 0
-    is_in_tft_direction_p2 = lola_terms_p2[0] < 0 and lola_terms_p2[1] < 0 and lola_terms_p2[2] > 0 and lola_terms_p2[3] > 0
-    print("P1 LOLA TFT Direction? {}".format(is_in_tft_direction_p1))
-    print("P2 LOLA TFT Direction? {}".format(is_in_tft_direction_p2))
+    # is_in_tft_direction_p1 = lola_terms_p1[0] < 0 and lola_terms_p1[1] > 0 and lola_terms_p1[2] < 0 and lola_terms_p1[3] > 0
+    # is_in_tft_direction_p2 = lola_terms_p2[0] < 0 and lola_terms_p2[1] < 0 and lola_terms_p2[2] > 0 and lola_terms_p2[3] > 0
+    # print("P1 LOLA TFT Direction? {}".format(is_in_tft_direction_p1))
+    # print("P2 LOLA TFT Direction? {}".format(is_in_tft_direction_p2))
     # grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
+    is_in_tft_direction_p1, is_in_tft_direction_p2 = check_is_in_tft_direction(lola_terms_p1, lola_terms_p2)
 
     return is_in_tft_direction_p1, is_in_tft_direction_p2
 
+
+def check_is_in_tft_direction(lola_terms_p1, lola_terms_p2):
+    is_in_tft_direction_p1 = lola_terms_p1[0] < 0 and \
+                             lola_terms_p1[1] > 0 and \
+                             lola_terms_p1[2] < 0 and \
+                             lola_terms_p1[3] > 0
+    is_in_tft_direction_p2 = lola_terms_p2[0] < 0 and \
+                             lola_terms_p2[1] < 0 and \
+                             lola_terms_p2[2] > 0 and \
+                             lola_terms_p2[3] > 0
+    print("P1 LOLA TFT Direction? {}".format(
+        is_in_tft_direction_p1))
+    print("P2 LOLA TFT Direction? {}".format(
+        is_in_tft_direction_p2))
+    return is_in_tft_direction_p1, is_in_tft_direction_p2
 
 # TODO There might be an issue with init state rep != 2 when using exact gradients
 
@@ -2840,8 +2865,8 @@ def dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies_out
             mixed_vals[i] = vals[i]
 
         # print(mixed_thetas)
-        print(sum(lr_policies_inner))
-        print(sum(lr_policies_inner)>0)
+        # print(sum(lr_policies_inner))
+        # print(sum(lr_policies_inner)>0)
 
         if sum(lr_policies_inner) > 0:
             # --- INNER STEPS ---
@@ -3122,7 +3147,9 @@ def dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies_out
                     mixed_vals[i] -= lr_values[i] * grad_val
                     # th[i] -= lr_policies[i] * (b-a)
 
-                    1 / 0
+                    th[i] = mixed_thetas[i]
+                    vals[i] = mixed_vals[i]
+
                     # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
 
                 # TODO Be careful with +/- formulation now...
@@ -3451,6 +3478,8 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                 #                                                lr_values, eta)
 
 
+
+
                 action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                     mixed_thetas, mixed_vals)
                 if outer_step == 0:
@@ -3518,6 +3547,8 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                         mixed_thetas[i] -= lr_policies_outer[i] * grad
                         mixed_vals[i] -= lr_values[i] * grad_val
                         # th[i] -= lr_policies_outer[i] * (b-a)
+                        th[i] = mixed_thetas[i]
+                        vals[i] = mixed_vals[i]
 
                         1 / 0
                         # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
@@ -3715,7 +3746,7 @@ if __name__ == "__main__":
 
 
     if args.dice_grad_calc:
-        assert args.using_DiCE and args.using_nn and args.using_samples
+        assert args.using_DiCE and args.using_samples # and args.using_nn
 
 
     # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
@@ -3946,7 +3977,8 @@ if __name__ == "__main__":
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
                                 contribution_scale=contribution_scale)
-                th = init_th_uniform(dims)  # TODO init uniform
+                # th = init_th_uniform(dims)  # TODO init uniform
+                th = init_th_adversarial3(dims)
                 is_in_tft_direction_p1, is_in_tft_direction_p2 = exact_grad_calc(th, Ls)
                 total_is_in_tft_direction_p1 += is_in_tft_direction_p1
                 total_is_in_tft_direction_p2 += is_in_tft_direction_p2
@@ -4064,6 +4096,8 @@ if __name__ == "__main__":
             # nl_terms_running_total = []
 
             if args.dice_grad_calc:
+                total_is_in_tft_direction_p1 = 0
+                total_is_in_tft_direction_p2 = 0
                 for epoch in range(num_epochs):
                     # Re-init each time, can use higher std for more variance here
                     th, vals, _ = init_custom(dims, args.state_type, args.using_nn,
@@ -4177,7 +4211,14 @@ if __name__ == "__main__":
 
                                 if isinstance(mixed_thetas[i],
                                               torch.Tensor):
-                                    raise NotImplementedError
+                                    grad = get_gradient(dice_loss[i],
+                                                        mixed_thetas[i])
+
+                                    with torch.no_grad():
+                                        mixed_thetas[i] -= lr_policies_outer[
+                                                               i] * grad
+
+                                        th[i] = mixed_thetas[i]
 
                                 else:
 
@@ -4224,6 +4265,15 @@ if __name__ == "__main__":
                         print(nl_updates[i])
                         print(lola_updates[i] - nl_updates[i])
 
+                    lola_terms_p1 = lola_updates[0] - nl_updates[0]
+                    lola_terms_p2 = lola_updates[1] - nl_updates[1]
+                    is_in_tft_direction_p1, is_in_tft_direction_p2 = check_is_in_tft_direction(lola_terms_p1, lola_terms_p2)
+                    total_is_in_tft_direction_p1 += is_in_tft_direction_p1
+                    total_is_in_tft_direction_p2 += is_in_tft_direction_p2
+                    print(total_is_in_tft_direction_p1)
+                    print(total_is_in_tft_direction_p2)
+                    print(epoch+1)
+
                 exit()
                 1/0
 
@@ -4255,7 +4305,7 @@ if __name__ == "__main__":
 
                 if using_samples:
                     if using_DiCE:
-                        if inner_steps[0] > 1 and outer_steps[0] > 1: # TODO either just use this new update loop or find a better condition to check
+                        if inner_steps[0] > 1 or outer_steps[0] > 1: # TODO either just use this new update loop or find a better condition to check
                             th, vals = dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies_outer, lr_policies_inner, lr_values)
 
                         else:
