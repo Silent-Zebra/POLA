@@ -2310,23 +2310,8 @@ def dice_update_th(th, vals, n_agents, inner_steps, outer_steps, lr_policies_out
     return th, vals
 
 def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_vals, lr_policies_outer, lr_policies_inner, lr_values):
-    # if args.using_nn:
-    #     theta_primes = starting_th
-    #     val_primes = starting_vals  # should work if it is functional/stateless
-    # else:
     theta_primes = copy.deepcopy(starting_th)
     val_primes = copy.deepcopy(starting_vals)
-
-    # theta_primes, _, val_primes, _, _, _ = init_custom(dims,
-    #                                                            args.state_type,
-    #                                                            args.using_nn,
-    #                                                            args.using_rnn,
-    #                                                            args.env,
-    #                                                            args.nn_hidden_size,
-    #                                                            args.nn_extra_layers)
-    # for j in range(n_agents):
-    #     copyNN(theta_primes[j], starting_th[j])
-    #     copyNN(val_primes[j], starting_vals[j])
 
     f_th_primes = []
     if args.using_nn:
@@ -2346,15 +2331,11 @@ def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_va
     if args.using_nn:
         for ii in range(n_agents):
             f_vals_primes.append(
-                higher.patch.monkeypatch(
-                    val_primes[ii],
-                    copy_initial_weights=True,
-                    track_higher_grads=True))
+                higher.patch.monkeypatch(val_primes[ii],
+                                         copy_initial_weights=True,
+                                         track_higher_grads=True))
 
-    optims_vals_primes = construct_diff_optims(
-        val_primes, lr_values,
-        f_vals_primes)
-
+    optims_vals_primes = construct_diff_optims(val_primes, lr_values, f_vals_primes)
 
     if args.using_nn:
         mixed_thetas = f_th_primes
@@ -2364,8 +2345,6 @@ def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_va
         mixed_thetas = theta_primes
         mixed_vals = val_primes
 
-    # optims_th_primes_nodiff = construct_optims(mixed_thetas, mixed_th_lr_policies)
-    # optims_vals_primes_nodiff = construct_optims(mixed_vals, lr_values)
     optims_th_primes_nodiff = construct_optims(theta_primes,
                                                mixed_th_lr_policies)
     optims_vals_primes_nodiff = construct_optims(val_primes, lr_values)
@@ -2403,12 +2382,7 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
     for j in range(n_agents):
         if j != i:
             if isinstance(mixed_thetas[j], torch.Tensor):
-                # Higher with diffopt on the tensor can work too
-                # I think what needs to be done is a simpler formulation
-                # Where you just construct the diffopt, no fmodel stuff on the tensor
-                # and then directly use that diffopt. I had it working before
-
-                # print(mixed_thetas[j])
+                # Higher with diffopt on the tensor can work too, e.g. if you want fancier optimizers rather than SGD
 
                 grad = get_gradient(
                     dice_loss[j],
@@ -2425,7 +2399,6 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
                         j] * grad_val
 
             else:
-
                 optim_update(optims_th_primes[j],
                              dice_loss[j],
                              mixed_thetas[j].parameters())
@@ -2443,25 +2416,14 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
 
 def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies_outer, lr_policies_inner, lr_values):
     # Assumed repeat_train_on_same_samples
-    # (and using_nn?)
 
-    # if args.using_nn:
-    #     static_th_copy = th
-    #     static_vals_copy = vals
-    # else:
     static_th_copy = copy.deepcopy(th)
     static_vals_copy = copy.deepcopy(vals)
-
-    # static_th_copy, _, static_vals_copy, _, _, _ = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env, args.nn_hidden_size, args.nn_extra_layers)
-    # for i in range(n_agents):
-    #     copyNN(static_th_copy[i], th[i])
-    #     copyNN(static_vals_copy[i], vals[i])
 
     for i in range(n_agents):
         K = inner_steps[i]
         L = outer_steps[i]
 
-        # print(mixed_thetas)
         if sum(lr_policies_inner) > 0:
             assert repeat_train_on_same_samples
 
@@ -2472,15 +2434,7 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                 vals_with_only_agent_i_updated = copy.deepcopy(static_vals_copy)
                 vals_with_only_agent_i_updated[i] = vals[i]
 
-                # mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, \
-                # optims_th_primes_nodiff, optims_vals_primes_nodiff = \
-                #     construct_mixed_th_vals_and_diffoptims(n_agents, i,
-                #                                            static_th_copy,
-                #                                            static_vals_copy,
-                #                                            lr_policies,
-                #                                            lr_values, eta)
-
-                # Reconstruct on ever outer loop iter. The idea is this:
+                # Reconstruct on every outer loop iter. The idea is this:
                 # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
                 # Then update own policy, ONCE
                 # Then we repeat, starting from the static th for all other players' policies
@@ -2501,43 +2455,13 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                                                            lr_policies_outer, lr_policies_inner,
                                                            lr_values)
 
-                # print("HEY")
-                # game.print_policies_for_all_states(static_th_copy)
-                # game.print_policies_for_all_states(th_with_only_agent_i_updated)
-                # game.print_policies_for_all_states(mixed_thetas)
-
-
-
-                # INNER LOOP
-
-                # if outer_step == 0:
-                #     mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes = \
-                #         construct_mixed_th_vals_and_diffoptims(n_agents, i,
-                #                                                static_th_copy,
-                #                                                static_vals_copy,
-                #                                                lr_policies,
-                #                                                lr_values, eta)
-                # else:
-                #     # No I don't think you can do this. Well you can but then by resetting gradient tape
-                #     # The later inner steps won't really have much gradient signal for the higher order gradient
-                #     mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes = \
-                #         construct_mixed_th_vals_and_diffoptims(n_agents, i,
-                #                                                mixed_thetas,
-                #                                                mixed_vals,
-                #                                                lr_policies,
-                #                                                lr_values, eta)
-
-
-
-
+                # --- INNER LOOP ---
                 action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                     mixed_thetas, mixed_vals)
                 if outer_step == 0:
                     kl_div_target_policy_inner = policy_history.detach().clone()
 
                 for inner_step in range(K):
-
-                    # print(inner_step)
                     dice_inner_step(i, inner_step, action_trajectory, rewards,
                                         policy_history,
                                         val_history, next_val_history,
@@ -2585,10 +2509,7 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                 #     use_clipping=args.outer_clip,
                 #     beta=args.outer_beta)
 
-
                 if isinstance(mixed_thetas[i], torch.Tensor):
-                    # optim_update(optims_th[i], dice_loss[i], [th[i]])
-                    # optim_update(optims_vals[i], values_loss[i], [vals[i]])
 
                     grad = get_gradient(dice_loss[i], mixed_thetas[i])
                     grad_val = get_gradient(values_loss[i], mixed_vals[i])
@@ -2600,6 +2521,8 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                         th[i] = mixed_thetas[i]
                         vals[i] = mixed_vals[i]
 
+                        # TODO TEST THIS SECTION, SHOULD BE FINE
+
                         1 / 0
                         # TODO confirm whether need to copy over to th[i] the new mixed_thetas[i]
 
@@ -2609,18 +2532,8 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
 
 
                 else:
-                    # game.print_policies_for_all_states(
-                    #     mixed_thetas)
                     optim_update(optims_th_primes_nodiff[i], dice_loss[i],)
                     optim_update(optims_vals_primes_nodiff[i], values_loss[i],)
-                    # optim_update(optims_th_primes[i], dice_loss[i],
-                    #              mixed_thetas[i].parameters())
-                    # optim_update(optims_vals_primes[i], values_loss[i],
-                    #              mixed_vals[i].parameters())
-
-                    # game.print_policies_for_all_states(
-                    #     mixed_thetas)
-                    # 1/0
 
                     copyNN(th[i], mixed_thetas[i])
                     copyNN(vals[i], mixed_vals[i])
@@ -2639,21 +2552,17 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
                         beta=args.outer_beta)
 
                     if isinstance(vals[i], torch.Tensor):
-                        grad_val = get_gradient(values_loss[i],
-                                                vals[i])
+                        grad_val = get_gradient(values_loss[i], vals[i])
                         with torch.no_grad():
                             vals[i] -= lr_values[i] * grad_val
                     else:
-                        optim_update(optims_vals[i],
-                                     values_loss[i])
+                        optim_update(optims_vals[i], values_loss[i])
 
                 if args.print_outer_rollouts:
                     print("---Agent {} Rollout {}---".format(
                         i + 1, outer_step + 1))
-                    game.print_policies_for_all_states(
-                        mixed_thetas)
-                    game.print_values_for_all_states(
-                        mixed_vals)
+                    game.print_policies_for_all_states(mixed_thetas)
+                    game.print_values_for_all_states(mixed_vals)
 
     return th, vals
 
