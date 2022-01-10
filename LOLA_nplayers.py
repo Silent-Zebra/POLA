@@ -2689,17 +2689,14 @@ if __name__ == "__main__":
         assert args.inner_exact_prox or args.no_taylor_approx
 
     if args.inner_penalty or args.outer_penalty or args.inner_clip or args.outer_clip:
-        assert args.repeat_train_on_same_samples # Otherwise these don't do anything if you just take 1 step on samples
+        assert args.repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
 
     if args.repeat_train_on_same_samples:
         assert args.using_DiCE
 
-
     if args.dice_grad_calc:
         assert args.using_DiCE and args.using_samples # and args.using_nn
 
-
-    # tanh instead of relu or lrelu activation seems to help. Perhaps the gradient flow is a bit nicer that way
 
     if args.ill_condition:
         # ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
@@ -3040,8 +3037,6 @@ if __name__ == "__main__":
             else:
                 G_ts_record = torch.zeros(
                     (num_epochs, n_agents))
-            # lola_terms_running_total = []
-            # nl_terms_running_total = []
 
             if args.dice_grad_calc:
                 total_is_in_tft_direction_p1 = 0
@@ -3223,8 +3218,6 @@ if __name__ == "__main__":
                     print(epoch+1)
 
                 exit()
-                1/0
-
 
 
             for epoch in range(num_epochs):
@@ -3324,40 +3317,16 @@ if __name__ == "__main__":
                 else:
                     G_ts_record[epoch] = torch.stack(losses).detach()
 
-                # This is just to get an idea of the relative influence of the lola vs nl terms
-                # if lola_terms_running_total == []:
-                #     for i in range(n_agents):
-                #         lola_terms_running_total.append(lr_policies[i] * lola_terms[i].detach())
-                # else:
-                #     for i in range(n_agents):
-                #         lola_terms_running_total[i] += lr_policies[i] * lola_terms[i].detach()
-                #
-                # for i in range(n_agents):
-                #     if grad_2_return_1 is None:
-                #         nl_term = nl_terms[i].detach()
-                #     else:
-                #         nl_term = grad_2_return_1[i][i].detach()
-                #
-                #     if len(nl_terms_running_total) < n_agents:
-                #         nl_terms_running_total.append(lr_policies[i] * nl_term)
-                #     else:
-                #         nl_terms_running_total[i] += lr_policies[i] * nl_term
-
                 if (epoch + 1) % print_every == 0:
                     print("Epoch: " + str(epoch + 1))
                     curr = timer()
                     print("Time Elapsed: {:.1f} seconds".format(curr - start))
 
-                    # print("LOLA Terms: ")
-                    # print(lola_terms_running_total)
-                    # print("NL Terms: ")
-                    # print(nl_terms_running_total)
                     if not using_samples:
                         print("Discounted Rewards (Objective): {}".format(losses))
                         print(
                             "Max Avg Coop Payout (Infinite Horizon): {:.3f}".format(
                                 inf_coop_payout))
-
 
                     # Print policies here
                     if using_samples:
