@@ -3617,7 +3617,7 @@ if __name__ == "__main__":
                         choices=["ipd", "coin", "imp"])
     parser.add_argument("--state_type", type=str, default="one_hot",
                         choices=['mnist', 'one_hot', 'majorTD4', 'old'],
-                        help="For IPD/social dilemma, choose the state/obs representation type. One hot is the default. MNIST feeds in MNIST digits (0 or 1) instead of one hot class 0, class 1, etc. Old is there to support original/old formulation")
+                        help="For IPD/social dilemma, choose the state/obs representation type. One hot is the default. MNIST feeds in MNIST digits (0 or 1) instead of one hot class 0, class 1, etc. Old is there to support original/old formulation where we just had state representation 0,1,2. This is fine with tabular but causes issues with function approximation (where since 1 is coop, 2 is essentially 'super coop')")
     parser.add_argument("--using_samples", action="store_true",
                         help="True for samples (with rollout_len), false for exact gradient (using matrix inverse for infinite length rollout)")
     parser.add_argument("--using_DiCE", action="store_true",
@@ -3977,8 +3977,8 @@ if __name__ == "__main__":
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
                                 contribution_scale=contribution_scale)
-                # th = init_th_uniform(dims)  # TODO init uniform
-                th = init_th_adversarial3(dims)
+                th = init_th_uniform(dims)  # TODO init uniform
+                # th = init_th_adversarial3(dims)
                 is_in_tft_direction_p1, is_in_tft_direction_p2 = exact_grad_calc(th, Ls)
                 total_is_in_tft_direction_p1 += is_in_tft_direction_p1
                 total_is_in_tft_direction_p2 += is_in_tft_direction_p2
