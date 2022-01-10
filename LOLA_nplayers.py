@@ -4305,7 +4305,8 @@ if __name__ == "__main__":
 
                 if using_samples:
                     if using_DiCE:
-                        if inner_steps[0] > 1 or outer_steps[0] > 1: # TODO either just use this new update loop or find a better condition to check
+                        if outer_steps[0] > 1: # TODO either just use this new update loop or find a better condition to check
+                            assert args.repeat_train_on_same_samples
                             th, vals = dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies_outer, lr_policies_inner, lr_values)
 
                         else:
