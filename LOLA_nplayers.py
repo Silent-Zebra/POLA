@@ -903,13 +903,18 @@ def init_th(dims, std):
     return th
 
 
+def inverse_sigmoid(x):
+    return -torch.log((1 / x) - 1)
+
 def init_th_uniform(dims):
     th = []
     for i in range(len(dims)):
-        init = torch.rand(dims[i], requires_grad=True)
-        th.append(init)
+        init_pols = torch.rand(dims[i], requires_grad=True)
+        init_logits = inverse_sigmoid(init_pols)
+        th.append(init_logits)
     print("Policies:")
-    print(th)
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
     return th
 
 
@@ -937,25 +942,89 @@ def init_th_adversarial(dims):
         init = torch.zeros(dims[i], requires_grad=True) - 0
         init[0] -= 5
         th.append(init)
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
     return th
 
-def init_th_adversarial2(dims):
+def init_th_adversarial_defect(dims):
     th = []
     for i in range(len(dims)):
         # For some reason this -0 is needed
-        init = torch.zeros(dims[i], requires_grad=True) - 2
-        th.append(init)
+        # init = torch.zeros(dims[i], requires_grad=True) - 3
+        th.append(torch.nn.init.normal_(
+            torch.empty(2 ** n_agents + 1, requires_grad=True), std=args.std) - 3)
+    return th
+
+def init_th_adversarial_coop(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        # init = torch.zeros(dims[i], requires_grad=True) - 3
+        th.append(torch.nn.init.normal_(
+            torch.empty(2 ** n_agents + 1, requires_grad=True), std=args.std) + 5)
     return th
 
 def init_th_adversarial3(dims):
     th = []
     for i in range(len(dims)):
         # For some reason this -0 is needed
-        init = torch.zeros(dims[i], requires_grad=True) - 0
+        init = torch.zeros(dims[i], requires_grad=True) + 0.001
         th.append(init)
     th[0][3] += 0.5
+    th[0] = inverse_sigmoid(th[0])
     th[1][2] += 0.5
+    th[1] = inverse_sigmoid(th[1])
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
     return th
+
+def init_th_adversarial4(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        th.append(init)
+
+    th[0] = inverse_sigmoid(torch.tensor([0.0958, 0.8650, 0.1967, 0.9818, 0.5]).requires_grad_())
+    th[1] = inverse_sigmoid(torch.tensor([0.0706, 0.1592, 0.8544, 0.9743, 0.5]).requires_grad_())
+
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
+    return th
+
+def init_th_adversarial5(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        th.append(init)
+
+    th[0] = inverse_sigmoid(torch.tensor([0.9190, 0.5415, 0.9678, 0.1683, 0.8784]).requires_grad_())
+    th[1] = inverse_sigmoid(torch.tensor([8.2506e-03, 2.4405e-01, 9.0859e-05, 4.2595e-01, 1.0305e-01]).requires_grad_())
+
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
+    return th
+
+def init_th_adversarial6(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        th.append(init)
+
+    th[0] = inverse_sigmoid(torch.tensor([0.0445, 0.1064, 0.0894, 0.0306, 0.0386]).requires_grad_())
+    th[1] = inverse_sigmoid(torch.tensor([0.0077, 0.0314, 0.2454, 0.1056, 0.0510]).requires_grad_())
+
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
+    return th
+
 
 class NeuralNet(nn.Module):
     def __init__(self, input_size, hidden_size, extra_hidden_layers,
@@ -1075,13 +1144,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
                                            extra_hidden_layers=nn_extra_hidden_layers,
                                            output_size=4, final_sigmoid=False, final_softmax=True) # TODO probably should dynamically code this
                 else:
-                    if env == 'hawkdove':
-                        policy_net = NeuralNet(input_size=dims[i],
-                                               hidden_size=nn_hidden_size,
-                                               extra_hidden_layers=nn_extra_hidden_layers,
-                                               output_size=n_agents)
-                    else:
-                        policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
+                    policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
                                   output_size=1)
 
             # f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
@@ -1489,6 +1552,12 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
             lr_policies_inner[i] * get_gradient(terms[i], th[i])
             for i in range(n)]
 
+        # original_lola_term1 = torch.dot(grad_L[1][0], grad_L[1][1])
+        # original_lola_term2 = torch.dot(grad_L[0][1], grad_L[0][0])
+        # original_lola_terms = [original_lola_term1, original_lola_term2]
+        # original_lola_terms = [lr_policies_inner[i] * get_gradient(original_lola_terms[i], th[i])
+        #     for i in range(n)]
+
         nl_terms = [grad_L[i][i]
                     for i in range(n)]
 
@@ -1496,6 +1565,8 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
         print(nl_terms)
         print("!!!LOLA TERMS!!!")
         print(lola_terms)
+        # print("!!!ORIGINAL LOLA TERMS!!!")
+        # print(original_lola_terms)
 
         assert n == 2 # not yet supporting more agents
 
@@ -1788,8 +1859,6 @@ def update_th(th, gradient_terms_or_Ls, lr_policies_outer, lr_policies_inner, al
 
             else:
                 # Here we continue with the exact gradient calculations
-                # We are using the SOS formulation that doesn't drop the term that
-                # the original LOLA dropped
                 # Look at pg 12, Stable Opponent Shaping paper
                 # This is the first line of the second set of equations
                 # sum over all j != i of grad_j L_i * grad_j L_j
@@ -2590,11 +2659,9 @@ def dice_update_th_new_repeat_loop(th, vals, n_agents, inner_steps, outer_steps,
 
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
     parser.add_argument("--env", type=str, default="ipd",
-                        # choices=["ipd", "coin", "hawkdove"])
                         choices=["ipd", "coin", "imp"])
     parser.add_argument("--state_type", type=str, default="one_hot",
                         choices=['mnist', 'one_hot', 'majorTD4', 'old'],
@@ -2679,7 +2746,7 @@ if __name__ == "__main__":
     parser.add_argument("--dd_stretch_factor", type=float, default=2., help="for ill conditioning in the func approx case, stretch logit of policy in DD state by this amount")
     parser.add_argument("--all_state_stretch_factor", type=float, default=0.33, help="for ill conditioning in the func approx case, stretch logit of policy in all states by this amount")
     parser.add_argument("--theta_init_mode", type=str, default="standard",
-                        choices=['standard', 'tft', 'adv', 'adv2'],
+                        choices=['standard', 'tft', 'adv', 'adv5', 'adv6'],
                         help="For IPD/social dilemma in the exact gradient/tabular setting, choose the policy initialization mode.")
     parser.add_argument("--exact_grad_calc", action="store_true",
                         help="Only calc exact gradients, don't run the algo")
@@ -2951,8 +3018,13 @@ if __name__ == "__main__":
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
                                 contribution_scale=contribution_scale)
-                th = init_th_uniform(dims)  # TODO init uniform
-                # th = init_th_adversarial3(dims)
+                th = init_th(dims, std=args.std)
+                # th = init_th_uniform(dims)  # TODO init uniform
+                # th = init_th_adversarial2(dims)
+                # th = init_th_adversarial4(dims)
+                # th = init_th_adversarial_coop(dims)
+                for i in range(len(th)):
+                    print(torch.sigmoid(th[i]))
                 is_in_tft_direction_p1, is_in_tft_direction_p2 = exact_grad_calc(th, Ls)
                 total_is_in_tft_direction_p1 += is_in_tft_direction_p1
                 total_is_in_tft_direction_p2 += is_in_tft_direction_p2
@@ -2963,7 +3035,7 @@ if __name__ == "__main__":
                 print("P2: {}".format(total_is_in_tft_direction_p2))
                 print("Iters: {}".format(iter+1))
 
-            1/0
+            exit()
 
 
 
@@ -3000,8 +3072,10 @@ if __name__ == "__main__":
                     # Need around 1.85 for NL and 1.7 for LOLA
                 elif args.theta_init_mode == 'adv':
                     th = init_th_adversarial(dims)
-                elif args.theta_init_mode == 'adv2':
-                    th = init_th_adversarial2(dims)
+                elif args.theta_init_mode == 'adv5':
+                    th = init_th_adversarial5(dims)
+                elif args.theta_init_mode == 'adv6':
+                    th = init_th_adversarial6(dims)
                 else:
                     th = init_th(dims, std)
 
@@ -3009,24 +3083,12 @@ if __name__ == "__main__":
             else:
                 # Using samples instead of exact here
 
-
-
                 if args.env == "coin":
                     from coin_game import CoinGameVec
                     # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
                     game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size,
                                        history_len=args.history_len, full_seq_obs=args.using_rnn)
                     dims = game.dims_with_history
-
-                elif args.env == "hawkdove":
-                    game = HawkDoveGame(n=n_agents, gamma=gamma,
-                                            batch_size=batch_size,
-                                            num_iters=rollout_len,
-                                            contribution_factor=contribution_factor,
-                                            contribution_scale=contribution_scale,
-                                            history_len=args.history_len,
-                                            using_mnist_states=args.mnist_states)
-                    dims = game.dims
                 elif args.env == "imp":
                     from matching_pennies import IteratedMatchingPennies
                     game = IteratedMatchingPennies(n=n_agents, batch_size=batch_size,
