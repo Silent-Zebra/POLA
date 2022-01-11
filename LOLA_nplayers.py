@@ -1959,10 +1959,17 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
                     obs_history, kl_div_target_policy_inner,
                     optims_th_primes, optims_vals_primes):
     if inner_step == 0:
+        # dice_loss, _, values_loss = game.get_dice_loss(
+        #     action_trajectory, rewards,
+        #     policy_history, val_history, next_val_history,
+        #     old_policy_history=policy_history,
+        #     use_nl_loss=args.inner_nl_loss,
+        #     use_penalty=args.inner_penalty,
+        #     use_clipping=args.inner_clip, beta=args.inner_beta)
         dice_loss, _, values_loss = game.get_dice_loss(
             action_trajectory, rewards,
             policy_history, val_history, next_val_history,
-            old_policy_history=policy_history,
+            old_policy_history=None,
             use_nl_loss=args.inner_nl_loss,
             use_penalty=args.inner_penalty,
             use_clipping=args.inner_clip, beta=args.inner_beta)
@@ -2028,11 +2035,6 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
 
             for outer_step in range(L):
 
-                th_with_only_agent_i_updated = copy.deepcopy(static_th_copy)
-                th_with_only_agent_i_updated[i] = th[i]
-                vals_with_only_agent_i_updated = copy.deepcopy(static_vals_copy)
-                vals_with_only_agent_i_updated[i] = vals[i]
-
                 # Reconstruct on every outer loop iter. The idea is this:
                 # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
                 # Then update own policy, ONCE
@@ -2049,8 +2051,8 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, \
                 optims_th_primes_nodiff, optims_vals_primes_nodiff = \
                     construct_mixed_th_vals_and_diffoptims(n_agents, i,
-                                                           th_with_only_agent_i_updated,
-                                                           vals_with_only_agent_i_updated,
+                                                           static_th_copy,
+                                                           static_vals_copy,
                                                            lr_policies_outer, lr_policies_inner,
                                                            lr_values)
 
@@ -2078,7 +2080,7 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                         if outer_step == 0:
                             kl_div_target_policy_inner = policy_history.detach().clone()
                         # 0 below because we are not doing repeat train, and we are instead re-rolling out every time
-                        # So the inner_step is not step here on purpose
+                        # So the inner_step is 0 here on purpose
                         # The inner step was meant in terms of repeat train on same samples, how many times you have repeated training on same samples
                         dice_inner_step(i, 0, action_trajectory, rewards,
                                         policy_history, val_history,
@@ -2101,11 +2103,21 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 if outer_step == 0:
                     kl_div_target_policy_outer = policy_history.detach().clone()
 
+                # dice_loss, _, values_loss = game.get_dice_loss(
+                #     action_trajectory, rewards,
+                #     policy_history, val_history,
+                #     next_val_history,
+                #     old_policy_history=policy_history,
+                #     kl_div_target_policy=kl_div_target_policy_outer,
+                #     use_nl_loss=args.inner_nl_loss,
+                #     use_penalty=args.outer_penalty,
+                #     use_clipping=args.outer_clip,
+                #     beta=args.outer_beta)
                 dice_loss, _, values_loss = game.get_dice_loss(
                     action_trajectory, rewards,
                     policy_history, val_history,
                     next_val_history,
-                    old_policy_history=policy_history,
+                    old_policy_history=None,
                     kl_div_target_policy=kl_div_target_policy_outer,
                     use_nl_loss=args.inner_nl_loss,
                     use_penalty=args.outer_penalty,
@@ -2300,77 +2312,7 @@ if __name__ == "__main__":
 
 
     if args.ill_condition:
-        # ill_cond_matrix = torch.diag(torch.tensor(args.ill_cond_diag_matrix))
 
-        # ill_cond_matrix = torch.tensor([[-2., -1., 0., 0., 0.],
-        #                                 [0., 0.1, -0.1, 0., 0.],
-        #                                 [0., 0., -0.1, -0.5, 0.],
-        #                                 [0., 0., 0., -0.3, -1.],
-        #                                 [0., 0., 0., 0., -1.]])
-        # ill_cond_matrix = torch.tensor([[1., 1./2., 1./3., 1./4., 1./5.],
-        #                                 [1./2., 1./3., 1./4., 1./5., 1./6.],
-        #                                 [1./3., 1./4., 1./5., 1./6., 1./7.],
-        #                                 [1./4., 1./5., 1./6., 1./7., 1./8.],
-        #                                 [1./5., 1./6., 1./7., 1./8., 1./9.]])
-        # ill_cond_matrix = torch.tensor([[2., 1.8, 1.6, 1.4, 1.2],
-        #                                 [1.8, 1.6, 1.4, 1.2, 1.],
-        #                                 [1.6, 1.4, 1.2, 1., 0.8],
-        #                                 [1.4, 1.2, 1., 0.8, 0.6],
-        #                                 [1.2, 1., 0.8, 0.6, 0.4]]) # this is not full rank...
-        # ill_cond_matrix = torch.tensor([[2., 1.6, 1.2, 0.8, 0.4],
-        #                                 [1.6, 1.3, 1., 0.7, 0.4],
-        #                                 [1.2, 1., 0.8, 0.6, 0.4],
-        #                                 [0.8, 0.7, 0.6, 0.5, 0.4],
-        #                                 [0.4, 0.4, 0.4, 0.4, 0.4]]) / 2. # also singular...
-        # ill_cond_matrix = torch.tensor([[2., 1.8, 1., 0.6, 0.2],
-        #                                 [1.6, 1.6, 1., 1., 0.4],
-        #                                 [1.2, 1.4, 1., 1.2, 0.8],
-        #                                 [0.8, 1.2, 1., 1.6, 1.6],
-        #                                 [0.4, 1., 1., 1.8, 2.0]])
-        # print("IF USING FUNC APPROX DO NOT EDIT THIS MATRIX, EDIT THE SECTION IN THE CONTRIB GAME")
-        # ill_cond_matrix = torch.tensor([[3., 0., 0., 0., 0.],
-        #                                 [0., 0.1, 0, 0., 0.],
-        #                                 [0., 0., 0.1, 0, 0.],
-        #                                 [0., 0., 0., 0.1, 0.],
-        #                                 [0., 0., 0., 0., 1.]])
-        # ill_cond_matrix = torch.tensor([[1., 0., 0., 0.9, 0.],
-        #                                 [0., 1, 0.9, 0., 0.],
-        #                                 [0., 0.9, 1., 0, 0.],
-        #                                 [0.9, 0., 0., 1., 0.],
-        #                                 [0., 0., 0., 0., 1.]]) # this isn't bad condition, just confuses states a lot
-        # ill_cond_matrix = torch.tensor([[.5, 0., 0., 0, 0.],
-        #                                 [.5, .1, 0, 0., 0.],
-        #                                 [.5, 0, .1, 0, 0.],
-        #                                 [.5, 0., 0., .1, 0.],
-        #                                 [.5, 0., 0., 0., 1.]])
-
-        # ill_cond_matrix = torch.tensor([[.2, 1., 0., 0, 0.],
-        #                                 [0., 1, 0, 0., 0.],
-        #                                 [0, 1., .2, 0, 0.],
-        #                                 [0, 1., 0., .2, 0.],
-        #                                 [0, 1., 0., 0., 1.]])
-        # ill_cond_matrices = torch.stack((ill_cond_matrix, ill_cond_matrix)) # hardcoded 2 agents for now
-
-        # ill_cond_matrix1 = torch.tensor([[.2, 0, 1., 0, 0.],
-        #                                  [0., .2, 1, 0., 0.],
-        #                                  [0, 0., 1, 0, 0.],
-        #                                  [0, 0., 1., .2, 0.],
-        #                                  [0, 0., 1., 0., 1.]])
-        # ill_cond_matrix2 = torch.tensor([[.2, 1., 0., 0, 0.],
-        #                                  [0., 1, 0, 0., 0.],
-        #                                  [0, 1., .2, 0, 0.],
-        #                                  [0, 1., 0., .2, 0.],
-        #                                  [0, 1., 0., 0., 1.]])
-        # ill_cond_matrix1 = torch.tensor([[.1, 0, 3., 0, 0.],
-        #                                  [0., .1, 3, 0., 0.],
-        #                                  [0, 0., 3, 0, 0.],
-        #                                  [0, 0., 3., .1, 0.],
-        #                                  [0, 0., 3., 0., 1.]])
-        # ill_cond_matrix2 = torch.tensor([[.1, 3., 0., 0, 0.],
-        #                                  [0., 3, 0, 0., 0.],
-        #                                  [0, 3., .1, 0, 0.],
-        #                                  [0, 3., 0., .1, 0.],
-        #                                  [0, 3., 0., 0., 1.]])
         ill_cond_matrix1 = torch.tensor([[.14, 0, 1., 0, 0.],
                                          [0., .14, 1, 0., 0.],
                                          [0, 0., 1, 0, 0.],
@@ -2381,48 +2323,17 @@ if __name__ == "__main__":
                                          [0, 1., .14, 0, 0.],
                                          [0, 1., 0., .14, 0.],
                                          [0, 1., 0., 0., 1.]])
-        # ill_cond_matrix1 = torch.tensor([[1, 2, 0., 0, 0.],
-        #                                  [2., 1, 0, 0., 0.],
-        #                                  [0, 0., 1, 2, 0.],
-        #                                  [0, 0., 2, 1, 0.],
-        #                                  [0, 0., 0., 0., 1.]])
-        # ill_cond_matrix2 = torch.tensor([[1, 0, 2, 0, 0.],
-        #                                  [0., 1, 0, 2., 0.],
-        #                                  [2, 0., 1, 0, 0.],
-        #                                  [0, 2, 0., 1, 0.],
-        #                                  [0, 0., 0., 0., 1.]])
-        # ill_cond_matrix1 = torch.tensor([[1, 1, 1, 1, 1.],
-        #                                  [0., 1, 1, 1., 1.],
-        #                                  [0, 0., 1, 1, 1.],
-        #                                  [0, 0, 0., 1, 1.],
-        #                                  [0, 0., 0., 0., 1.]])
-        # ill_cond_matrix2 = ill_cond_matrix1
-        # ill_cond_matrix1 = torch.tensor([[1, 0, 0, 0, 0.],
-        #                                  [1., 1, 0, 0., 0.],
-        #                                  [1, 1., 1, 0, 0.],
-        #                                  [1, 1, 1., 1, 0.],
-        #                                  [1, 1., 1., 1., 1.]])
-        # ill_cond_matrix2 = ill_cond_matrix1
-        # ill_cond_matrix1 = torch.tensor([[1, 0., 0., 0, 0.],
-        #                                 [1, .1, 0, 0., 0.],
-        #                                 [1, 0, .1, 0, 0.],
-        #                                 [1, 0., 0., .1, 0.],
-        #                                 [1, 0., 0., 0., 1.]])
-        # ill_cond_matrix2 = ill_cond_matrix1
+
         ill_cond_matrices = torch.stack((ill_cond_matrix1, ill_cond_matrix2)) # hardcoded 2 agents for now
 
-        # torch.eye(dims[0]) @
         print(ill_cond_matrices[0])
         print(ill_cond_matrices[1])
-        # print(torch.inverse(ill_cond_matrix))
 
     # For each repeat/run:
     num_epochs = args.num_epochs
-    # print_every = max(1, num_epochs / 50)
-    # print_every = 200
     print_every = args.print_every
     batch_size = args.batch_size
-    # Bigger batch is a big part of convergence with DiCE. Too small batch (e.g. 1 or 4) frequently results in issues.
+    # Bigger batch is a big part of convergence with DiCE
 
     gamma = args.gamma
 
@@ -2439,11 +2350,8 @@ if __name__ == "__main__":
     if args.history_len > 1:
         assert args.using_nn # Right now only supported for func approx.
 
-    # mnist_states = args.mnist_states
-
 
     n_agents_list = args.n_agents_list
-    # n_agents_list = [5, 8]
 
     if args.env != "ipd":
         if not using_samples:
@@ -2477,11 +2385,7 @@ if __name__ == "__main__":
 
         lr_values = torch.tensor([args.lr_values] * n_agents)
 
-        # if using_DiCE:
-        #     etas = args.etas  # [8] # [20] # this is a factor by which we increase the lr on the inner loop vs outer loop
-
         if not contribution_scale:
-            # inf = infinite horizon
             inf_coop_payout = 1 / (1 - gamma) * (contribution_factor - 1)
             truncated_coop_payout = inf_coop_payout * \
                           (
@@ -2503,7 +2407,6 @@ if __name__ == "__main__":
         adjustment_to_make_rewards_negative = 0
         # adjustment_to_make_rewards_negative = max_single_step_return
 
-
         discounted_sum_of_adjustments = 1 / (
                     1 - gamma) * adjustment_to_make_rewards_negative * \
                                         (1 - gamma ** rollout_len)
@@ -2512,9 +2415,6 @@ if __name__ == "__main__":
         print("Number of agents: {}".format(n_agents))
         print("Contribution factor: {}".format(contribution_factor))
         print("Scaled contribution factor? {}".format(contribution_scale))
-        # print("Eta: {}".format(eta))
-        # print(reward_percent_of_max)
-        # Average over all runs
 
         if args.exact_grad_calc:
             total_is_in_tft_direction_p1 = 0
@@ -2564,7 +2464,6 @@ if __name__ == "__main__":
 
             if not using_samples:
                 # Exact gradient case
-
                 dims, Ls = ipdn(n=n_agents, gamma=gamma,
                                 contribution_factor=contribution_factor,
                                 contribution_scale=contribution_scale)
@@ -2613,10 +2512,6 @@ if __name__ == "__main__":
                     dims = game.dims
 
                 th, vals, optims_vals = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env)
-
-                # I think part of the issue is if policy saturates at cooperation it never explores and never tries defect
-                # How does standard reinforce/policy gradient get around this? Entropy regularization
-                # Baseline might help too. As might negative rewards everywhere.
 
 
             if using_DiCE:
@@ -2690,7 +2585,6 @@ if __name__ == "__main__":
                         K = inner_steps[i]
                         L = outer_steps[i]
 
-                        # print(mixed_thetas)
                         if sum(lr_policies_inner) > 0:
                             for outer_step in range(L):
                                 th_with_only_agent_i_updated = copy.deepcopy(
