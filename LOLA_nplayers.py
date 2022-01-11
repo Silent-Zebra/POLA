@@ -1027,6 +1027,14 @@ def init_th_adversarial6(dims):
 
 
 class NeuralNet(nn.Module):
+    def add_nonlinearity(self, layers):
+        if args.nonlinearity == 'lrelu':
+            layers.append(torch.nn.LeakyReLU(negative_slope=0.01)) # swap in if you want. Should be made into a dynamic argument
+        elif args.nonlinearity == 'tanh':
+            layers.append(torch.nn.Tanh())
+        else:
+            raise Exception("No nonlinearity")
+
     def __init__(self, input_size, hidden_size, extra_hidden_layers,
                  output_size, final_sigmoid=False, final_softmax=False):
 
@@ -1036,12 +1044,10 @@ class NeuralNet(nn.Module):
         layers = []
 
         layers.append(torch.nn.Linear(input_size, hidden_size))
-        # layers.append(torch.nn.LeakyReLU(negative_slope=0.01)) # swap in if you want. Should be made into a dynamic argument
-        layers.append(torch.nn.Tanh())
+        self.add_nonlinearity(layers)
         for i in range(extra_hidden_layers):
             layers.append(nn.Linear(hidden_size, hidden_size))
-            # layers.append(torch.nn.LeakyReLU(negative_slope=0.01))
-            layers.append(torch.nn.Tanh())
+            self.add_nonlinearity(layers)
         layers.append(nn.Linear(hidden_size, output_size))
 
         if final_sigmoid:
@@ -2202,6 +2208,8 @@ if __name__ == "__main__":
     parser.add_argument("--outer_steps", type=int, default=1)
     parser.add_argument("--using_nn", action="store_true",
                         help="use neural net/func approx instead of tabular policy")
+    parser.add_argument("--nonlinearity", type=str, default="tanh",
+                        choices=["tanh", "lrelu"])
     parser.add_argument("--nn_hidden_size", type=int, default=16)
     parser.add_argument("--nn_extra_layers", type=int, default=0)
     parser.add_argument("--set_seed", action="store_true",
