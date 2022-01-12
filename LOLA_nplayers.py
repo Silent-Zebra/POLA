@@ -814,7 +814,7 @@ class ContributionGame(Game):
             gae = gae * gamma * lambd + deltas[i,:]
             advantages[i,:] = gae
 
-        if repeat_train_on_same_samples:
+        if inner_repeat_train_on_same_samples:
             # Then we should have a p_act_ratio here instead of a log_p_act
             if use_clipping:
 
@@ -864,7 +864,7 @@ class ContributionGame(Game):
 
         dice_loss = -loaded_dice_rewards
 
-        if repeat_train_on_same_samples and use_penalty:
+        if inner_repeat_train_on_same_samples and use_penalty:
             kl_divs = kl_divs.unsqueeze(-1)
 
             assert beta is not None
@@ -1959,22 +1959,23 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
                     obs_history, kl_div_target_policy_inner,
                     optims_th_primes, optims_vals_primes):
     if inner_step == 0:
-        # dice_loss, _, values_loss = game.get_dice_loss(
-        #     action_trajectory, rewards,
-        #     policy_history, val_history, next_val_history,
-        #     old_policy_history=policy_history,
-        #     use_nl_loss=args.inner_nl_loss,
-        #     use_penalty=args.inner_penalty,
-        #     use_clipping=args.inner_clip, beta=args.inner_beta)
         dice_loss, _, values_loss = game.get_dice_loss(
             action_trajectory, rewards,
             policy_history, val_history, next_val_history,
-            old_policy_history=None,
+            old_policy_history=policy_history,
             use_nl_loss=args.inner_nl_loss,
             use_penalty=args.inner_penalty,
             use_clipping=args.inner_clip, beta=args.inner_beta)
+        # dice_loss, _, values_loss = game.get_dice_loss(
+        #     action_trajectory, rewards,
+        #     policy_history, val_history, next_val_history,
+        #     old_policy_history=None,
+        #     use_nl_loss=args.inner_nl_loss,
+        #     use_penalty=args.inner_penalty,
+        #     use_clipping=args.inner_clip, beta=args.inner_beta)
 
     else:
+        # This is essentially the repeat_train formulation on the inner loop
         new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
             mixed_thetas, mixed_vals, obs_history)
         # Using the new policies and vals now
@@ -2022,7 +2023,8 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
         game.print_values_for_all_states(mixed_vals)
 
 
-def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies_outer, lr_policies_inner, lr_values, repeat_train_on_same_samples):
+def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies_outer,
+                            lr_policies_inner, lr_values, inner_repeat_train_on_same_samples, outer_repeat_train_on_same_samples):
 
     static_th_copy = copy.deepcopy(th)
     static_vals_copy = copy.deepcopy(vals)
@@ -2034,6 +2036,13 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
         if sum(lr_policies_inner) > 0:
 
             for outer_step in range(L):
+
+                th_with_only_agent_i_updated = copy.deepcopy(
+                    static_th_copy)
+                th_with_only_agent_i_updated[i] = th[i]
+                vals_with_only_agent_i_updated = copy.deepcopy(
+                    static_vals_copy)
+                vals_with_only_agent_i_updated[i] = vals[i]
 
                 # Reconstruct on every outer loop iter. The idea is this:
                 # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
@@ -2051,13 +2060,13 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, \
                 optims_th_primes_nodiff, optims_vals_primes_nodiff = \
                     construct_mixed_th_vals_and_diffoptims(n_agents, i,
-                                                           static_th_copy,
-                                                           static_vals_copy,
+                                                           th_with_only_agent_i_updated,
+                                                           vals_with_only_agent_i_updated,
                                                            lr_policies_outer, lr_policies_inner,
                                                            lr_values)
 
                 # --- INNER LOOP ---
-                if repeat_train_on_same_samples:
+                if inner_repeat_train_on_same_samples:
                     # Rollout in the environment only once per inner loop
                     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                         mixed_thetas, mixed_vals)
@@ -2098,31 +2107,44 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
 
                 # New rollout on every outer step because policies different
                 # Well, we could repeat train on the outer step too (e.g. after the first outer step rollout). But probably more stable with new rollouts on outer step
-                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                    mixed_thetas, mixed_vals)
+
+                if not outer_repeat_train_on_same_samples or outer_step == 0:
+                    action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                        mixed_thetas, mixed_vals)
                 if outer_step == 0:
                     kl_div_target_policy_outer = policy_history.detach().clone()
 
+                if outer_repeat_train_on_same_samples:
+                    new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals, obs_history)
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards, new_policies, new_vals,
+                        next_new_vals, old_policy_history=policy_history,
+                        kl_div_target_policy=kl_div_target_policy_outer,
+                        use_nl_loss=args.inner_nl_loss,
+                        use_penalty=args.outer_penalty,
+                        use_clipping=args.outer_clip, beta=args.outer_beta)
+                else:
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        kl_div_target_policy=kl_div_target_policy_outer,
+                        use_nl_loss=args.inner_nl_loss,
+                        use_penalty=args.outer_penalty,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
                 # dice_loss, _, values_loss = game.get_dice_loss(
                 #     action_trajectory, rewards,
                 #     policy_history, val_history,
                 #     next_val_history,
-                #     old_policy_history=policy_history,
+                #     old_policy_history=None,
                 #     kl_div_target_policy=kl_div_target_policy_outer,
                 #     use_nl_loss=args.inner_nl_loss,
                 #     use_penalty=args.outer_penalty,
                 #     use_clipping=args.outer_clip,
                 #     beta=args.outer_beta)
-                dice_loss, _, values_loss = game.get_dice_loss(
-                    action_trajectory, rewards,
-                    policy_history, val_history,
-                    next_val_history,
-                    old_policy_history=None,
-                    kl_div_target_policy=kl_div_target_policy_outer,
-                    use_nl_loss=args.inner_nl_loss,
-                    use_penalty=args.outer_penalty,
-                    use_clipping=args.outer_clip,
-                    beta=args.outer_beta)
 
                 if isinstance(mixed_thetas[i], torch.Tensor):
                     # DiCE (so samples) but no func approx (still tabular)
@@ -2190,8 +2212,12 @@ if __name__ == "__main__":
                         help="True for samples (with rollout_len), false for exact gradient (using matrix inverse for infinite length rollout)")
     parser.add_argument("--using_DiCE", action="store_true",
                         help="True for LOLA-DiCE, false for LOLA-PG. Must have using_samples = True.")
-    parser.add_argument("--repeat_train_on_same_samples", action="store_true",
-                        help="True for PPO style formulation where we repeat train on the same samples (only one inner step rollout, multiple inner step updates with importance weighting). Note - at present, this repeat train only applies on the inner loop. With multiple outer loops, still have one environment step per outer loop step")
+    parser.add_argument("--inner_repeat_train_on_same_samples", action="store_true",
+                        help="True for PPO style formulation where we repeat train on the same samples (only one inner step rollout, multiple inner step updates with importance weighting).")
+    parser.add_argument("--outer_repeat_train_on_same_samples",
+                        action="store_true",
+                        help="Repeat train on the same samples in the outer loop too (from first outer loop rollout only)")
+
     # parser.add_argument("--use_clipping", action="store_true",
     #                     help="Do the PPO style clipping")
     parser.add_argument("--inner_penalty", action="store_true",
@@ -2302,9 +2328,9 @@ if __name__ == "__main__":
         assert args.inner_exact_prox or args.no_taylor_approx
 
     if args.inner_penalty or args.outer_penalty or args.inner_clip or args.outer_clip:
-        assert args.repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
+        assert args.inner_repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
 
-    if args.repeat_train_on_same_samples:
+    if args.inner_repeat_train_on_same_samples:
         assert args.using_DiCE
 
     if args.dice_grad_calc:
@@ -2341,7 +2367,7 @@ if __name__ == "__main__":
     using_DiCE = args.using_DiCE
     if using_DiCE:
         assert using_samples
-        repeat_train_on_same_samples = args.repeat_train_on_same_samples  # If true we will instead of rolling out multiple times in the inner loop, just rollout once
+        inner_repeat_train_on_same_samples = args.inner_repeat_train_on_same_samples  # If true we will instead of rolling out multiple times in the inner loop, just rollout once
         # but then train multiple times on the same data using importance sampling and PPO-style clipping
         clip_epsilon = args.clip_epsilon
         two_way_clip = args.two_way_clip
@@ -2451,8 +2477,11 @@ if __name__ == "__main__":
         else:
             if using_DiCE:
                 print("Asymmetric DiCE Updates")
-                if repeat_train_on_same_samples:
-                    print("Using Repeat Train on Same Samples")
+                if args.inner_repeat_train_on_same_samples or args.outer_repeat_train_on_same_samples:
+                    if args.inner_repeat_train_on_same_samples:
+                        print("Using Inner Repeat Train on Same Samples")
+                    if args.outer_repeat_train_on_same_samples:
+                        print("Using Outer Repeat Train on Same Samples")
                 else:
                     print("Using regular DiCE formulation")
             else:
@@ -2747,7 +2776,8 @@ if __name__ == "__main__":
                                                            lr_policies_outer,
                                                            lr_policies_inner,
                                                            lr_values,
-                                                           args.repeat_train_on_same_samples)
+                                                           args.inner_repeat_train_on_same_samples,
+                                                           args.outer_repeat_train_on_same_samples)
 
                     else:
                         # Samples but no DiCE, this is the LOLA-PG formulation
@@ -2768,7 +2798,7 @@ if __name__ == "__main__":
                         # (otherwise you would use values from async rollouts which
                         # usually correlates with the sync play results but is sometimes a bit weird)
                         if args.env == 'coin':
-                            if repeat_train_on_same_samples:
+                            if inner_repeat_train_on_same_samples:
                                 raise NotImplementedError("Again repeat train not yet supported here")
                             obs_history, act_history, rewards, policy_history, val_history, \
                             next_val_history, avg_same_colour_coins_picked_total, \
@@ -2779,7 +2809,7 @@ if __name__ == "__main__":
                                 rewards, policy_history, val_history,
                                 next_val_history)
                         elif args.env == 'imp':
-                            if repeat_train_on_same_samples:
+                            if inner_repeat_train_on_same_samples:
                                 raise Exception(
                                     "Repeat_train not yet supported for coin game")
                             obs_history, act_history, rewards, policy_history, \
@@ -2793,7 +2823,7 @@ if __name__ == "__main__":
                             action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                                 th, vals)
 
-                            if repeat_train_on_same_samples:
+                            if inner_repeat_train_on_same_samples:
                                 _, G_ts, _ = game.get_dice_loss(
                                     action_trajectory, rewards,
                                     policy_history, val_history,
