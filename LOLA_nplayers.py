@@ -1459,6 +1459,9 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, o
         print(kl_div)
         print("Curr pol")
         print(torch.sigmoid(curr_pol))
+        if args.ill_condition:
+            print("Agent {} Transformed Pol".format(i + 1))
+            print(torch.sigmoid(ill_cond_matrices[i] @ curr_pol))
         print("Iter:")
         print(curr_iter)
 
@@ -2024,7 +2027,7 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
 
 
 def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_policies_outer,
-                            lr_policies_inner, lr_values, inner_repeat_train_on_same_samples, outer_repeat_train_on_same_samples):
+                            lr_policies_inner, lr_values):
 
     static_th_copy = copy.deepcopy(th)
     static_vals_copy = copy.deepcopy(vals)
@@ -2066,7 +2069,7 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                                                            lr_values)
 
                 # --- INNER LOOP ---
-                if inner_repeat_train_on_same_samples:
+                if args.inner_repeat_train_on_same_samples:
                     # Rollout in the environment only once per inner loop
                     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                         mixed_thetas, mixed_vals)
@@ -2108,33 +2111,35 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 # New rollout on every outer step because policies different
                 # Well, we could repeat train on the outer step too (e.g. after the first outer step rollout). But probably more stable with new rollouts on outer step
 
-                if not outer_repeat_train_on_same_samples or outer_step == 0:
-                    action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                        mixed_thetas, mixed_vals)
+                # if not outer_repeat_train_on_same_samples or outer_step == 0:
+                #     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                #         mixed_thetas, mixed_vals)
+                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                    mixed_thetas, mixed_vals)
                 if outer_step == 0:
                     kl_div_target_policy_outer = policy_history.detach().clone()
 
-                if outer_repeat_train_on_same_samples:
-                    new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-                        mixed_thetas, mixed_vals, obs_history)
-                    dice_loss, _, values_loss = game.get_dice_loss(
-                        action_trajectory, rewards, new_policies, new_vals,
-                        next_new_vals, old_policy_history=policy_history,
-                        kl_div_target_policy=kl_div_target_policy_outer,
-                        use_nl_loss=args.inner_nl_loss,
-                        use_penalty=args.outer_penalty,
-                        use_clipping=args.outer_clip, beta=args.outer_beta)
-                else:
-                    dice_loss, _, values_loss = game.get_dice_loss(
-                        action_trajectory, rewards,
-                        policy_history, val_history,
-                        next_val_history,
-                        old_policy_history=policy_history,
-                        kl_div_target_policy=kl_div_target_policy_outer,
-                        use_nl_loss=args.inner_nl_loss,
-                        use_penalty=args.outer_penalty,
-                        use_clipping=args.outer_clip,
-                        beta=args.outer_beta)
+                # if outer_repeat_train_on_same_samples:
+                #     new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                #         mixed_thetas, mixed_vals, obs_history)
+                #     dice_loss, _, values_loss = game.get_dice_loss(
+                #         action_trajectory, rewards, new_policies, new_vals,
+                #         next_new_vals, old_policy_history=policy_history,
+                #         kl_div_target_policy=kl_div_target_policy_outer,
+                #         use_nl_loss=args.inner_nl_loss,
+                #         use_penalty=args.outer_penalty,
+                #         use_clipping=args.outer_clip, beta=args.outer_beta)
+                # else:
+                dice_loss, _, values_loss = game.get_dice_loss(
+                    action_trajectory, rewards,
+                    policy_history, val_history,
+                    next_val_history,
+                    old_policy_history=policy_history,
+                    kl_div_target_policy=kl_div_target_policy_outer,
+                    use_nl_loss=args.inner_nl_loss,
+                    use_penalty=args.outer_penalty,
+                    use_clipping=args.outer_clip,
+                    beta=args.outer_beta)
                 # dice_loss, _, values_loss = game.get_dice_loss(
                 #     action_trajectory, rewards,
                 #     policy_history, val_history,
@@ -2214,9 +2219,9 @@ if __name__ == "__main__":
                         help="True for LOLA-DiCE, false for LOLA-PG. Must have using_samples = True.")
     parser.add_argument("--inner_repeat_train_on_same_samples", action="store_true",
                         help="True for PPO style formulation where we repeat train on the same samples (only one inner step rollout, multiple inner step updates with importance weighting).")
-    parser.add_argument("--outer_repeat_train_on_same_samples",
-                        action="store_true",
-                        help="Repeat train on the same samples in the outer loop too (from first outer loop rollout only)")
+    # parser.add_argument("--outer_repeat_train_on_same_samples",
+    #                     action="store_true",
+    #                     help="Repeat train on the same samples in the outer loop too (from first outer loop rollout only)") Recommended not to use this for now. I don't understand it well enough.
 
     # parser.add_argument("--use_clipping", action="store_true",
     #                     help="Do the PPO style clipping")
@@ -2477,11 +2482,11 @@ if __name__ == "__main__":
         else:
             if using_DiCE:
                 print("Asymmetric DiCE Updates")
-                if args.inner_repeat_train_on_same_samples or args.outer_repeat_train_on_same_samples:
-                    if args.inner_repeat_train_on_same_samples:
-                        print("Using Inner Repeat Train on Same Samples")
-                    if args.outer_repeat_train_on_same_samples:
-                        print("Using Outer Repeat Train on Same Samples")
+                # if args.inner_repeat_train_on_same_samples or args.outer_repeat_train_on_same_samples:
+                if args.inner_repeat_train_on_same_samples:
+                    print("Using Inner Repeat Train on Same Samples")
+                # if args.outer_repeat_train_on_same_samples:
+                #     print("Using Outer Repeat Train on Same Samples")
                 else:
                     print("Using regular DiCE formulation")
             else:
@@ -2775,9 +2780,8 @@ if __name__ == "__main__":
                                                            outer_steps,
                                                            lr_policies_outer,
                                                            lr_policies_inner,
-                                                           lr_values,
-                                                           args.inner_repeat_train_on_same_samples,
-                                                           args.outer_repeat_train_on_same_samples)
+                                                           lr_values
+                                                           )
 
                     else:
                         # Samples but no DiCE, this is the LOLA-PG formulation
