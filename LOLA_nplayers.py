@@ -1881,16 +1881,16 @@ def update_th(th, gradient_terms_or_Ls, lr_policies_outer, lr_policies_inner, al
                 nl_terms = [grad_L[i][i]
                             for i in range(n)]
 
-                print("!!!NL TERMS!!!")
-                print(nl_terms)
-                if args.ill_condition:
-                    for i in range(n):
-                        print(ill_cond_matrices[i] @ nl_terms[i])
-                print("!!!LOLA TERMS!!!")
-                print(lola_terms)
-                if args.ill_condition:
-                    for i in range(n):
-                        print(ill_cond_matrices[i] @ lola_terms[i])
+                # print("!!!NL TERMS!!!")
+                # print(nl_terms)
+                # if args.ill_condition:
+                #     for i in range(n):
+                #         print(ill_cond_matrices[i] @ nl_terms[i])
+                # print("!!!LOLA TERMS!!!")
+                # print(lola_terms)
+                # if args.ill_condition:
+                #     for i in range(n):
+                #         print(ill_cond_matrices[i] @ lola_terms[i])
 
                 grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
 
