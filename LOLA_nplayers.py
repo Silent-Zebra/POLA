@@ -20,12 +20,6 @@ from timeit import default_timer as timer
 
 
 
-def simple_fwd_solver(f, init_point, precision=1e-5):
-    prev_point, curr_point = init_point, f(init_point)
-    while np.linalg.norm(prev_point - curr_point) > precision:
-        prev_point, curr_point = curr_point, f(curr_point)
-    return curr_point
-
 
 def bin_inttensor_from_int(x, n):
     """Converts decimal value integer x into binary representation.
@@ -46,6 +40,8 @@ def build_bin_matrix(n, size):
 def build_p_vector(n, size, pc, bin_mat):
     pc = pc.repeat(size).reshape(size, n)
     pd = 1 - pc
+    # print(pc)
+    # print(bin_mat)
     # p = torch.zeros(size)
     p = torch.prod(bin_mat * pc + (1 - bin_mat) * pd, dim=1)
     return p
@@ -278,6 +274,7 @@ class Game():
         else:
             state_batch = self.build_all_combs_state_batch()
             policy = self.get_nn_policy_for_batch(th[i], state_batch)
+            policy = policy.squeeze(-1)
 
             # if args.ill_condition:
             #
@@ -347,6 +344,8 @@ class ContributionGame(Game):
         self.batch_size = batch_size
         self.num_iters = num_iters
 
+
+
         if self.state_type == 'one_hot' or self.state_type == 'majorTD4':
             self.action_repr_dim = 3  # one hot with 3 dimensions, dimension 0 for defect, 1 for contrib/coop, 2 for start
         else:
@@ -356,7 +355,10 @@ class ContributionGame(Game):
             # Following the Barbosa 2020 paper. always 2 because, 1 state for majority coop/defect, 1 for past last action
             self.dims = [2 * history_len * self.action_repr_dim] * n
         else:
-            self.dims = [n * history_len * self.action_repr_dim] * n
+            if args.using_nn:
+                self.dims = [n * history_len * self.action_repr_dim] * n
+            else:
+                self.dims = [2 ** n + 1] * n
         """
         for dims, the last n is the number of agents, basically dims[i] is the dim for each agent
         It's sort of a silly way to set things up in the event that all agents are the same
@@ -393,6 +395,22 @@ class ContributionGame(Game):
             self.len_mnist_coop_dset = len(self.mnist_coop_class_dset)
             self.len_mnist_defect_dset = len(self.mnist_defect_class_dset)
             self.len_mnist_init_dset = len(self.mnist_init_class_dset)
+
+        # For exact calculations
+        self.state_space = self.dims[0]
+        self.bin_mat = build_bin_matrix(self.n_agents, 2 ** self.n_agents )
+        # print(self.bin_mat)
+        self.payout_vectors = torch.zeros((n, 2 ** self.n_agents))  # one vector for each player, state space - 1 because one is the initial state. This is the r^1 or r^2 in the LOLA paper exact gradient formulation. In the 2p case this is for DD, DC, CD, CC
+
+        for agent in range(n):
+            for state in range(2 ** self.n_agents):
+                l = bin_inttensor_from_int(state, n)
+                total_contrib = sum(l)
+                agent_payout = total_contrib * contribution_factor / n - l[
+                    agent]  # if agent contributed 1, subtract 1
+                agent_payout -= adjustment_to_make_rewards_negative
+                self.payout_vectors[agent][state] = agent_payout
+
 
     def build_mnist_state_from_classes(self, batch_tensor):
         batch_tensor_dims = batch_tensor.shape
@@ -810,6 +828,109 @@ class ContributionGame(Game):
         policy_dist_i = policy_dist_i.reshape(self.batch_size, self.num_iters,
                                               -1)
         return policy_dist_i
+
+
+    def get_exact_loss(self, th):
+        """
+        Theta denotes (unnormalized) action probabilities at each of the states:
+        DD DC CD CC start (where DD = both defect, DC = agent 1 defects while agent 2 cooperates, etc.)
+        Note that this is different from the original LOLA/SOS formulation which uses start CC CD DC DD
+        The reason I flipped this is because, when thinking about the contribution game which is the generalization of the IPD,
+        It is convenient to think of 0 as no contribution (i.e. defect) and 1 as contribute (i.e. cooperate)
+        And using binary construction from 00, 01, 10, 11 is easy to work with (counting up)
+        In the 3p case, we go from 000, 001, ..., 111
+        In the n-player case, 000...000 is all defect, 111...111 is all cooperate.
+        """
+
+        init_pc = torch.zeros(self.n_agents)
+
+        policies = []
+        for i in range(self.n_agents):
+
+            policy = self.get_policy_for_all_states(th, i)
+            policies.append(policy)
+            # print(policy)
+            # p_i_0 = policy[-1]
+
+
+            if init_state_representation == 1:
+                p_i_0 = policy[-2]  # force all coop at the beginning in this special case
+            else:
+                p_i_0 = policy[-1] # start state is at the end; this is a (kind of arbitrary) design choice
+
+            init_pc[i] = p_i_0
+            # Policy represents prob of coop (taking action 1)
+
+
+        p = build_p_vector(self.n_agents, 2 ** self.n_agents, init_pc, self.bin_mat)
+
+        # This part and the below part might be optimizable (without a loop) but it doesn't seem trivial
+        # Probabilities in the states other than the start state
+        all_p_is = torch.zeros((self.n_agents, 2 ** self.n_agents))
+        # print(all_p_is)
+        for i in range(self.n_agents):
+            # print(th[i])
+            # if args.ill_condition:
+            #     p_i = torch.sigmoid((ill_cond_matrices[i] @ th[i])[0:-1])
+            # else:
+            #     p_i = torch.sigmoid(th[i][0:-1]
+
+            p_i = policies[i][0:-1]
+
+            # print(p_i)
+            # print(p_i.flatten())
+            # print(all_p_is[i])
+            all_p_is[i] = p_i.flatten()
+
+        # Transition Matrix
+        # Remember now our transition matrix top left is DDD...D
+        # 0 is defect in this formulation, 1 is contributing/cooperating
+        P = torch.zeros((2 ** self.n_agents, 2 ** self.n_agents))
+        for curr_state in range(2 ** self.n_agents):
+            i = curr_state
+            pc = all_p_is[:, i]
+            p_new = build_p_vector(self.n_agents, 2 ** self.n_agents, pc, self.bin_mat)
+            P[i] = p_new
+
+        # Here instead of using infinite horizon which is the implicit assumption in the derivation from the previous parts (see again the LOLA appendix A.2)
+        # We can consider a finite horizon and literally just unroll the calculation
+        # You could probably just do 2 inverses and do some multiplication by discount factor
+        # and subtract instead of doing this loop but oh well, this is more for testing and comparing anyway.
+        if args.exact_finite_horizon:
+            gamma_t_P_t = torch.eye(2 ** self.n_agents)
+            running_total = torch.eye(2 ** self.n_agents)
+
+            for t in range(1, args.rollout_len):
+                gamma_t_P_t = gamma * gamma_t_P_t @ P
+                running_total += gamma_t_P_t
+            M = p @ gamma_t_P_t
+        else:
+            M = torch.matmul(p, torch.inverse(
+                torch.eye(2 ** self.n_agents) - gamma * P))
+
+        # Remember M is just the steady state probabilities for each of the states
+        # It is a vector, not a matrix.
+
+
+
+        L_all = []
+        for i in range(self.n_agents):
+            payout_vec = self.payout_vectors[i]
+
+            # print(M)
+            # print(payout_vec)
+
+            # BE CAREFUL WITH SIGNS!
+            # OPTIMS REQUIRE LOSSES
+            rew_i = torch.matmul(M, payout_vec)
+            L_i = -rew_i
+            L_all.append(L_i)
+
+
+        return L_all
+
+
+
 
     def get_dice_loss(self, trajectory, rewards, policy_history, val_history, next_val_history,
                       old_policy_history=None, kl_div_target_policy=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
@@ -1277,43 +1398,55 @@ def get_jacobian(terms, param):
     return jac
 
 
-def get_th_copy(th):
-    static_th_copy = []
-    for i in range(len(th)):
-        if isinstance(th[i], torch.Tensor):
-            static_th_copy.append(th[i].detach().clone().requires_grad_())
-        else:
-            raise NotImplementedError(
-                "To be implemented, use copyNN function (need reconstruction of NNs?)")
-    return static_th_copy
+# def get_th_copy(th):
+#     static_th_copy = []
+#     for i in range(len(th)):
+#         if isinstance(th[i], torch.Tensor):
+#             static_th_copy.append(th[i].detach().clone().requires_grad_())
+#         else:
+#             raise NotImplementedError(
+#                 "To be implemented, use copyNN function (need reconstruction of NNs?)")
+#     return static_th_copy
 
+def get_th_copy(th):
+    return copy.deepcopy(th)
 
 def build_policy_dist(coop_probs):
     # This version just for ipdn/exact.
     defect_probs = 1 - coop_probs
+    # print(coop_probs)
+    # print(coop_probs.shape)
     policy_dist = torch.vstack((coop_probs, defect_probs)).t()
+    # print("HEY")
+    # print(policy_dist)
     # we need to do this because kl_div needs the full distribution
     # and the way we have parameterized policy here is just a coop prob
     # if you used categorical/multinomial you wouldn't have to go through this
     # The way torch kldiv works is that the first dimension is the batch, the last dimension is the probabilities.
     # The reshape just makes so that batchmean occurs over the first axis
+    # print(policy_dist)
+    # 1/0
     policy_dist = policy_dist.reshape(1, -1, 2)
     return policy_dist
 
-def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build, i):
+def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build, i, policies_are_logits=True):
     # Note the policy and targets are individual agent ones
     # Only used in tabular case so far
 
-    if args.ill_condition:
-        policy_dist = build_policy_dist(
-            torch.sigmoid(ill_cond_matrices[i] @ policy_to_build))
+    if policies_are_logits:
+        if args.ill_condition:
+            policy_dist = build_policy_dist(
+                torch.sigmoid(ill_cond_matrices[i] @ policy_to_build))
 
-        target_policy_dist = build_policy_dist(
-            torch.sigmoid(ill_cond_matrices[i] @ target_pol_to_build.detach()))
+            target_policy_dist = build_policy_dist(
+                torch.sigmoid(ill_cond_matrices[i] @ target_pol_to_build.detach()))
+        else:
+            policy_dist = build_policy_dist(torch.sigmoid(policy_to_build))
+            target_policy_dist = build_policy_dist(
+                torch.sigmoid(target_pol_to_build.detach()))
     else:
-        policy_dist = build_policy_dist(torch.sigmoid(policy_to_build))
-        target_policy_dist = build_policy_dist(
-            torch.sigmoid(target_pol_to_build.detach()))
+        policy_dist = build_policy_dist(policy_to_build)
+        target_policy_dist = build_policy_dist(target_pol_to_build.detach())
     return policy_dist, target_policy_dist
 
 
@@ -1372,6 +1505,7 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
 
 
 def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i, j):
+    print("BE CAREFUL - CHECK EVERY STEP OF CODE, I DID A LOT OF EDITING, CHECK ALL THE CALLS, CHECK ALL BEHAVIOR")
     rews_for_ift = gradient_terms_or_Ls(inner_lookahead_th)  # Note that new_th has only agent j updated
 
     grad2_V1 = get_gradient(- rews_for_ift[i], inner_lookahead_th[j])
@@ -1448,17 +1582,24 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i
     return new_th, other_terms
 
 
-def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, other_terms, curr_iter, max_iters, threshold):
+def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol, other_terms, curr_iter, optims_th_primes_nodiff=None):
     if print_info:
-        for j in range(len(new_th)):
-            if j != i:
-                print("Agent {}".format(j))
-                print(torch.sigmoid(new_th[j]))
+        game.print_policies_for_all_states(new_th)
 
-    outer_rews = Ls(new_th)
+    outer_loss = game.get_exact_loss(new_th)
+
+    policy = game.get_policy_for_all_states(new_th, i)
+    target_policy = game.get_policy_for_all_states(static_th_copy, i)
+
+    # print(policy)
+    # print(target_policy)
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        new_th[i], static_th_copy[i], i)
+        policy, target_policy, i, policies_are_logits=False)
+
+    # print(policy_dist)
+    # print(target_policy_dist)
+    # 1/0
 
     kl_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -1466,31 +1607,48 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, o
         reduction='batchmean',
         log_target=False)
 
-    # Again we have this awkward reward formulation
-    loss_i = - outer_rews[i] + args.outer_beta * kl_div
+    loss_i = outer_loss[i] + args.outer_beta * kl_div
 
     with torch.no_grad():
-        if other_terms is not None:
-            new_th[i] -= lr_policies_outer[i] * (
-                        get_gradient(loss_i, new_th[i]) + sum(other_terms))
+        if isinstance(new_th[i], torch.Tensor):
+            if other_terms is not None:
+                new_th[i] -= lr_policies_outer[i] * (
+                            get_gradient(loss_i, new_th[i]) + sum(other_terms))
+            else:
+                new_th[i] -= lr_policies_outer[i] * (get_gradient(loss_i, new_th[i]))
         else:
-            new_th[i] -= lr_policies_outer[i] * (get_gradient(loss_i, new_th[i]))
+
+            # print(game.get_policy_for_all_states(new_th, i))
+            assert optims_th_primes_nodiff is not None
+            optim_update(optims_th_primes_nodiff[i], loss_i, )
+            # print(game.get_policy_for_all_states(new_th, i))
+            # 1/0
+
 
     prev_pol = curr_pol.detach().clone()
-    curr_pol = new_th[i].detach().clone()
+    new_pol = game.get_policy_for_all_states(new_th, i)
+    curr_pol = new_pol.detach().clone()
 
     if print_info:
         print(kl_div)
+        # game.print_policies_for_all_states(th)
+        print("Prev pol")
+        print(prev_pol)
         print("Curr pol")
-        print(torch.sigmoid(curr_pol))
-        if args.ill_condition:
-            print("Agent {} Transformed Pol".format(i + 1))
-            print(torch.sigmoid(ill_cond_matrices[i] @ curr_pol))
+        print(curr_pol)
+        # print(torch.sigmoid(curr_pol))
+        # if args.ill_condition:
+        #     print("Agent {} Transformed Pol".format(i + 1))
+        #     print(torch.sigmoid(ill_cond_matrices[i] @ curr_pol))
         print("Iter:")
         print(curr_iter)
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        curr_pol, prev_pol, i)
+        curr_pol, prev_pol, i, policies_are_logits=False)
+
+    # print(policy_dist)
+    # print(target_policy_dist)
+    # 1/0
 
     curr_prev_pol_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -1499,13 +1657,73 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, o
         log_target=False)
 
     fixed_point_reached = False
-    if curr_prev_pol_div < threshold or curr_iter > max_iters:
+    if curr_prev_pol_div < args.prox_threshold or curr_iter > args.prox_max_iters:
         print("Outer prox iters used: {}".format(curr_iter))
-        if curr_iter >= max_iters:
+        if curr_iter >= args.prox_max_iters:
             print("Reached max prox iters")
         fixed_point_reached = True
 
     return new_th, curr_pol, fixed_point_reached
+
+
+# def outer_exact_loop_step(print_info, i, new_th, static_th_copy, Ls, curr_pol, other_terms, curr_iter, max_iters, threshold):
+#     if print_info:
+#         for j in range(len(new_th)):
+#             if j != i:
+#                 print("Agent {}".format(j))
+#                 print(torch.sigmoid(new_th[j]))
+#
+#     outer_rews = Ls(new_th)
+#
+#     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+#         new_th[i], static_th_copy[i], i)
+#
+#     kl_div = torch.nn.functional.kl_div(
+#         input=torch.log(policy_dist),
+#         target=target_policy_dist,
+#         reduction='batchmean',
+#         log_target=False)
+#
+#     # Again we have this awkward reward formulation
+#     loss_i = - outer_rews[i] + args.outer_beta * kl_div
+#
+#     with torch.no_grad():
+#         if other_terms is not None:
+#             new_th[i] -= lr_policies_outer[i] * (
+#                         get_gradient(loss_i, new_th[i]) + sum(other_terms))
+#         else:
+#             new_th[i] -= lr_policies_outer[i] * (get_gradient(loss_i, new_th[i]))
+#
+#     prev_pol = curr_pol.detach().clone()
+#     curr_pol = new_th[i].detach().clone()
+#
+#     if print_info:
+#         print(kl_div)
+#         print("Curr pol")
+#         print(torch.sigmoid(curr_pol))
+#         if args.ill_condition:
+#             print("Agent {} Transformed Pol".format(i + 1))
+#             print(torch.sigmoid(ill_cond_matrices[i] @ curr_pol))
+#         print("Iter:")
+#         print(curr_iter)
+#
+#     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+#         curr_pol, prev_pol, i)
+#
+#     curr_prev_pol_div = torch.nn.functional.kl_div(
+#         input=torch.log(policy_dist),
+#         target=target_policy_dist,
+#         reduction='batchmean',
+#         log_target=False)
+#
+#     fixed_point_reached = False
+#     if curr_prev_pol_div < threshold or curr_iter > max_iters:
+#         print("Outer prox iters used: {}".format(curr_iter))
+#         if curr_iter >= max_iters:
+#             print("Reached max prox iters")
+#         fixed_point_reached = True
+#
+#     return new_th, curr_pol, fixed_point_reached
 
 
 def print_exact_policy(th, i):
@@ -1625,6 +1843,171 @@ def check_is_in_tft_direction(lola_terms_p1, lola_terms_p2):
     print("P2 LOLA TFT Direction? {}".format(
         is_in_tft_direction_p2))
     return is_in_tft_direction_p1, is_in_tft_direction_p2
+
+def update_th_exact_value(th, game):
+    assert args.no_taylor_approx
+    # Do DiCE style rollouts except we can calculate exact Ls like follows
+
+    # So what we will do is each player will calc losses
+    # First copy the th
+    # this is th'
+    # well actually static_th_copy, if static,  is serving as the th
+    # whereas th being updated makes it th' actually
+    static_th_copy = get_th_copy(th)
+    n = len(th)
+
+    for i in range(n):
+        # new_th is the theta''
+        # new_th = get_th_copy(static_th_copy)
+
+
+        if args.using_nn:
+
+            th_with_only_agent_i_updated = copy.deepcopy(
+                static_th_copy)
+            th_with_only_agent_i_updated[i] = th[i]
+            # vals_with_only_agent_i_updated = copy.deepcopy(
+            #     static_vals_copy)
+            # vals_with_only_agent_i_updated[i] = vals[i]
+
+            # Reconstruct on every outer loop iter. The idea is this:
+            # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
+            # Then update own policy, ONCE
+            # Then we repeat, starting from the static th for all other players' policies
+            # but now we have the old policies of all other players but our own updated policy
+            # Then the other players again solve the prox objective, but with our new policy
+            # And then we take another step
+            # And repeat
+            # Starting from the old th for all other players again and diff through those steps
+            # Is analogous to what the IFT does after we have found a fixed point
+            # We can't warm start here though if I am resolving/recreating the optims/gradient tape at each outer step
+            # And the reason I do this resolve instead of just one long gradient tape
+            # Is because otherwise the memory blows up way too quickly
+            mixed_thetas, optims_th_primes, optims_th_primes_nodiff = \
+                construct_mixed_th_and_diffoptim(n_agents, i,
+                                                       th_with_only_agent_i_updated,
+                                                       lr_policies_outer,
+                                                       lr_policies_inner
+                                                       )
+            new_th = mixed_thetas
+        else:
+            new_th = get_th_copy(static_th_copy)
+
+        # TODO FIX THIS
+        if args.outer_exact_prox:
+            fixed_point_reached = False
+            outer_iters = 0
+
+            curr_pol = game.get_policy_for_all_states(th, i).detach() # just an initialization, will be updated in the outer step loop
+            # curr_pol = copy.deepcopy(th[i])
+            while not fixed_point_reached:
+                # treating th as th' here
+                # and static_th_copy as th which isn't moving
+                if args.using_nn:
+
+                    th_with_only_agent_i_updated = copy.deepcopy(
+                        static_th_copy)
+                    th_with_only_agent_i_updated[i] = th[i]
+
+                    mixed_thetas, optims_th_primes, optims_th_primes_nodiff = \
+                        construct_mixed_th_and_diffoptim(n_agents, i,
+                                                         th_with_only_agent_i_updated,
+                                                         lr_policies_outer,
+                                                         lr_policies_inner
+                                                         )
+                    new_th = mixed_thetas
+                else:
+                    new_th = get_th_copy(static_th_copy)
+                    new_th[i] = th[i]
+                # if args.using_nn:
+                #     inner_losses = game.get_exact_loss(mixed_thetas)
+                # else:
+                inner_losses = game.get_exact_loss(new_th)
+                    # print(inner_losses)
+
+                for j in range(n):
+                    # Inner loop essentially
+                    # Each player on the copied th does a naive update (must be differentiable!)
+                    if j != i:
+                        if isinstance(new_th[j], torch.Tensor):
+                            new_th[j] = new_th[j] - lr_policies_inner[
+                                j] * get_gradient(inner_losses[j],
+                                                  new_th[j])
+                        else:
+                            optim_update(optims_th_primes[j],
+                                         inner_losses[j],
+                                         mixed_thetas[j].parameters())
+
+                outer_iters += 1
+                if args.using_nn:
+                    new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(args.print_prox_loops_info, i, new_th, static_th_copy, game,
+                                          curr_pol, None, outer_iters,
+                                          optims_th_primes_nodiff)
+                else:
+                    new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
+                        args.print_prox_loops_info, i, new_th, static_th_copy,
+                        game, curr_pol, None, outer_iters, None)
+
+                if isinstance(new_th[i], torch.Tensor):
+                    th[i] = new_th[i]
+                else:
+                    copyNN(th[i], new_th[i])
+
+
+        else:
+            # Then each player calcs the losses
+            # if args.using_nn:
+            #     inner_losses = game.get_exact_loss(mixed_thetas)
+            # else:
+            inner_losses = game.get_exact_loss(new_th)
+                # print(inner_losses)
+
+            for j in range(n):
+                # Inner loop essentially
+                # Each player on the copied th does a naive update (must be differentiable!)
+                if j != i:
+                    if isinstance(new_th[j], torch.Tensor):
+                        new_th[j] = new_th[j] - lr_policies_inner[
+                            j] * get_gradient(inner_losses[j],
+                                              new_th[j])
+                    else:
+                        optim_update(optims_th_primes[j],
+                                     inner_losses[j],
+                                     mixed_thetas[j].parameters())
+
+
+
+            if args.print_inner_rollouts:
+                print_exact_policy(new_th, i)
+
+            # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
+            if args.using_nn:
+                outer_losses = game.get_exact_loss(mixed_thetas)
+            else:
+                outer_losses = game.get_exact_loss(new_th)
+                # print(inner_losses)
+            # outer_losses = game.get_exact_loss(new_th)
+
+
+            # Finally each player updates their own (copied) th
+            if isinstance(new_th[i], torch.Tensor):
+                with torch.no_grad():
+                    new_th[i] -= lr_policies_outer[i] * get_gradient(
+                        outer_losses[i], new_th[i])
+                # Finally we rewrite the th by copying from the created copies
+                th[i] = new_th[i]
+            else:
+                optim_update(optims_th_primes_nodiff[i], outer_losses[i], )
+                # optim_update(optims_vals_primes_nodiff[i], values_loss[i], )
+
+                copyNN(th[i], mixed_thetas[i])
+                # copyNN(vals[i], mixed_vals[i])
+
+
+
+
+    return th
+
 
 
 def update_th(th, gradient_terms_or_Ls, lr_policies_outer, lr_policies_inner, algos, using_samples):
@@ -1935,6 +2318,36 @@ def update_th(th, gradient_terms_or_Ls, lr_policies_outer, lr_policies_inner, al
             else:
                 th[i] += lr_policies_outer[i] * grads[i]
     return th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1
+
+
+def construct_mixed_th_and_diffoptim(n_agents, i, starting_th, lr_policies_outer, lr_policies_inner):
+    theta_primes = copy.deepcopy(starting_th)
+
+    f_th_primes = []
+    if args.using_nn:
+        for ii in range(n_agents):
+            f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii],
+                                                        copy_initial_weights=True,
+                                                        track_higher_grads=True))
+
+    mixed_th_lr_policies = copy.deepcopy(lr_policies_inner)
+    mixed_th_lr_policies[i] = lr_policies_outer[i]
+
+    optims_th_primes = construct_diff_optims(theta_primes,
+                                             mixed_th_lr_policies,
+                                             f_th_primes)
+
+    if args.using_nn:
+        mixed_thetas = f_th_primes
+
+    else:
+        mixed_thetas = theta_primes
+
+    optims_th_primes_nodiff = construct_optims(theta_primes,
+                                               mixed_th_lr_policies)
+    mixed_thetas[i] = theta_primes[i]
+
+    return mixed_thetas, optims_th_primes, optims_th_primes_nodiff
 
 
 def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_vals, lr_policies_outer, lr_policies_inner, lr_values):
@@ -2357,7 +2770,10 @@ if __name__ == "__main__":
         assert args.inner_exact_prox or args.no_taylor_approx
 
     if args.inner_penalty or args.outer_penalty or args.inner_clip or args.outer_clip:
-        assert args.inner_repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
+        if not args.inner_repeat_train_on_same_samples:
+            print("Warning: check this")
+
+        # assert args.inner_repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
 
     if args.inner_repeat_train_on_same_samples:
         assert args.using_DiCE
@@ -2520,56 +2936,59 @@ if __name__ == "__main__":
 
         for run in range(repeats):
 
-            if not using_samples:
-                # Exact gradient case
-                dims, Ls = ipdn(n=n_agents, gamma=gamma,
-                                contribution_factor=contribution_factor,
-                                contribution_scale=contribution_scale)
+            if using_samples:
+                print("Careful, make sure to test this")
+                1/0
+            # if not using_samples:
+            #     # Exact gradient case
+            #     dims, Ls = ipdn(n=n_agents, gamma=gamma,
+            #                     contribution_factor=contribution_factor,
+            #                     contribution_scale=contribution_scale)
+            #
+            #
+            #     # std = 0.1
+            #     if args.theta_init_mode == 'tft':
+            #         # std = 0.1
+            #         # Basically with std higher, you're going to need higher logit shift (but only slightly, really), in order to reduce the variance
+            #         # and avoid random-like behaviour which could undermine the closeness/pull into the TFT basin of solutions
+            #         th = init_th_tft(dims, std, logit_shift=1.7)
+            #         # Need around 1.85 for NL and 1.7 for LOLA
+            #     elif args.theta_init_mode == 'adv':
+            #         th = init_th_adversarial(dims)
+            #     elif args.theta_init_mode == 'adv5':
+            #         th = init_th_adversarial5(dims)
+            #     elif args.theta_init_mode == 'adv6':
+            #         th = init_th_adversarial6(dims)
+            #     else:
+            #         th = init_th(dims, std)
 
 
-                # std = 0.1
-                if args.theta_init_mode == 'tft':
-                    # std = 0.1
-                    # Basically with std higher, you're going to need higher logit shift (but only slightly, really), in order to reduce the variance
-                    # and avoid random-like behaviour which could undermine the closeness/pull into the TFT basin of solutions
-                    th = init_th_tft(dims, std, logit_shift=1.7)
-                    # Need around 1.85 for NL and 1.7 for LOLA
-                elif args.theta_init_mode == 'adv':
-                    th = init_th_adversarial(dims)
-                elif args.theta_init_mode == 'adv5':
-                    th = init_th_adversarial5(dims)
-                elif args.theta_init_mode == 'adv6':
-                    th = init_th_adversarial6(dims)
-                else:
-                    th = init_th(dims, std)
+        # else:
+            # Using samples instead of exact here
 
+            if args.env == "coin":
+                from coin_game import CoinGameVec
+                # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
+                game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size,
+                                   history_len=args.history_len, full_seq_obs=args.using_rnn)
+                dims = game.dims_with_history
+            elif args.env == "imp":
+                from matching_pennies import IteratedMatchingPennies
+                game = IteratedMatchingPennies(n=n_agents, batch_size=batch_size,
+                                            num_iters=rollout_len, history_len=args.history_len)
+                dims = game.dims
 
             else:
-                # Using samples instead of exact here
+                game = ContributionGame(n=n_agents, gamma=gamma,
+                                        batch_size=batch_size,
+                                        num_iters=rollout_len,
+                                        contribution_factor=contribution_factor,
+                                        contribution_scale=contribution_scale,
+                                        history_len=args.history_len,
+                                        state_type=args.state_type)
+                dims = game.dims
 
-                if args.env == "coin":
-                    from coin_game import CoinGameVec
-                    # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
-                    game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size,
-                                       history_len=args.history_len, full_seq_obs=args.using_rnn)
-                    dims = game.dims_with_history
-                elif args.env == "imp":
-                    from matching_pennies import IteratedMatchingPennies
-                    game = IteratedMatchingPennies(n=n_agents, batch_size=batch_size,
-                                                num_iters=rollout_len, history_len=args.history_len)
-                    dims = game.dims
-
-                else:
-                    game = ContributionGame(n=n_agents, gamma=gamma,
-                                            batch_size=batch_size,
-                                            num_iters=rollout_len,
-                                            contribution_factor=contribution_factor,
-                                            contribution_scale=contribution_scale,
-                                            history_len=args.history_len,
-                                            state_type=args.state_type)
-                    dims = game.dims
-
-                th, vals, optims_vals = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env)
+            th, vals, optims_vals = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env)
 
 
             if using_DiCE:
@@ -2589,8 +3008,7 @@ if __name__ == "__main__":
             if using_samples:
                 G_ts_record = torch.zeros((num_epochs, n_agents, batch_size, 1))
             else:
-                G_ts_record = torch.zeros(
-                    (num_epochs, n_agents))
+                G_ts_record = torch.zeros((num_epochs, n_agents))
 
             if args.dice_grad_calc:
                 total_is_in_tft_direction_p1 = 0
@@ -2783,18 +3201,20 @@ if __name__ == "__main__":
                         print("Algos: {}".format(algos))
                     print("lr_policies_outer: {}".format(lr_policies_outer))
                     print("lr_policies_inner: {}".format(lr_policies_inner))
-                    print("lr_values: {}".format(lr_values))
+                    # print("lr_values: {}".format(lr_values))
                     print("Starting Policies:")
                     if using_samples:
                         game.print_policy_and_value_info(th, vals)
                     else:
-                        for i in range(n_agents):
-                            policy = torch.sigmoid(th[i])
-                            print("Policy {}".format(i+1))
-                            print(policy)
-                            if args.ill_condition:
-                                print("TRANSFORMED Policy {}".format(i+1))
-                                print(torch.sigmoid(ill_cond_matrices[i] @ th[i]))
+                        game.print_policies_for_all_states(th)
+                        # for i in range(n_agents):
+                        #     policy = torch.sigmoid(th[i])
+                        #     print("Policy {}".format(i+1))
+                        #
+                        #     print(policy)
+                        #     if args.ill_condition:
+                        #         print("TRANSFORMED Policy {}".format(i+1))
+                        #         print(torch.sigmoid(ill_cond_matrices[i] @ th[i]))
 
 
                 if using_samples:
@@ -2815,9 +3235,11 @@ if __name__ == "__main__":
                         th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
                             update_th(th, gradient_terms, lr_policies_outer, lr_policies_inner, algos, using_samples=using_samples)
                 else:
-                    # Exact gradient case
-                    th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
-                        update_th(th, Ls, lr_policies_outer, lr_policies_inner, algos, using_samples=using_samples)
+                    th = update_th_exact_value(th, game)
+
+                    # # Exact gradient case
+                    # th, losses, G_ts, nl_terms, lola_terms, grad_2_return_1 = \
+                    #     update_th(th, Ls, lr_policies_outer, lr_policies_inner, algos, using_samples=using_samples)
 
 
                 if using_samples:
@@ -2869,6 +3291,8 @@ if __name__ == "__main__":
                     assert G_ts is not None
                     G_ts_record[epoch] = G_ts[0]
                 else:
+                    # Reevaluate to get the G_ts from synchronous play
+                    losses = game.get_exact_loss(th)
                     G_ts_record[epoch] = torch.stack(losses).detach()
 
                 if (epoch + 1) % print_every == 0:
@@ -2903,13 +3327,14 @@ if __name__ == "__main__":
 
 
                     else:
-                        for i in range(n_agents):
-                            policy = torch.sigmoid(th[i])
-                            print("Policy {}".format(i+1))
-                            print(policy)
-                            if args.ill_condition:
-                                print("TRANSFORMED Policy {}".format(i+1))
-                                print(torch.sigmoid(ill_cond_matrices[i] @ th[i]))
+                        game.print_policies_for_all_states(th)
+                        # for i in range(n_agents):
+                        #     policy = torch.sigmoid(th[i])
+                        #     print("Policy {}".format(i+1))
+                        #     print(policy)
+                        #     if args.ill_condition:
+                        #         print("TRANSFORMED Policy {}".format(i+1))
+                        #         print(torch.sigmoid(ill_cond_matrices[i] @ th[i]))
 
                     if args.env == 'coin':
                         print("Same Colour Coins Picked (avg over batches): {:.3f}".format(avg_same_colour_coins_picked_total))
