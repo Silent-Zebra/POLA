@@ -150,6 +150,9 @@ class Game():
             state_batch = self.build_all_combs_state_batch()
             policy = self.get_nn_policy_for_batch(th[i], state_batch)
             policy = policy.squeeze(-1)
+        # print(policy)
+        # print(torch.sigmoid(th[i]))
+        # 1/0
 
         return policy
 
@@ -746,7 +749,7 @@ def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build, i
 
 # TODO perhaps the inner_loop step can pass the lr to this prox_f and we can scale the inner lr by eta, if we want more control over it
 
-def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0, max_iters = 1000, threshold = 1e-8):
+def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters = 0, max_iters = 1000, threshold = 1e-8):
     # For each other player, do the prox operator
     # (this function just does on a single player, it should be used within the loop iterating over all players)
     # We will do this by gradient descent on the proximal objective
@@ -754,33 +757,46 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
     # the minimum of the prox objective, which is our prox operator result
     fixed_point_reached = False
 
-    curr_pol = th_to_build_on[j].detach().clone()
+    # curr_pol = th_to_build_on[j].detach().clone()
+    new_pol = game.get_policy_for_all_states(th_to_build_on, j)
+    curr_pol = new_pol.detach().clone()
 
     while not fixed_point_reached:
 
-        inner_rews = Ls(th_to_build_on)
+        inner_losses = game.get_exact_loss(th_to_build_on)
 
-        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(th_to_build_on[j], kl_div_target_th[j], j)
+        policy = game.get_policy_for_all_states(th_to_build_on, j)
+        target_policy = game.get_policy_for_all_states(kl_div_target_th, j)
+
+        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+            policy, target_policy, j, policies_are_logits=False)
+
+        # policy_dist, target_policy_dist = build_policy_and_target_policy_dists(th_to_build_on[j], kl_div_target_th[j], j)
 
         kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
                                             target=target_policy_dist,
                                             reduction='batchmean',
                                             log_target=False)
         # Again we have this awkward reward formulation
-        loss_j = - inner_rews[j] + args.inner_beta * kl_div
+        loss_j = inner_losses[j] + args.inner_beta * kl_div
         # No eta here because we are going to solve it exactly anyway
 
+        # Non-diff to make it nl loss on outer loop, and we will use the other_terms from ift
         with torch.no_grad():
             th_to_build_on[j] -= prox_f_step_sizes[j] * get_gradient(loss_j,
                                                                th_to_build_on[
                                                                        j])
 
         prev_pol = curr_pol.detach().clone()
-        curr_pol = th_to_build_on[j].detach().clone()
+        new_pol = game.get_policy_for_all_states(th_to_build_on, j)
+        curr_pol = new_pol.detach().clone()
+        # curr_pol = th_to_build_on[j].detach().clone()
 
         iters += 1
 
-        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol, j)
+        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+            curr_pol, prev_pol, j, policies_are_logits=False)
+        # policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol, j)
 
         curr_prev_pol_div = torch.nn.functional.kl_div(
             input=torch.log(policy_dist),
@@ -797,15 +813,22 @@ def prox_f(th_to_build_on, kl_div_target_th, Ls, j, prox_f_step_sizes, iters = 0
 
     return th_to_build_on[j].detach().clone().requires_grad_()
 
-
-def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i, j):
+# TODO everything that passes game as a parameter can instead be moved into the class itself
+# and made as a method of that class
+def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j):
     print("BE CAREFUL - CHECK EVERY STEP OF CODE, I DID A LOT OF EDITING, CHECK ALL THE CALLS, CHECK ALL BEHAVIOR")
-    rews_for_ift = gradient_terms_or_Ls(inner_lookahead_th)  # Note that new_th has only agent j updated
+    losses_for_ift = game.get_exact_loss(inner_lookahead_th)  # Note that new_th has only agent j updated
 
-    grad2_V1 = get_gradient(- rews_for_ift[i], inner_lookahead_th[j])
+    grad2_V1 = get_gradient(losses_for_ift[i], inner_lookahead_th[j])
 
     # We use inner_lookahead_th instead of new_th because inner_lookahead has only th[j] updated
-    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(inner_lookahead_th[j], kl_div_target_th[j], j)
+    policy = game.get_policy_for_all_states(inner_lookahead_th, j)
+    target_policy = game.get_policy_for_all_states(kl_div_target_th, j)
+
+    policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+        policy, target_policy, j, policies_are_logits=False)
+
+    # policy_dist, target_policy_dist = build_policy_and_target_policy_dists(inner_lookahead_th[j], kl_div_target_th[j], j)
 
     kl_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -814,7 +837,7 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i,
         log_target=False)
 
     # Again we have this awkward reward formulation
-    loss_j = - rews_for_ift[j] + args.inner_beta * kl_div
+    loss_j = losses_for_ift[j] + args.inner_beta * kl_div
     # Right the LR here shouldn't matter because it's a fixed point so the gradient should be close to 0 anyway.
     # BUT it will make an effect on the outer gradient update
     f_at_fixed_point = inner_lookahead_th[j] - lr_policies_inner[j] * get_gradient(
@@ -841,7 +864,7 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, gradient_terms_or_Ls, i,
     return grad2_V1, grad_th1_th2prime
 
 
-def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i, n, prox_f_step_sizes):
+def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n, prox_f_step_sizes):
     other_terms = []
     new_th = get_th_copy(starting_th)
 
@@ -858,7 +881,7 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i
             else:
                 # For each other player, do the prox operator
                 inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
-                                               gradient_terms_or_Ls, j, prox_f_step_sizes)
+                                               game, j, prox_f_step_sizes)
                 # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
                 # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
                 # And then differentiate through the entire process
@@ -867,7 +890,7 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i
 
             grad2_V1, grad_th1_th2prime = get_ift_terms(inner_lookahead_th,
                                                         kl_div_target_th,
-                                                        gradient_terms_or_Ls, i, j)
+                                                        game, i, j)
 
             other_terms.append(grad2_V1 @ grad_th1_th2prime)
 
@@ -885,15 +908,8 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
     policy = game.get_policy_for_all_states(new_th, i)
     target_policy = game.get_policy_for_all_states(static_th_copy, i)
 
-    # print(policy)
-    # print(target_policy)
-
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
         policy, target_policy, i, policies_are_logits=False)
-
-    # print(policy_dist)
-    # print(target_policy_dist)
-    # 1/0
 
     kl_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -939,10 +955,6 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
         curr_pol, prev_pol, i, policies_are_logits=False)
-
-    # print(policy_dist)
-    # print(target_policy_dist)
-    # 1/0
 
     curr_prev_pol_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -1079,6 +1091,187 @@ def check_is_in_tft_direction(lola_terms_p1, lola_terms_p2):
     return is_in_tft_direction_p1, is_in_tft_direction_p2
 
 
+def list_dot(l1, l2):
+    # assumes same length of lists
+    assert len(l1) == len(l2)
+    # print(l1)
+    # print(l2)
+    sum = 0
+    for i in range(len(l1)):
+        # print(torch.sum(l1[i] * l2[i]))
+        sum += torch.sum(l1[i] * l2[i])
+    return sum
+
+
+def update_th_taylor_approx_exact_value(th, game):
+    # This is the original LOLA formulation
+    assert not args.no_taylor_approx
+    n = len(th)
+
+    losses = game.get_exact_loss(th)
+
+    # Compute gradients
+    # This is a 2d array of all the pairwise gradient computations between all agents
+    # This is useful for LOLA and the other opponent modeling stuff
+    # So it is the gradient of the loss of agent j with respect to the parameters of agent i
+    # When j=i this is just regular gradient update
+
+
+    if args.using_nn:
+        total_params = 0
+        for param in th[0].parameters():
+            total_params += 1
+
+        # print(total_params)
+        # test = [[0] * total_params]
+        # test[0][1] = "hi"
+
+        grad_L = [[[0] * total_params] * n] * n
+        # print(grad_L)
+
+        # grad_L = torch.zeros((n, n, total_params))
+        for i in range(n):
+            for j in range(n):
+                k = 0
+                for param in th[i].parameters():
+                    grad = get_gradient(losses[j], param)
+                    # print(grad)
+                    grad_L[i][j][k] = grad
+                    k += 1
+
+        # print(grad_L)
+    else:
+        grad_L = [[get_gradient(losses[j], th[i]) for j in range(n)] for i in
+                    range(n)]
+
+    # calculate grad_L as the gradient of loss for player j with respect to parameters for player i
+    # Therefore grad_L[i][i] is simply the naive learning loss for player i
+
+    # Be careful with mixed algorithms here; I have not tested it much
+
+    print_info = args.print_prox_loops_info
+
+    if args.inner_exact_prox:
+        # TODO fix
+        raise NotImplementedError
+        static_th_copy = get_th_copy(th)
+
+        for i in range(n):
+            if args.outer_exact_prox:
+
+                new_th = get_th_copy(static_th_copy)
+
+                fixed_point_reached = False
+                outer_iters = 0
+
+                curr_pol = new_th[i].detach().clone()
+                while not fixed_point_reached:
+                    if print_info:
+                        print("loop start")
+                        for j in range(len(new_th)):
+                            if j != i:
+                                print("Agent {}".format(j))
+                                print(torch.sigmoid(new_th[j]))
+
+                    new_th, other_terms = inner_exact_loop_step(new_th,
+                                                                static_th_copy,
+                                                                gradient_terms_or_Ls,
+                                                                i, n,
+                                                                prox_f_step_sizes=lr_policies_inner)
+
+                    outer_iters += 1
+                    new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
+                        print_info, i, new_th, static_th_copy,
+                        gradient_terms_or_Ls, curr_pol,
+                        other_terms, outer_iters, args.prox_max_iters,
+                        args.prox_threshold)
+
+                th[i] = new_th[i]
+
+            else:
+                # No outer exact prox
+                # This is just a single gradient step on the outer step:
+                # That is, we calc the inner loop exactly
+                # Use IFT to differentiate through and then get the outer gradient
+                # Take 1 step, and then that's it. Move on to next loop/iteration/agent
+
+                new_th, other_terms = inner_exact_loop_step(
+                    static_th_copy, static_th_copy,
+                    gradient_terms_or_Ls, i, n,
+                    prox_f_step_sizes=lr_policies_inner)
+
+                outer_rews = gradient_terms_or_Ls(new_th)
+
+                nl_grad = get_gradient(-outer_rews[i], new_th[i])
+
+                with torch.no_grad():
+                    new_th[i] -= lr_policies_outer[i] * (
+                                nl_grad + sum(other_terms))
+
+                th[i] = new_th[i]
+        return th, losses, G_ts, nl_terms, None, grad_2_return_1
+
+    else:
+        # Here we continue with the exact gradient calculations
+        # Look at pg 12, Stable Opponent Shaping paper
+        # This is the first line of the second set of equations
+        # sum over all j != i of grad_j L_i * grad_j L_j
+        # Then that's your lola term once you differentiate it with respect to theta_i
+        # Then add the naive learning term
+        if args.using_nn:
+            terms = [sum([list_dot(grad_L[j][i], grad_L[j][j])
+                          for j in range(n) if j != i]) for i in range(n)]
+
+            lola_terms = [[0] * total_params] * n
+            for i in range(n):
+                k = 0
+                for param in th[i].parameters():
+                    lola_terms[i][k] = lr_policies_inner[i]  * -get_gradient(terms[i], param)
+                    k += 1
+            nl_terms = [grad_L[i][i] for i in range(n)]
+
+            # print(nl_terms)
+            # print(lola_terms)
+            # 1/0
+
+        else:
+
+            terms = [sum([torch.dot(grad_L[j][i], grad_L[j][j])
+                          for j in range(n) if j != i]) for i in range(n)]
+
+            lola_terms = [
+                lr_policies_inner[i] * -get_gradient(terms[i], th[i])
+                for i in range(n)]
+
+            nl_terms = [grad_L[i][i] for i in range(n)]
+
+            # print("!!!NL TERMS!!!")
+            # print(nl_terms)
+            # if args.ill_condition:
+            #     for i in range(n):
+            #         print(ill_cond_matrices[i] @ nl_terms[i])
+            # print("!!!LOLA TERMS!!!")
+            # print(lola_terms)
+            # if args.ill_condition:
+            #     for i in range(n):
+            #         print(ill_cond_matrices[i] @ lola_terms[i])
+
+            grads = [nl_terms[i] + lola_terms[i] for i in range(n)]
+
+    # Update theta
+    with torch.no_grad():
+        for i in range(n):
+            if not isinstance(th[i], torch.Tensor):
+                k = 0
+                for param in th[i].parameters():
+                    param -= lr_policies_outer[i] * (nl_terms[i][k] + lola_terms[i][k])
+                    k += 1
+            else:
+                th[i] -= lr_policies_outer[i] * grads[i]
+
+    return th
+
+
 def update_th_exact_value(th, game):
     assert args.no_taylor_approx
     # Do DiCE style rollouts except we can calculate exact Ls like follows
@@ -1127,34 +1320,40 @@ def update_th_exact_value(th, game):
                 else:
                     new_th = get_th_copy(static_th_copy)
                     new_th[i] = th[i]
-                # if args.using_nn:
-                #     inner_losses = game.get_exact_loss(mixed_thetas)
-                # else:
-                inner_losses = game.get_exact_loss(new_th)
-                    # print(inner_losses)
 
-                for j in range(n):
-                    # Inner loop essentially
-                    # Each player on the copied th does a naive update (must be differentiable!)
-                    if j != i:
-                        if isinstance(new_th[j], torch.Tensor):
-                            new_th[j] = new_th[j] - lr_policies_inner[
-                                j] * get_gradient(inner_losses[j],
-                                                  new_th[j])
-                        else:
-                            optim_update(optims_th_primes[j],
-                                         inner_losses[j],
-                                         new_th[j].parameters())
+
+                # --- INNER LOOP ---
+                other_terms = None
+                if args.inner_exact_prox:
+                    new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy,
+                                          game, i, n, prox_f_step_sizes=lr_policies_inner)
+
+
+                else:
+                    inner_losses = game.get_exact_loss(new_th)
+
+                    for j in range(n):
+                        # Inner loop essentially
+                        # Each player on the copied th does a naive update (must be differentiable!)
+                        if j != i:
+                            if isinstance(new_th[j], torch.Tensor):
+                                new_th[j] = new_th[j] - lr_policies_inner[
+                                    j] * get_gradient(inner_losses[j],
+                                                      new_th[j])
+                            else:
+                                optim_update(optims_th_primes[j],
+                                             inner_losses[j],
+                                             new_th[j].parameters())
 
                 outer_iters += 1
                 if args.using_nn:
                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(args.print_prox_loops_info, i, new_th, static_th_copy, game,
-                                          curr_pol, None, outer_iters,
+                                          curr_pol, other_terms, outer_iters,
                                           optims_th_primes)
                 else:
                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
                         args.print_prox_loops_info, i, new_th, static_th_copy,
-                        game, curr_pol, None, outer_iters, None)
+                        game, curr_pol, other_terms, outer_iters, None)
 
                 if isinstance(new_th[i], torch.Tensor):
                     th[i] = new_th[i]
@@ -1173,45 +1372,63 @@ def update_th_exact_value(th, game):
                                                      )
             else:
                 new_th = get_th_copy(static_th_copy)
-            # Then each player calcs the losses
-            # if args.using_nn:
-            #     inner_losses = game.get_exact_loss(mixed_thetas)
-            # else:
-            inner_losses = game.get_exact_loss(new_th)
-                # print(inner_losses)
 
-            for j in range(n):
-                # Inner loop essentially
-                # Each player on the copied th does a naive update (must be differentiable!)
-                if j != i:
-                    if isinstance(new_th[j], torch.Tensor):
-                        new_th[j] = new_th[j] - lr_policies_inner[
-                            j] * get_gradient(inner_losses[j],
-                                              new_th[j])
-                    else:
-                        optim_update(optims_th_primes[j],
-                                     inner_losses[j],
-                                     new_th[j].parameters())
+            # --- INNER LOOP ---
+            # Then each player calcs the losses
+            other_terms = None
+            if args.inner_exact_prox:
+                new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy,
+                                      game, i, n,
+                                      prox_f_step_sizes=lr_policies_inner)
+            else:
+                inner_losses = game.get_exact_loss(new_th)
+
+                for j in range(n):
+                    # Inner loop essentially
+                    # Each player on the copied th does a naive update (must be differentiable!)
+                    if j != i:
+                        if isinstance(new_th[j], torch.Tensor):
+                            new_th[j] = new_th[j] - lr_policies_inner[
+                                j] * get_gradient(inner_losses[j],
+                                                  new_th[j])
+                        else:
+                            optim_update(optims_th_primes[j],
+                                         inner_losses[j],
+                                         new_th[j].parameters())
 
             if args.print_inner_rollouts:
                 print_exact_policy(new_th, i)
 
             # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
-
             outer_losses = game.get_exact_loss(new_th)
 
+            if other_terms is not None:
+                if isinstance(new_th[i], torch.Tensor):
+                    with torch.no_grad():
+                        new_th[i] -= lr_policies_outer[i] * (get_gradient(
+                            outer_losses[i], new_th[i]) + sum(other_terms) )
+                    # Finally we rewrite the th by copying from the created copies
+                    th[i] = new_th[i]
+                else:
+                    # TODO Can borrow from the implementation of LOLA-PG for NN that I used before...
+                    raise NotImplementedError # loook over the outer loop exact step and modify the code
+                    # TODO btw we can further modularize a bunch of this code I think. Do that, and clean stuff up, while still testing it all the way
+                    # And then support the inner loop as well (since Jakob is quite keen on it)
+                    # Consider perhaps the ill cond experiments again too
+                    # BUT TODO, first thing is to just write everything up, the critical ideas first, to get prof review
 
-            # Finally each player updates their own (copied) th
-            if isinstance(new_th[i], torch.Tensor):
-                with torch.no_grad():
-                    new_th[i] -= lr_policies_outer[i] * get_gradient(
-                        outer_losses[i], new_th[i])
-                # Finally we rewrite the th by copying from the created copies
-                th[i] = new_th[i]
             else:
-                optim_update(optims_th_primes[i], outer_losses[i], new_th[i].parameters())
+                # Finally each player updates their own (copied) th
+                if isinstance(new_th[i], torch.Tensor):
+                    with torch.no_grad():
+                        new_th[i] -= lr_policies_outer[i] * get_gradient(
+                            outer_losses[i], new_th[i])
+                    # Finally we rewrite the th by copying from the created copies
+                    th[i] = new_th[i]
+                else:
+                    optim_update(optims_th_primes[i], outer_losses[i], new_th[i].parameters())
 
-                copyNN(th[i], new_th[i])
+                    copyNN(th[i], new_th[i])
 
 
     return th
@@ -1277,7 +1494,7 @@ if __name__ == "__main__":
     parser.add_argument("--nonlinearity", type=str, default="tanh",
                         choices=["tanh", "lrelu"])
     parser.add_argument("--nn_hidden_size", type=int, default=16)
-    parser.add_argument("--nn_extra_layers", type=int, default=0)
+    parser.add_argument("--nn_extra_hidden_layers", type=int, default=0)
     parser.add_argument("--set_seed", action="store_true",
                         help="set manual seed")
     parser.add_argument("--seed", type=int, default=1, help="for seed")
@@ -1346,16 +1563,23 @@ if __name__ == "__main__":
 
     if args.ill_condition and not args.using_nn:
 
-        ill_cond_matrix1 = torch.tensor([[.14, 0, 1., 0, 0.],
-                                         [0., .14, 1, 0., 0.],
+        ill_cond_matrix1 = torch.tensor([[.2, 0, 1., 0, 0.],
+                                         [0., .2, 1, 0., 0.],
                                          [0, 0., 1, 0, 0.],
-                                         [0, 0., 1., .14, 0.],
+                                         [0, 0., 1., .2, 0.],
                                          [0, 0., 1., 0., 1.]])
-        ill_cond_matrix2 = torch.tensor([[.14, 1., 0., 0, 0.],
+        ill_cond_matrix2 = torch.tensor([[.2, 1., 0., 0, 0.],
                                          [0., 1, 0, 0., 0.],
-                                         [0, 1., .14, 0, 0.],
-                                         [0, 1., 0., .14, 0.],
+                                         [0, 1., .2, 0, 0.],
+                                         [0, 1., 0., .2, 0.],
                                          [0, 1., 0., 0., 1.]])
+
+        ill_cond_matrix1 = torch.tensor([[3., 0, 0., 0, 0.],
+                                         [0., .1, 0, 0., 0.],
+                                         [0, 0., .1, 0, 0.],
+                                         [0, 0., 0., .1, 0.],
+                                         [0, 0., 0., 0., 1.]])
+        ill_cond_matrix2 = ill_cond_matrix1
 
         ill_cond_matrices = torch.stack((ill_cond_matrix1, ill_cond_matrix2)) # hardcoded 2 agents for now
 
@@ -1468,6 +1692,11 @@ if __name__ == "__main__":
 
         print("Exact Gradients")
 
+        if args.no_taylor_approx:
+            print("No Taylor Approx LOLA")
+        else:
+            print("Taylor Approx (Original) LOLA")
+
         reward_percent_of_max = []
 
         for run in range(repeats):
@@ -1488,7 +1717,7 @@ if __name__ == "__main__":
                                         state_type=args.state_type)
                 dims = game.dims
 
-            th = init_custom(dims, args.state_type, args.using_nn, args.env)
+            th = init_custom(dims, args.state_type, args.using_nn, args.env, args.nn_hidden_size, args.nn_extra_hidden_layers)
 
             # Run
             G_ts_record = torch.zeros((num_epochs, n_agents))
@@ -1504,8 +1733,10 @@ if __name__ == "__main__":
 
                     game.print_policies_for_all_states(th)
 
-
-                th = update_th_exact_value(th, game)
+                if args.no_taylor_approx:
+                    th = update_th_exact_value(th, game)
+                else:
+                    th = update_th_taylor_approx_exact_value(th, game)
 
                 # Reevaluate to get the G_ts from synchronous play
                 losses = game.get_exact_loss(th)
