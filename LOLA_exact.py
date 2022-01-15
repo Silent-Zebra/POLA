@@ -876,7 +876,7 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, gradient_terms_or_Ls, i
     return new_th, other_terms
 
 
-def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol, other_terms, curr_iter, optims_th_primes_nodiff=None):
+def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol, other_terms, curr_iter, optims_th_primes=None):
     if print_info:
         game.print_policies_for_all_states(new_th)
 
@@ -913,8 +913,8 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
         else:
 
             # print(game.get_policy_for_all_states(new_th, i))
-            assert optims_th_primes_nodiff is not None
-            optim_update(optims_th_primes_nodiff[i], loss_i, )
+            assert optims_th_primes is not None
+            optim_update(optims_th_primes[i], loss_i, new_th[i].parameters() )
             # print(game.get_policy_for_all_states(new_th, i))
             # 1/0
 
@@ -1118,13 +1118,12 @@ def update_th_exact_value(th, game):
                         static_th_copy)
                     th_with_only_agent_i_updated[i] = th[i]
 
-                    mixed_thetas, optims_th_primes, optims_th_primes_nodiff = \
-                        construct_mixed_th_and_diffoptim(n_agents, i,
+                    new_th, optims_th_primes = \
+                        construct_f_th_and_diffoptim(n_agents, i,
                                                          th_with_only_agent_i_updated,
                                                          lr_policies_outer,
                                                          lr_policies_inner
                                                          )
-                    new_th = mixed_thetas
                 else:
                     new_th = get_th_copy(static_th_copy)
                     new_th[i] = th[i]
@@ -1145,13 +1144,13 @@ def update_th_exact_value(th, game):
                         else:
                             optim_update(optims_th_primes[j],
                                          inner_losses[j],
-                                         mixed_thetas[j].parameters())
+                                         new_th[j].parameters())
 
                 outer_iters += 1
                 if args.using_nn:
                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(args.print_prox_loops_info, i, new_th, static_th_copy, game,
                                           curr_pol, None, outer_iters,
-                                          optims_th_primes_nodiff)
+                                          optims_th_primes)
                 else:
                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
                         args.print_prox_loops_info, i, new_th, static_th_copy,
@@ -1166,13 +1165,12 @@ def update_th_exact_value(th, game):
         else:
             if args.using_nn:
 
-                mixed_thetas, optims_th_primes, optims_th_primes_nodiff = \
-                    construct_mixed_th_and_diffoptim(n_agents, i,
+                new_th, optims_th_primes = \
+                    construct_f_th_and_diffoptim(n_agents, i,
                                                      static_th_copy,
                                                      lr_policies_outer,
                                                      lr_policies_inner
                                                      )
-                new_th = mixed_thetas
             else:
                 new_th = get_th_copy(static_th_copy)
             # Then each player calcs the losses
@@ -1193,20 +1191,14 @@ def update_th_exact_value(th, game):
                     else:
                         optim_update(optims_th_primes[j],
                                      inner_losses[j],
-                                     mixed_thetas[j].parameters())
-
-
+                                     new_th[j].parameters())
 
             if args.print_inner_rollouts:
                 print_exact_policy(new_th, i)
 
             # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
-            if args.using_nn:
-                outer_losses = game.get_exact_loss(mixed_thetas)
-            else:
-                outer_losses = game.get_exact_loss(new_th)
-                # print(inner_losses)
-            # outer_losses = game.get_exact_loss(new_th)
+
+            outer_losses = game.get_exact_loss(new_th)
 
 
             # Finally each player updates their own (copied) th
@@ -1217,18 +1209,18 @@ def update_th_exact_value(th, game):
                 # Finally we rewrite the th by copying from the created copies
                 th[i] = new_th[i]
             else:
-                optim_update(optims_th_primes_nodiff[i], outer_losses[i], )
-                # optim_update(optims_vals_primes_nodiff[i], values_loss[i], )
+                optim_update(optims_th_primes[i], outer_losses[i], new_th[i].parameters())
 
-                copyNN(th[i], mixed_thetas[i])
-                # copyNN(vals[i], mixed_vals[i])
+                copyNN(th[i], new_th[i])
 
 
     return th
 
 
 
-def construct_mixed_th_and_diffoptim(n_agents, i, starting_th, lr_policies_outer, lr_policies_inner):
+def construct_f_th_and_diffoptim(n_agents, i, starting_th, lr_policies_outer, lr_policies_inner):
+    assert args.using_nn
+
     theta_primes = copy.deepcopy(starting_th)
 
     f_th_primes = []
@@ -1245,62 +1237,14 @@ def construct_mixed_th_and_diffoptim(n_agents, i, starting_th, lr_policies_outer
                                              mixed_th_lr_policies,
                                              f_th_primes)
 
-    if args.using_nn:
-        mixed_thetas = f_th_primes
+    mixed_thetas = f_th_primes
 
-    else:
-        mixed_thetas = theta_primes
+    # optims_th_primes_nodiff = construct_optims(theta_primes,
+    #                                            mixed_th_lr_policies)
+    # mixed_thetas[i] = theta_primes[i]
 
-    optims_th_primes_nodiff = construct_optims(theta_primes,
-                                               mixed_th_lr_policies)
-    mixed_thetas[i] = theta_primes[i]
+    return mixed_thetas, optims_th_primes#, optims_th_primes_nodiff
 
-    return mixed_thetas, optims_th_primes, optims_th_primes_nodiff
-
-
-def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_vals, lr_policies_outer, lr_policies_inner, lr_values):
-    theta_primes = copy.deepcopy(starting_th)
-    val_primes = copy.deepcopy(starting_vals)
-
-    f_th_primes = []
-    if args.using_nn:
-        for ii in range(n_agents):
-            f_th_primes.append(higher.patch.monkeypatch(theta_primes[ii],
-                                                        copy_initial_weights=True,
-                                                        track_higher_grads=True))
-
-    mixed_th_lr_policies = copy.deepcopy(lr_policies_inner)
-    mixed_th_lr_policies[i] = lr_policies_outer[i]
-
-    optims_th_primes = construct_diff_optims(theta_primes,
-                                             mixed_th_lr_policies,
-                                             f_th_primes)
-
-    f_vals_primes = []
-    if args.using_nn:
-        for ii in range(n_agents):
-            f_vals_primes.append(
-                higher.patch.monkeypatch(val_primes[ii],
-                                         copy_initial_weights=True,
-                                         track_higher_grads=True))
-
-    optims_vals_primes = construct_diff_optims(val_primes, lr_values, f_vals_primes)
-
-    if args.using_nn:
-        mixed_thetas = f_th_primes
-        mixed_vals = f_vals_primes
-
-    else:
-        mixed_thetas = theta_primes
-        mixed_vals = val_primes
-
-    optims_th_primes_nodiff = construct_optims(theta_primes,
-                                               mixed_th_lr_policies)
-    optims_vals_primes_nodiff = construct_optims(val_primes, lr_values)
-    mixed_thetas[i] = theta_primes[i]
-    mixed_vals[i] = val_primes[i]
-
-    return mixed_thetas, mixed_vals, optims_th_primes, optims_vals_primes, optims_th_primes_nodiff, optims_vals_primes_nodiff
 
 
 
