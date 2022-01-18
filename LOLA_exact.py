@@ -108,19 +108,19 @@ class Game():
                                                                 simple_2state_build=True)
         return state_batch
 
-    def print_value_info(self, vals, agent_num_i):
-        i = agent_num_i
-        print("Values {}".format(i+1))
-        if isinstance(vals[i], torch.Tensor):
-            values = vals[i]
-        else:
-            state_batch = self.build_all_combs_state_batch()
-            values = vals[i](state_batch)
-        print(values)
-
-    def print_values_for_all_states(self, vals):
-        for i in range(len(vals)):
-            self.print_value_info(vals, i)
+    # def print_value_info(self, vals, agent_num_i):
+    #     i = agent_num_i
+    #     print("Values {}".format(i+1))
+    #     if isinstance(vals[i], torch.Tensor):
+    #         values = vals[i]
+    #     else:
+    #         state_batch = self.build_all_combs_state_batch()
+    #         values = vals[i](state_batch)
+    #     print(values)
+    #
+    # def print_values_for_all_states(self, vals):
+    #     for i in range(len(vals)):
+    #         self.print_value_info(vals, i)
 
     def get_nn_policy_for_batch(self, pol, state_batch):
         if args.ill_condition:
@@ -156,22 +156,41 @@ class Game():
 
         return policy
 
-
-    def get_policies_for_all_states(self, th):
-        policies = []
-        for i in range(len(th)):
-            policy = self.get_policy_for_all_states(th, i)
-            policies.append(policy)
-        return policies
+    # def get_policies_for_all_states(self, th):
+    #     policies = []
+    #     for i in range(len(th)):
+    #         policy = self.get_policy_for_all_states(th, i)
+    #         policies.append(policy)
+    #     return policies
 
     def print_policies_for_all_states(self, th):
         for i in range(len(th)):
             policy = self.get_policy_for_all_states(th, i)
             self.print_policy_info(policy, i)
 
-    def print_policy_and_value_info(self, th, vals):
-        self.print_policies_for_all_states(th)
-        self.print_values_for_all_states(vals)
+    # def print_policy_and_value_info(self, th, vals):
+    #     self.print_policies_for_all_states(th)
+    #     self.print_values_for_all_states(vals)
+
+    def build_one_hot_from_batch(self, curr_step_batch, one_hot_dim, one_at_a_time=True, range_end=None, simple_2state_build=False):
+
+        if range_end is None:
+            range_end = self.n_agents
+        curr_step_batch_one_hot = torch.nn.functional.one_hot(
+            curr_step_batch.long(), one_hot_dim).squeeze(dim=2)
+
+        if simple_2state_build:
+            new_tens = torch.cat((curr_step_batch_one_hot[:,0,:],curr_step_batch_one_hot[:,1,:]), dim=-1)
+        else:
+            new_tens = curr_step_batch_one_hot[0]
+            if not one_at_a_time:
+                range_end *= self.history_len
+
+            for i in range(1, range_end):
+                new_tens = torch.cat((new_tens, curr_step_batch_one_hot[i]), dim=-1)
+
+        curr_step_batch = new_tens.float()
+        return curr_step_batch
 
 
 
@@ -223,8 +242,8 @@ class ContributionGame(Game):
 
         if self.contribution_scale:
             self.contribution_factor = contribution_factor * n
-        else:
-            assert self.contribution_factor > 1
+        # else:
+        #     assert self.contribution_factor > 1
 
         self.dec_value_mask = (2 ** torch.arange(n - 1, -1, -1)).float()
 
@@ -254,6 +273,8 @@ class ContributionGame(Game):
         self.bin_mat = build_bin_matrix(self.n_agents, 2 ** self.n_agents )
         # print(self.bin_mat)
         self.payout_vectors = torch.zeros((n, 2 ** self.n_agents))  # one vector for each player, state space - 1 because one is the initial state. This is the r^1 or r^2 in the LOLA paper exact gradient formulation. In the 2p case this is for DD, DC, CD, CC
+
+
 
         for agent in range(n):
             for state in range(2 ** self.n_agents):
@@ -287,71 +308,71 @@ class ContributionGame(Game):
 
         return mnist_state
 
-    def get_init_state_batch(self):
-        if self.state_type == 'mnist':
-            integer_state_batch = torch.ones(
-                (self.batch_size,
-                 self.n_agents * self.history_len)) * init_state_representation
-            init_state_batch = self.build_mnist_state_from_classes(integer_state_batch)
+    # def get_init_state_batch(self):
+    #     if self.state_type == 'mnist':
+    #         integer_state_batch = torch.ones(
+    #             (self.batch_size,
+    #              self.n_agents * self.history_len)) * init_state_representation
+    #         init_state_batch = self.build_mnist_state_from_classes(integer_state_batch)
+    #
+    #     elif self.state_type == 'one_hot':
+    #         # Note that in the 1 hot state representation, class 0 is defect (0 contribution),
+    #         # class 1 is cooperate (1 contribution)
+    #         # class 2 is start state (unused (i.e. always 0) if initializing to coop in the first state (init_state_representation 1))
+    #         init_state_batch = torch.zeros(
+    #             (self.batch_size,
+    #              self.n_agents * self.history_len, self.action_repr_dim))
+    #         init_state_batch[:,:,init_state_representation] += 1
+    #         init_state_batch = init_state_batch.reshape(self.batch_size, self.n_agents * self.history_len * self.action_repr_dim)
+    #
+    #     elif self.state_type == 'majorTD4':
+    #         init_state_batch = torch.zeros(
+    #             (self.n_agents, self.batch_size,
+    #              2 * self.history_len, self.action_repr_dim)) # additional self.n_agents at the beginning because we need different obs for different agents here
+    #         init_state_batch[:, :, :, init_state_representation] += 1
+    #         init_state_batch = init_state_batch.reshape(self.n_agents, self.batch_size, 2 * self.history_len * self.action_repr_dim)
+    #         # So then here this is not really a state batch, but more of an observation batch
+    #
+    #     else: # old / only for tabular, just 0, 1, or 2 for the state
+    #         init_state_batch = torch.ones(
+    #             (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
+    #
+    #     return init_state_batch
 
-        elif self.state_type == 'one_hot':
-            # Note that in the 1 hot state representation, class 0 is defect (0 contribution),
-            # class 1 is cooperate (1 contribution)
-            # class 2 is start state (unused (i.e. always 0) if initializing to coop in the first state (init_state_representation 1))
-            init_state_batch = torch.zeros(
-                (self.batch_size,
-                 self.n_agents * self.history_len, self.action_repr_dim))
-            init_state_batch[:,:,init_state_representation] += 1
-            init_state_batch = init_state_batch.reshape(self.batch_size, self.n_agents * self.history_len * self.action_repr_dim)
+    # def int_from_bin_inttensor(self, bin_tens):
+    #     return torch.sum(self.dec_value_mask * bin_tens, -1).item()
 
-        elif self.state_type == 'majorTD4':
-            init_state_batch = torch.zeros(
-                (self.n_agents, self.batch_size,
-                 2 * self.history_len, self.action_repr_dim)) # additional self.n_agents at the beginning because we need different obs for different agents here
-            init_state_batch[:, :, :, init_state_representation] += 1
-            init_state_batch = init_state_batch.reshape(self.n_agents, self.batch_size, 2 * self.history_len * self.action_repr_dim)
-            # So then here this is not really a state batch, but more of an observation batch
+    # def get_state_batch_indices(self, state_batch, iter):
+    #     if iter == 0:
+    #         # we just started
+    #         assert self.state_type == 'old'
+    #         assert state_batch[0][0] - init_state_representation == 0
+    #         indices = [-1] * self.batch_size
+    #     else:
+    #         indices = list(map(self.int_from_bin_inttensor, state_batch))
+    #     return indices
 
-        else: # old / only for tabular, just 0, 1, or 2 for the state
-            init_state_batch = torch.ones(
-                (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
-
-        return init_state_batch
-
-    def int_from_bin_inttensor(self, bin_tens):
-        return torch.sum(self.dec_value_mask * bin_tens, -1).item()
-
-    def get_state_batch_indices(self, state_batch, iter):
-        if iter == 0:
-            # we just started
-            assert self.state_type == 'old'
-            assert state_batch[0][0] - init_state_representation == 0
-            indices = [-1] * self.batch_size
-        else:
-            indices = list(map(self.int_from_bin_inttensor, state_batch))
-        return indices
-
-    def get_policy_and_state_value(self, pol, val, i, state_batch, iter):
-
-        if isinstance(pol, torch.Tensor) or isinstance(val, torch.Tensor):
-            state_batch_indices = self.get_state_batch_indices(state_batch,
-                                                           iter)
-
-        if isinstance(pol, torch.Tensor):
-            if args.ill_condition:
-                policy = torch.sigmoid(ill_cond_matrices[i] @ pol)[state_batch_indices].reshape(-1, 1)
-            else:
-                policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
-        else:
-            policy = self.get_nn_policy_for_batch(pol, state_batch)
-
-        if isinstance(val, torch.Tensor):
-            state_value = val[state_batch_indices].reshape(-1, 1)
-
-        else:
-            state_value = val(state_batch)
-
-        return policy, state_value
+    # def get_policy_and_state_value(self, pol, val, i, state_batch, iter):
+    #
+    #     if isinstance(pol, torch.Tensor) or isinstance(val, torch.Tensor):
+    #         state_batch_indices = self.get_state_batch_indices(state_batch,
+    #                                                        iter)
+    #
+    #     if isinstance(pol, torch.Tensor):
+    #         if args.ill_condition:
+    #             policy = torch.sigmoid(ill_cond_matrices[i] @ pol)[state_batch_indices].reshape(-1, 1)
+    #         else:
+    #             policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
+    #     else:
+    #         policy = self.get_nn_policy_for_batch(pol, state_batch)
+    #
+    #     if isinstance(val, torch.Tensor):
+    #         state_value = val[state_batch_indices].reshape(-1, 1)
+    #
+    #     else:
+    #         state_value = val(state_batch)
+    #
+    #     return policy, state_value
 
 
 
@@ -373,38 +394,20 @@ class ContributionGame(Game):
         return simple_repr_tensor
 
 
-    def build_one_hot_from_batch(self, curr_step_batch, one_hot_dim, one_at_a_time=True, range_end=None, simple_2state_build=False):
-
-        if range_end is None:
-            range_end = self.n_agents
-        curr_step_batch_one_hot = torch.nn.functional.one_hot(
-            curr_step_batch.long(), one_hot_dim).squeeze(dim=2)
-
-        if simple_2state_build:
-            new_tens = torch.cat((curr_step_batch_one_hot[:,0,:],curr_step_batch_one_hot[:,1,:]), dim=-1)
-        else:
-            new_tens = curr_step_batch_one_hot[0]
-            if not one_at_a_time:
-                range_end *= self.history_len
-
-            for i in range(1, range_end):
-                new_tens = torch.cat((new_tens, curr_step_batch_one_hot[i]), dim=-1)
-
-        curr_step_batch = new_tens.float()
-        return curr_step_batch
 
 
-    def build_policy_dist(self, coop_prob_history_all_agents, i):
-        coop_prob_i = coop_prob_history_all_agents[:, i, :]
-        defect_prob_i = 1 - coop_prob_i
-        policy_dist_i = torch.cat((coop_prob_i, defect_prob_i),
-                                  dim=-1)  # we need to do this because kl_div needs the full distribution
-        # and the way we have parameterized policy here is just a coop prob
-        # if you used categorical/multinomial you wouldn't have to go through this
-        # so maybe I should replace as categorical?
-        policy_dist_i = policy_dist_i.reshape(self.batch_size, self.num_iters,
-                                              -1)
-        return policy_dist_i
+    #
+    # def build_policy_dist(self, coop_prob_history_all_agents, i):
+    #     coop_prob_i = coop_prob_history_all_agents[:, i, :]
+    #     defect_prob_i = 1 - coop_prob_i
+    #     policy_dist_i = torch.cat((coop_prob_i, defect_prob_i),
+    #                               dim=-1)  # we need to do this because kl_div needs the full distribution
+    #     # and the way we have parameterized policy here is just a coop prob
+    #     # if you used categorical/multinomial you wouldn't have to go through this
+    #     # so maybe I should replace as categorical?
+    #     policy_dist_i = policy_dist_i.reshape(self.batch_size, self.num_iters,
+    #                                           -1)
+    #     return policy_dist_i
 
 
     def get_exact_loss(self, th):
@@ -485,7 +488,7 @@ class ContributionGame(Game):
             M = torch.matmul(p, torch.inverse(
                 torch.eye(2 ** self.n_agents) - gamma * P))
 
-        # Remember M is just the steady state probabilities for each of the states
+        # Remember M is just the steady state probabilities for each of the states (discounted state visitation count, not a probability)
         # It is a vector, not a matrix.
 
         L_all = []
@@ -501,9 +504,46 @@ class ContributionGame(Game):
             L_i = -rew_i
             L_all.append(L_i)
 
+        # print(M)
+        # print(L_all)
 
         return L_all
 
+
+def inverse_sigmoid(x):
+    return -torch.log((1 / x) - 1)
+
+
+def init_th_adversarial4(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        th.append(init)
+
+    th[0] = inverse_sigmoid(torch.tensor([0.0958, 0.8650, 0.1967, 0.9818, 0.5]).requires_grad_())
+    th[1] = inverse_sigmoid(torch.tensor([0.0706, 0.1592, 0.8544, 0.9743, 0.5]).requires_grad_())
+
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
+    return th
+
+
+def init_th_adversarial5(dims):
+    th = []
+    for i in range(len(dims)):
+        # For some reason this -0 is needed
+        init = torch.zeros(dims[i], requires_grad=True) - 0
+        th.append(init)
+
+    th[0] = inverse_sigmoid(torch.tensor([0.9190, 0.5415, 0.9678, 0.1683, 0.8784]).requires_grad_())
+    th[1] = inverse_sigmoid(torch.tensor([8.2506e-03, 2.4405e-01, 9.0859e-05, 4.2595e-01, 1.0305e-01]).requires_grad_())
+
+    print(torch.sigmoid(th[0]))
+    print(torch.sigmoid(th[1]))
+
+    return th
 
 
 def init_th(dims, std):
@@ -985,11 +1025,11 @@ def print_exact_policy(th, i):
             print(torch.sigmoid(ill_cond_matrices[j] @ th[j]))
 
 
-def exact_grad_calc(th, gradient_terms_or_Ls):
-    if args.no_taylor_approx:
+def exact_grad_calc(th, game):
+    if args.actual_update:
         static_th_copy = get_th_copy(th)
         n = len(th)
-        losses = gradient_terms_or_Ls(th)
+        losses = game.get_exact_loss(th)
 
         grad_L = [[get_gradient(losses[j], th[i]) for j in range(n)] for i in
                   range(n)]
@@ -1000,7 +1040,7 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
         for i in range(n):
             new_th = get_th_copy(static_th_copy)
             # Then each player calcs the losses
-            inner_losses = gradient_terms_or_Ls(new_th)
+            inner_losses = game.get_exact_loss(new_th)
 
             for j in range(n):
                 # Inner loop essentially
@@ -1009,12 +1049,12 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
                     if not isinstance(new_th[j], torch.Tensor):
                         raise NotImplementedError
                     else:
-                        new_th[j] = new_th[j] + lr_policies_inner[
+                        new_th[j] = new_th[j] - lr_policies_inner[
                             j]  * get_gradient(inner_losses[j],
                                                     new_th[j])
 
             # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
-            outer_losses = gradient_terms_or_Ls(new_th)
+            outer_losses = game.get_exact_loss(new_th)
 
             # Finally calc grad
             lola_grad = get_gradient(outer_losses[i], new_th[i])
@@ -1037,7 +1077,10 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
 
     else:
         n = len(th)
-        losses = gradient_terms_or_Ls(th)
+        losses = game.get_exact_loss(th)
+
+        # print(losses)
+        # 1/0
 
         grad_L = [[get_gradient(losses[j], th[i]) for j in range(n)] for i in
                   range(n)]
@@ -1049,14 +1092,44 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
             lr_policies_inner[i] * get_gradient(terms[i], th[i])
             for i in range(n)]
 
+        kept_dropped_same_dir_over_agents = 0
+        for i in range(n):
+            # Dropping the middle term:
+            for j in range(n):
+                if j != i:
+                    grad2_V1 = grad_L[j][i]
+                    grad1_2_V2 = get_jacobian(grad_L[j][j], th[i])
+                    kept_term = grad1_2_V2.t() @ grad2_V1
+
+                    # print(grad2_V1)
+                    # print(grad1_2_V2)
+                    # print(get_gradient(grad_L[j][j][0], th[i]))
+                    print("Kept term")
+                    print(kept_term)
+
+                    grad2_V2 = grad_L[j][j]
+                    grad1_2_V1 = get_jacobian(grad_L[j][i], th[i])
+                    dropped_term = grad1_2_V1.t() @ grad2_V2
+                    print("Dropped term")
+
+                    print(dropped_term)
+
+                    hada_prod = kept_term * dropped_term
+                    print("Kept and dropped term in same direction?")
+                    kept_dropped_same_dir = hada_prod[0] > 0 and hada_prod[1] > 0 and hada_prod[2] > 0 and hada_prod[3] > 0
+                    print(kept_dropped_same_dir)
+                    kept_dropped_same_dir_over_agents += kept_dropped_same_dir
+
+
+
         # original_lola_term1 = torch.dot(grad_L[1][0], grad_L[1][1])
         # original_lola_term2 = torch.dot(grad_L[0][1], grad_L[0][0])
         # original_lola_terms = [original_lola_term1, original_lola_term2]
         # original_lola_terms = [lr_policies_inner[i] * get_gradient(original_lola_terms[i], th[i])
         #     for i in range(n)]
 
-        nl_terms = [grad_L[i][i]
-                    for i in range(n)]
+        nl_terms = [-grad_L[i][i]
+                    for i in range(n)] # with loss formulation, nl_terms is positive. So negative here to make it consistent with earlier reward formulation
 
         print("!!!NL TERMS!!!")
         print(nl_terms)
@@ -1068,11 +1141,11 @@ def exact_grad_calc(th, gradient_terms_or_Ls):
         assert n == 2 # not yet supporting more agents
 
         lola_terms_p1 = lola_terms[0]
-        lola_terms_p2 = lola_terms[1]
+        lola_terms_p2 = lola_terms[1] # No need for negative because  you need a negative first, and then you have gradient descent
 
     is_in_tft_direction_p1, is_in_tft_direction_p2 = check_is_in_tft_direction(lola_terms_p1, lola_terms_p2)
 
-    return is_in_tft_direction_p1, is_in_tft_direction_p2
+    return is_in_tft_direction_p1, is_in_tft_direction_p2, kept_dropped_same_dir_over_agents
 
 
 def check_is_in_tft_direction(lola_terms_p1, lola_terms_p2):
@@ -1105,7 +1178,7 @@ def list_dot(l1, l2):
 
 def update_th_taylor_approx_exact_value(th, game):
     # This is the original LOLA formulation
-    assert not args.no_taylor_approx
+    assert not args.actual_update
     n = len(th)
 
     losses = game.get_exact_loss(th)
@@ -1243,6 +1316,12 @@ def update_th_taylor_approx_exact_value(th, game):
                 lr_policies_inner[i] * -get_gradient(terms[i], th[i])
                 for i in range(n)]
 
+
+
+
+
+
+
             nl_terms = [grad_L[i][i] for i in range(n)]
 
             # print("!!!NL TERMS!!!")
@@ -1267,13 +1346,15 @@ def update_th_taylor_approx_exact_value(th, game):
                     param -= lr_policies_outer[i] * (nl_terms[i][k] + lola_terms[i][k])
                     k += 1
             else:
+                # print(grads)
+                # 1 / 0
                 th[i] -= lr_policies_outer[i] * grads[i]
 
     return th
 
 
 def update_th_exact_value(th, game):
-    assert args.no_taylor_approx
+    assert args.actual_update
     # Do DiCE style rollouts except we can calculate exact Ls like follows
 
     # So what we will do is each player will calc losses
@@ -1383,26 +1464,49 @@ def update_th_exact_value(th, game):
             else:
                 inner_losses = game.get_exact_loss(new_th)
 
-                for j in range(n):
-                    # Inner loop essentially
-                    # Each player on the copied th does a naive update (must be differentiable!)
-                    if j != i:
-                        if isinstance(new_th[j], torch.Tensor):
-                            new_th[j] = new_th[j] - lr_policies_inner[
-                                j] * get_gradient(inner_losses[j],
-                                                  new_th[j])
-                        else:
-                            optim_update(optims_th_primes[j],
-                                         inner_losses[j],
-                                         new_th[j].parameters())
+                do_comparison = False
+
+                if args.taylor_with_actual_update:
+
+                    new_loss_i_approx = inner_losses[i]
+                    for j in range(n):
+                        if j != i:
+                            delta_j = lr_policies_inner[j] * get_gradient(
+                                inner_losses[j], new_th[j])
+                            gradj_Vi = get_gradient(inner_losses[i], new_th[j])
+                            # print(delta_j.shape)
+                            # print(gradj_Vi.shape)
+                            new_loss_i_approx -= delta_j @ gradj_Vi  # - because gradient descent
+                    # print(new_loss_i_approx)
+                    # 1/0
+
+                # TODO can make the below, not an else, if you want to compare.
+                if do_comparison or not args.taylor_with_actual_update:
+                    for j in range(n):
+                        # Inner loop essentially
+                        # Each player on the copied th does a naive update (must be differentiable!)
+                        if j != i:
+                            if isinstance(new_th[j], torch.Tensor):
+                                new_th[j] = new_th[j] - lr_policies_inner[
+                                    j] * get_gradient(inner_losses[j],
+                                                      new_th[j])
+                            else:
+                                optim_update(optims_th_primes[j],
+                                             inner_losses[j],
+                                             new_th[j].parameters())
 
             if args.print_inner_rollouts:
                 print_exact_policy(new_th, i)
 
             # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
-            outer_losses = game.get_exact_loss(new_th)
+
+            if do_comparison or not args.taylor_with_actual_update:
+                outer_losses = game.get_exact_loss(new_th)
 
             if other_terms is not None:
+                if args.taylor_with_actual_update:
+                    raise NotImplementedError
+
                 if isinstance(new_th[i], torch.Tensor):
                     with torch.no_grad():
                         new_th[i] -= lr_policies_outer[i] * (get_gradient(
@@ -1418,15 +1522,27 @@ def update_th_exact_value(th, game):
                     # BUT TODO, first thing is to just write everything up, the critical ideas first, to get prof review
 
             else:
+                if args.taylor_with_actual_update:
+                    loss_to_update = new_loss_i_approx
+                else:
+                    loss_to_update = outer_losses[i]
+
+                if do_comparison:
+                    print(new_loss_i_approx)
+                    print(outer_losses)
+                    exit() # Because there are some issues with the new_th already being updated
+                # Compare it with the actual outer loss value.
+
+
                 # Finally each player updates their own (copied) th
                 if isinstance(new_th[i], torch.Tensor):
                     with torch.no_grad():
                         new_th[i] -= lr_policies_outer[i] * get_gradient(
-                            outer_losses[i], new_th[i])
+                            loss_to_update, new_th[i])
                     # Finally we rewrite the th by copying from the created copies
                     th[i] = new_th[i]
                 else:
-                    optim_update(optims_th_primes[i], outer_losses[i], new_th[i].parameters())
+                    optim_update(optims_th_primes[i], loss_to_update, new_th[i].parameters())
 
                     copyNN(th[i], new_th[i])
 
@@ -1517,8 +1633,10 @@ if __name__ == "__main__":
                         help="find exact prox solution in inner loop instead of x # of inner steps")
     parser.add_argument("--outer_exact_prox", action="store_true",
                         help="find exact prox solution in outer loop instead of x # of outer steps")
-    parser.add_argument("--no_taylor_approx", action="store_true",
+    parser.add_argument("--actual_update", action="store_true",
                         help="experimental: try DiCE style, direct update of policy and diff through it")
+    parser.add_argument("--taylor_with_actual_update", action="store_true",
+                        help="experimental: Like no taylor approx, except instead of recalc the value at outer step, calc value based on taylor approx from original value (see LOLA paper 4.2)")
     parser.add_argument("--ill_condition", action="store_true",
                         help="in exact case, add preconditioning to make the problem ill-conditioned. Used to test if prox-lola helps")
     # parser.add_argument("--ill_cond_diag_matrix", nargs="+", type=float, default=[3., 0.1, 0.1, 0.1, 1.],
@@ -1559,7 +1677,7 @@ if __name__ == "__main__":
     repeats = args.repeats
 
     if args.outer_exact_prox:
-        assert args.inner_exact_prox or args.no_taylor_approx
+        assert args.inner_exact_prox or args.actual_update
 
     if args.ill_condition and not args.using_nn:
 
@@ -1662,42 +1780,53 @@ if __name__ == "__main__":
 
         if args.exact_grad_calc:
             # Fix later if you want to use
-            1/0
+            # 1/0
             total_is_in_tft_direction_p1 = 0
             total_is_in_tft_direction_p2 = 0
+            total_kept_dropped_same_dir = 0
 
             for iter in range(num_epochs):
 
-                dims, Ls = ipdn(n=n_agents, gamma=gamma,
-                                contribution_factor=contribution_factor,
-                                contribution_scale=contribution_scale)
-                th = init_th(dims, std=args.std)
+                game = ContributionGame(n=n_agents, gamma=gamma,
+                                        batch_size=batch_size,
+                                        num_iters=rollout_len,
+                                        contribution_factor=contribution_factor,
+                                        contribution_scale=contribution_scale,
+                                        history_len=args.history_len,
+                                        state_type=args.state_type)
+                dims = game.dims
+
+                # th = init_custom(dims, args.state_type, args.using_nn, args.env,
+                #              args.nn_hidden_size, args.nn_extra_hidden_layers)
+                # th = init_th(dims, std=args.std)
                 # th = init_th_uniform(dims)  # TODO init uniform
                 # th = init_th_adversarial2(dims)
-                # th = init_th_adversarial4(dims)
+                th = init_th_adversarial4(dims)
                 # th = init_th_adversarial_coop(dims)
                 for i in range(len(th)):
                     print(torch.sigmoid(th[i]))
-                is_in_tft_direction_p1, is_in_tft_direction_p2 = exact_grad_calc(th, Ls)
+                is_in_tft_direction_p1, is_in_tft_direction_p2, kept_dropped_same_dir = exact_grad_calc(th, game)
                 total_is_in_tft_direction_p1 += is_in_tft_direction_p1
                 total_is_in_tft_direction_p2 += is_in_tft_direction_p2
+                total_kept_dropped_same_dir += kept_dropped_same_dir
                 print("% TFT direction for LOLA terms")
                 print(total_is_in_tft_direction_p1 / (iter + 1))
                 print(total_is_in_tft_direction_p2 / (iter + 1))
                 print("P1: {}".format(total_is_in_tft_direction_p1))
                 print("P2: {}".format(total_is_in_tft_direction_p2))
+                print("Kept/dropped same dir over all agents: {}".format(total_kept_dropped_same_dir))
+                print("Max possible over all agents: {}".format((iter + 1) * len(th)))
                 print("Iters: {}".format(iter+1))
 
             exit()
 
         print("Exact Gradients")
 
-        if args.no_taylor_approx:
-            print("No Taylor Approx LOLA")
+        if args.actual_update:
+            print("Actual Update LOLA")
         else:
-            print("Taylor Approx (Original) LOLA")
+            print("Original LOLA")
 
-        reward_percent_of_max = []
 
         for run in range(repeats):
 
@@ -1733,7 +1862,7 @@ if __name__ == "__main__":
 
                     game.print_policies_for_all_states(th)
 
-                if args.no_taylor_approx:
+                if args.actual_update:
                     th = update_th_exact_value(th, game)
                 else:
                     th = update_th_taylor_approx_exact_value(th, game)
@@ -1763,7 +1892,7 @@ if __name__ == "__main__":
                 coop_divisor = truncated_coop_payout
             else:
                 coop_divisor = inf_coop_payout
-            reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_divisor)
+            # reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_divisor)
 
             plot_results = True
             if plot_results:
@@ -1776,6 +1905,3 @@ if __name__ == "__main__":
 
                 plt.clf()
 
-        if args.env == 'ipd':
-            print("Average reward as % of max: {:.1%}".format(
-                sum(reward_percent_of_max) / repeats))
