@@ -1454,6 +1454,8 @@ def update_th_exact_value(th, game):
             else:
                 new_th = get_th_copy(static_th_copy)
 
+            do_comparison = False
+
             # --- INNER LOOP ---
             # Then each player calcs the losses
             other_terms = None
@@ -1462,38 +1464,38 @@ def update_th_exact_value(th, game):
                                       game, i, n,
                                       prox_f_step_sizes=lr_policies_inner)
             else:
-                inner_losses = game.get_exact_loss(new_th)
+                for inner_step in range(args.inner_steps):
+                    inner_losses = game.get_exact_loss(new_th)
 
-                do_comparison = False
 
-                if args.taylor_with_actual_update:
+                    if args.taylor_with_actual_update:
 
-                    new_loss_i_approx = inner_losses[i]
-                    for j in range(n):
-                        if j != i:
-                            delta_j = lr_policies_inner[j] * get_gradient(
-                                inner_losses[j], new_th[j])
-                            gradj_Vi = get_gradient(inner_losses[i], new_th[j])
-                            # print(delta_j.shape)
-                            # print(gradj_Vi.shape)
-                            new_loss_i_approx -= delta_j @ gradj_Vi  # - because gradient descent
-                    # print(new_loss_i_approx)
-                    # 1/0
+                        new_loss_i_approx = inner_losses[i]
+                        for j in range(n):
+                            if j != i:
+                                delta_j = lr_policies_inner[j] * get_gradient(
+                                    inner_losses[j], new_th[j])
+                                gradj_Vi = get_gradient(inner_losses[i], new_th[j])
+                                # print(delta_j.shape)
+                                # print(gradj_Vi.shape)
+                                new_loss_i_approx -= delta_j @ gradj_Vi  # - because gradient descent
+                        # print(new_loss_i_approx)
+                        # 1/0
 
-                # TODO can make the below, not an else, if you want to compare.
-                if do_comparison or not args.taylor_with_actual_update:
-                    for j in range(n):
-                        # Inner loop essentially
-                        # Each player on the copied th does a naive update (must be differentiable!)
-                        if j != i:
-                            if isinstance(new_th[j], torch.Tensor):
-                                new_th[j] = new_th[j] - lr_policies_inner[
-                                    j] * get_gradient(inner_losses[j],
-                                                      new_th[j])
-                            else:
-                                optim_update(optims_th_primes[j],
-                                             inner_losses[j],
-                                             new_th[j].parameters())
+                    # TODO can make the below, not an else, if you want to compare.
+                    if do_comparison or not args.taylor_with_actual_update:
+                        for j in range(n):
+                            # Inner loop essentially
+                            # Each player on the copied th does a naive update (must be differentiable!)
+                            if j != i:
+                                if isinstance(new_th[j], torch.Tensor):
+                                    new_th[j] = new_th[j] - lr_policies_inner[
+                                        j] * get_gradient(inner_losses[j],
+                                                          new_th[j])
+                                else:
+                                    optim_update(optims_th_primes[j],
+                                                 inner_losses[j],
+                                                 new_th[j].parameters())
 
             if args.print_inner_rollouts:
                 print_exact_policy(new_th, i)
@@ -1600,10 +1602,10 @@ if __name__ == "__main__":
     parser.add_argument("--lr_policies_outer", type=float, default=0.05,
                         help="outer loop learning rate: same learning rate across all policies for now")
     parser.add_argument("--lr_policies_inner", type=float, default=0.05,
-                        help="inner loop learning rate: this has no use in the naive learning case. Used for the gradient step done for the lookahead for other agents during LOLA (therefore, often scaled to be higher than the outer learning rate in non-proximal LOLA). This is the eta step size in the original LOLA paper. For prox, it is the learning rate on the inner prox loop.")
+                        help="inner loop learning rate (eta): this has no use in the naive learning case. Used for the gradient step done for the lookahead for other agents during LOLA (therefore, often scaled to be higher than the outer learning rate in non-proximal LOLA). Note that this has a different meaning for the Taylor approx vs. actual update versions. A value of eta=1 is perfectly reasonable for the Taylor approx version as this balances the scale of the gradient with the naive learning term (and will be multiplied by the outer learning rate after), whereas for the actual update version with neural net, 1 is way too big an inner learning rate. For prox, this is the learning rate on the inner prox loop so is not that important - you want big enough to be fast-ish, but small enough to converge.")
     parser.add_argument("--lr_values", type=float, default=0.025,
                         help="same learning rate across all policies for now. Should be around maybe 0.001 or less for neural nets to avoid instability")
-    parser.add_argument("--inner_steps", type=int, default=1, help="inner loop steps for DiCE")
+    parser.add_argument("--inner_steps", type=int, default=1, help="inner lookahead steps")
     parser.add_argument("--outer_steps", type=int, default=1)
     parser.add_argument("--using_nn", action="store_true",
                         help="use neural net/func approx instead of tabular policy")
@@ -1634,7 +1636,7 @@ if __name__ == "__main__":
     parser.add_argument("--outer_exact_prox", action="store_true",
                         help="find exact prox solution in outer loop instead of x # of outer steps")
     parser.add_argument("--actual_update", action="store_true",
-                        help="experimental: try DiCE style, direct update of policy and diff through it")
+                        help="experimental: try DiCE style, direct update of policy and diff through it. This is the no taylor approximation version of LOLA")
     parser.add_argument("--taylor_with_actual_update", action="store_true",
                         help="experimental: Like no taylor approx, except instead of recalc the value at outer step, calc value based on taylor approx from original value (see LOLA paper 4.2)")
     parser.add_argument("--ill_condition", action="store_true",
@@ -1662,6 +1664,9 @@ if __name__ == "__main__":
 
     torch.autograd.set_detect_anomaly(True)
 
+    if args.inner_steps > 1:
+        assert args.actual_update
+
     init_state_representation = args.init_state_representation
 
     rollout_len = args.rollout_len
@@ -1681,23 +1686,83 @@ if __name__ == "__main__":
 
     if args.ill_condition and not args.using_nn:
 
-        ill_cond_matrix1 = torch.tensor([[.2, 0, 1., 0, 0.],
-                                         [0., .2, 1, 0., 0.],
-                                         [0, 0., 1, 0, 0.],
-                                         [0, 0., 1., .2, 0.],
-                                         [0, 0., 1., 0., 1.]])
-        ill_cond_matrix2 = torch.tensor([[.2, 1., 0., 0, 0.],
-                                         [0., 1, 0, 0., 0.],
-                                         [0, 1., .2, 0, 0.],
-                                         [0, 1., 0., .2, 0.],
-                                         [0, 1., 0., 0., 1.]])
+        # ill_cond_matrix1 = torch.tensor([[.2, 0, 1., 0, 0.],
+        #                                  [0., .2, 1, 0., 0.],
+        #                                  [0, 0., 1, 0, 0.],
+        #                                  [0, 0., 1., .2, 0.],
+        #                                  [0, 0., 1., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.2, 1., 0., 0, 0.],
+        #                                  [0., 1, 0, 0., 0.],
+        #                                  [0, 1., .2, 0, 0.],
+        #                                  [0, 1., 0., .2, 0.],
+        #                                  [0, 1., 0., 0., 1.]])
 
-        ill_cond_matrix1 = torch.tensor([[3., 0, 0., 0, 0.],
-                                         [0., .1, 0, 0., 0.],
-                                         [0, 0., .1, 0, 0.],
-                                         [0, 0., 0., .1, 0.],
-                                         [0, 0., 0., 0., 1.]])
-        ill_cond_matrix2 = ill_cond_matrix1
+        # ill_cond_matrix1 = torch.tensor([[3., 0, 0., 0, 0.],
+        #                                  [0., .1, 0, 0., 0.],
+        #                                  [0, 0., .1, 0, 0.],
+        #                                  [0, 0., 0., .1, 0.],
+        #                                  [0, 0., 0., 0., 1.]])
+        # ill_cond_matrix2 = ill_cond_matrix1
+
+        # ill_cond_matrix1 = torch.tensor([[1, 0, 0., 0, 0.],
+        #                                  [0., 1, 0, 0., 0.],
+        #                                  [0, 0., 1, 0, 0.],
+        #                                  [0, 0., 0., 1, 0.],
+        #                                  [0, 0., 0., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[1, 0, 0., 0, 0.],
+        #                                  [0., 1, 0, 0., 0.],
+        #                                  [0, 0., 1, 0, 0.],
+        #                                  [0, 0., 0., 1, 0.],
+        #                                  [0, 0., 0., 0., 1.]])
+
+        # ill_cond_matrix1 = torch.tensor([[1, 0, -2., 0, 0.],
+        #                                  [0., 1, -2, 0., 0.],
+        #                                  [0, 0., 1, 0, 0.],
+        #                                  [0, 0., -2., 1, 0.],
+        #                                  [0, 0., -2., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[1, -2, 0., 0, 0.],
+        #                                  [0., 1, 0, 0., 0.],
+        #                                  [0, -2., 1, 0, 0.],
+        #                                  [0, -2., 0., 1, 0.],
+        #                                  [0, -2., 0., 0., 1.]])
+
+        # Below already very interesting and shows that regular LOLA tabular can fail too.
+        ill_cond_matrix1 = torch.tensor([[.2, 0, -4., 0, 0.],
+                                         [0., .2, -4, 0., 0.],
+                                         [0, 0., .2, 0, 0.],
+                                         [0, 0., -4., .2, 0.],
+                                         [0, 0., -4., 0., 1.]])
+        ill_cond_matrix2 = torch.tensor([[.2, -4, 0., 0, 0.],
+                                         [0., .2, 0, 0., 0.],
+                                         [0, -4., .2, 0, 0.],
+                                         [0, -4., 0., .2, 0.],
+                                         [0, -4., 0., 0., 2.]])
+
+        # 1/0
+        # # Something like this maybe?
+        # ill_cond_matrix1 = torch.tensor([[.2, 0, -4., 0, 0.],
+        #                                  [0., .2, -4, 0., 0.],
+        #                                  [0, 0., 4, 0, 0.],
+        #                                  [0, 0., -4., .2, 0.],
+        #                                  [0, 0., -4., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.2, -4, 0., 0, 0.],
+        #                                  [0., 4, 0, 0., 0.],
+        #                                  [0, -4., .2, 0, 0.],
+        #                                  [0, -4., 0., .2, 0.],
+        #                                  [0, -4., 0., 0., 2.]])
+        # Or maybe spillover is positive in some states, negative in others
+        # Anyway try to see if you can get a case where outer prox fails.
+
+        # ill_cond_matrix1 = torch.tensor([[.1, 0, -2., 0, 0.],
+        #                                   [0., .1, -2, 0., 0.],
+        #                                   [0, 0., .1, 0, 0.],
+        #                                   [0, 0., -2., .1, 0.],
+        #                                   [0, 0., -2., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.1, -2, 0., 0, 0.],
+        #                                   [0., .1, 0, 0., 0.],
+        #                                   [0, -2., .1, 0, 0.],
+        #                                   [0, -2., 0., .1, 0.],
+        #                                   [0, -2., 0., 0., 1.]])
 
         ill_cond_matrices = torch.stack((ill_cond_matrix1, ill_cond_matrix2)) # hardcoded 2 agents for now
 
