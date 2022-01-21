@@ -844,7 +844,18 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
             reduction='batchmean',
             log_target=False)
 
-        if curr_prev_pol_div < threshold or iters > max_iters:
+        curr_prev_pol_div_rev = torch.nn.functional.kl_div(
+            input=torch.log(target_policy_dist),
+            target=policy_dist,
+            reduction='batchmean',
+            log_target=False)
+        # print("--INNER STEP--")
+        # print("Curr pol:")
+        # print(curr_pol)
+        # print("Prev pol:")
+        # print(prev_pol)
+
+        if (curr_prev_pol_div < threshold and curr_prev_pol_div_rev < threshold) or iters > max_iters:
             if args.print_prox_loops_info:
                 print("Inner prox iters used: {}".format(iters))
             if iters >= max_iters:
@@ -856,7 +867,7 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
 # TODO everything that passes game as a parameter can instead be moved into the class itself
 # and made as a method of that class
 def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j):
-    print("BE CAREFUL - CHECK EVERY STEP OF CODE, I DID A LOT OF EDITING, CHECK ALL THE CALLS, CHECK ALL BEHAVIOR")
+    # print("BE CAREFUL - CHECK EVERY STEP OF CODE, I DID A LOT OF EDITING, CHECK ALL THE CALLS, CHECK ALL BEHAVIOR")
     losses_for_ift = game.get_exact_loss(inner_lookahead_th)  # Note that new_th has only agent j updated
 
     grad2_V1 = get_gradient(losses_for_ift[i], inner_lookahead_th[j])
@@ -921,7 +932,7 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n, prox_f_step
             else:
                 # For each other player, do the prox operator
                 inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
-                                               game, j, prox_f_step_sizes)
+                                               game, j, prox_f_step_sizes, max_iters=args.prox_inner_max_iters)
                 # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
                 # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
                 # And then differentiate through the entire process
@@ -1002,10 +1013,21 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
         reduction='batchmean',
         log_target=False)
 
+    curr_prev_pol_div_rev = torch.nn.functional.kl_div(
+        input=torch.log(target_policy_dist),
+        target=policy_dist,
+        reduction='batchmean',
+        log_target=False)
+
+    # print("Curr Prev Divs")
+    # print(curr_prev_pol_div)
+    # print(curr_prev_pol_div_rev)
+
+    # Checking 2 ways helps avoid numerical precision issues
     fixed_point_reached = False
-    if curr_prev_pol_div < args.prox_threshold or curr_iter > args.prox_max_iters:
+    if (curr_prev_pol_div < args.prox_threshold and curr_prev_pol_div_rev < args.prox_threshold ) or curr_iter > args.prox_outer_max_iters:
         print("Outer prox iters used: {}".format(curr_iter))
-        if curr_iter >= args.prox_max_iters:
+        if curr_iter >= args.prox_outer_max_iters:
             print("Reached max prox iters")
         fixed_point_reached = True
 
@@ -1256,7 +1278,7 @@ def update_th_taylor_approx_exact_value(th, game):
                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
                         print_info, i, new_th, static_th_copy,
                         gradient_terms_or_Ls, curr_pol,
-                        other_terms, outer_iters, args.prox_max_iters,
+                        other_terms, outer_iters, args.prox_outer_max_iters,
                         args.prox_threshold)
 
                 th[i] = new_th[i]
@@ -1646,7 +1668,8 @@ if __name__ == "__main__":
     parser.add_argument("--print_prox_loops_info", action="store_true",
                         help="print some additional info for the prox loop iters")
     parser.add_argument("--prox_threshold", type=float, default=1e-8, help="Threshold for KL divergence below which we consider a fixed point to have been reached for the proximal LOLA. Recommended not to go to higher than 1e-8 if you want something resembling an actual fixed point")
-    parser.add_argument("--prox_max_iters", type=int, default=5000, help="Maximum proximal steps to take before timeout")
+    parser.add_argument("--prox_inner_max_iters", type=int, default=5000, help="Maximum inner proximal steps to take before timeout")
+    parser.add_argument("--prox_outer_max_iters", type=int, default=5000, help="Maximum outer proximal steps to take before timeout")
     parser.add_argument("--dd_stretch_factor", type=float, default=6., help="for ill conditioning in the func approx case, stretch logit of policy in DD state by this amount")
     parser.add_argument("--all_state_stretch_factor", type=float, default=0.33, help="for ill conditioning in the func approx case, stretch logit of policy in all states by this amount")
     parser.add_argument("--theta_init_mode", type=str, default="standard",
@@ -1727,16 +1750,49 @@ if __name__ == "__main__":
         #                                  [0, -2., 0., 0., 1.]])
 
         # Below already very interesting and shows that regular LOLA tabular can fail too.
-        ill_cond_matrix1 = torch.tensor([[.2, 0, -4., 0, 0.],
-                                         [0., .2, -4, 0., 0.],
+        # ill_cond_matrix1 = torch.tensor([[.2, 0, -4., 0, 0.],
+        #                                  [0., .2, -4, 0., 0.],
+        #                                  [0, 0., .2, 0, 0.],
+        #                                  [0, 0., -4., .2, 0.],
+        #                                  [0, 0., -4., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.2, -4, 0., 0, 0.],
+        #                                  [0., .2, 0, 0., 0.],
+        #                                  [0, -4., .2, 0, 0.],
+        #                                  [0, -4., 0., .2, 0.],
+        #                                  [0, -4., 0., 0., 2.]])
+
+        ill_cond_matrix1 = torch.tensor([[.2, 0, -2., 0, 0.],
+                                         [0., .2, -2, 0., 0.],
                                          [0, 0., .2, 0, 0.],
-                                         [0, 0., -4., .2, 0.],
-                                         [0, 0., -4., 0., 1.]])
-        ill_cond_matrix2 = torch.tensor([[.2, -4, 0., 0, 0.],
+                                         [0, 0., -2., .2, 0.],
+                                         [0, 0., -2., 0., 1.]])
+        ill_cond_matrix2 = torch.tensor([[.2, -2, 0., 0, 0.],
                                          [0., .2, 0, 0., 0.],
-                                         [0, -4., .2, 0, 0.],
-                                         [0, -4., 0., .2, 0.],
-                                         [0, -4., 0., 0., 2.]])
+                                         [0, -2., .2, 0, 0.],
+                                         [0, -2., 0., .2, 0.],
+                                         [0, -2., 0., 0., 2.]])
+
+        ill_cond_matrix1 = torch.tensor([[.2, 0, -.5, 0, 0.],
+                                         [0., .2, -.5, 0., 0.],
+                                         [0, 0., .2, 0, 0.],
+                                         [0, 0., -.5, .2, 0.],
+                                         [0, 0., -.5, 0., 1.]])
+        ill_cond_matrix2 = torch.tensor([[.2, -.5, 0., 0, 0.],
+                                         [0., .2, 0, 0., 0.],
+                                         [0, -.5, .2, 0, 0.],
+                                         [0, -.5, 0., .2, 0.],
+                                         [0, -.5, 0., 0., 2.]])
+
+        ill_cond_matrix1 = torch.tensor([[1, 0, -2, 0, 0.],
+                                         [0., 1, -2, 0., 0.],
+                                         [0, 0., 1, 0, 0.],
+                                         [0, 0., -2, 1, 0.],
+                                         [0, 0., -2, 0., 1.]])
+        ill_cond_matrix2 = torch.tensor([[1, -2, 0., 0, 0.],
+                                         [0., 1, 0, 0., 0.],
+                                         [0, -2, 1, 0, 0.],
+                                         [0, -2, 0., 1, 0.],
+                                         [0, -2, 0., 0., 1.]])
 
         # 1/0
         # # Something like this maybe?
