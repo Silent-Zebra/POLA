@@ -4,7 +4,7 @@ Coin Game environment. Adapted from https://github.com/alshedivat/lola/blob/mast
 import gym
 import numpy as np
 import torch
-from LOLA_nplayers import magic_box, reverse_cumsum, Game
+from LOLA_nplayers_rollouts import magic_box, reverse_cumsum, Game
 
 # from gym.spaces import Discrete, Tuple
 # from gym.spaces import prng
@@ -184,6 +184,7 @@ class CoinGameVec(gym.Env, Game):
 
         return next_val_history
 
+
     def print_info_on_sample_obs(self, sample_obs, th, vals):
 
         if self.full_seq_obs:
@@ -294,6 +295,7 @@ class CoinGameVec(gym.Env, Game):
                                               [[0, 0, 0],
                                                [0, 0, 0],
                                                [0, 1, 0]]]).reshape(1, 36)
+            # Want to see prob of going right going down.
             sample_obs = torch.stack((sample_obs_1, sample_obs_2, sample_obs_3), dim=1)
 
             self.print_info_on_sample_obs(sample_obs, th, vals)
@@ -481,6 +483,8 @@ class CoinGameVec(gym.Env, Game):
                     state_value = state_value[:, -1]
                     # print(state_value.shape)
 
+                    state_value = state_value.unsqueeze(-1)
+
 
 
                 else:
@@ -575,73 +579,180 @@ class CoinGameVec(gym.Env, Game):
                avg_same_colour_coins_picked_total, avg_diff_colour_coins_picked_total, avg_coins_picked_total
                # next_val_history
 
-
-    def get_loss_helper(self, rewards, policy_history):
-        num_iters = self.max_steps
+    # TODO check - copied from nplayers_rollouts contrib game formulation
+    def get_loss_helper(self, trajectory, rewards, policy_history,
+                        old_policy_history=None):
+        num_iters = len(trajectory)
 
         discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
                                   dim=0) / self.gamma
-
 
         # Discounted rewards, not sum of rewards which G_t is
         gamma_t_r_ts = rewards * discounts.reshape(-1, 1, 1,
                                                    1)  # implicit broadcasting done by numpy
 
-
-
         G_ts = reverse_cumsum(gamma_t_r_ts, dim=0)
+        # G_ts gives you the inner sum of discounted rewards
+
+        p_act_given_state = trajectory.float() * policy_history + (
+                1 - trajectory.float()) * (1 - policy_history)
+
+        if old_policy_history is None:
+            # recall 1 is coop, so when coop action 1 taken, we look at policy which is prob coop
+            # and when defect 0 is taken, we take 1-policy = prob of defect
+            log_p_act = torch.log(p_act_given_state)
+
+            return G_ts, gamma_t_r_ts, log_p_act, discounts
+        else:
+            p_act_given_state_old = trajectory.float() * old_policy_history + (
+                    1 - trajectory.float()) * (1 - old_policy_history)
+
+            p_act_ratio = p_act_given_state / p_act_given_state_old.detach()
+
+            return G_ts, gamma_t_r_ts, p_act_ratio, discounts
 
 
-        p_act_given_state = policy_history
+    def get_dice_loss(self, trajectory, rewards, policy_history, val_history, next_val_history,
+                      old_policy_history=None, kl_div_target_policy=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
 
-        log_p_act = torch.log(p_act_given_state)
-        return G_ts, gamma_t_r_ts, log_p_act, discounts
-
-
-
-    def get_dice_loss(self, rewards, policy_history, val_history, next_val_history, use_nl_loss=False):
-
-        # raise Exception("refactor this code and use the same/consistent one with IPD, and move it to a separate function so you don't have duplicate code")
+        if old_policy_history is not None:
+            old_policy_history = old_policy_history.detach()
 
         G_ts, gamma_t_r_ts, log_p_act_or_p_act_ratio, discounts = self.get_loss_helper(
-            rewards, policy_history)
+            trajectory, rewards, policy_history, old_policy_history)
 
         discounts = discounts.view(-1, 1, 1, 1)
 
+        # R_t is like G_t except not discounted back to the start. It is the forward
+        # looking return at that point in time
         R_ts = G_ts / discounts
 
-        # print(rewards.shape)
-        # print(val_history.shape)
-        # print(next_val_history.shape)
+        # Generalized Advantage Estimation (GAE) calc adapted from loaded dice repo
+        # https://github.com/oxwhirl/loaded-dice/blob/master/loaded_dice_demo.ipynb
+        advantages = torch.zeros_like(G_ts)
+        lambd = 0 #0.95 # 1 here is essentially what I was doing before with monte carlo
+        deltas = rewards + self.gamma * next_val_history.detach() - val_history.detach()
+        gae = torch.zeros_like(deltas[0,:]).float()
+        for i in range(deltas.size(0) - 1, -1, -1):
+            gae = gae * self.gamma * lambd + deltas[i,:]
+            advantages[i,:] = gae
 
-        advantages = rewards + self.gamma * next_val_history - val_history
-
+        # if inner_repeat_train_on_same_samples:
+        #     # Then we should have a p_act_ratio here instead of a log_p_act
+        #     if use_clipping:
+        #
+        #         # Two way clamp, not yet ppo style
+        #         if two_way_clip:
+        #             log_p_act_or_p_act_ratio = torch.clamp(log_p_act_or_p_act_ratio, min=1 - clip_epsilon, max=1 + clip_epsilon)
+        #         else:
+        #             # PPO style clipping
+        #             pos_adv = (advantages > 0).float()
+        #             log_p_act_or_p_act_ratio = pos_adv * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + \
+        #                                        (1-pos_adv) * torch.maximum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1-clip_epsilon)
+        #
+        #     if use_penalty:
+        #         # Calculate KL Divergence
+        #         kl_divs = torch.zeros((self.n_agents))
+        #
+        #         if kl_div_target_policy is None:
+        #             assert old_policy_history is not None
+        #             kl_div_target_policy = old_policy_history
+        #
+        #         for i in range(self.n_agents):
+        #
+        #             policy_dist_i = self.build_policy_dist(policy_history, i)
+        #             kl_target_dist_i = self.build_policy_dist(kl_div_target_policy, i)
+        #
+        #             kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist_i),
+        #                                             target=kl_target_dist_i.detach(),
+        #                                             reduction='batchmean',
+        #                                             log_target=False)
+        #             # print(kl_div)
+        #             kl_divs[i] = kl_div
+        #
+        #         # print(kl_divs)
 
         sum_over_agents_log_p_act_or_p_act_ratio = log_p_act_or_p_act_ratio.sum(dim=1)
 
+        # See 5.2 (page 7) of DiCE paper for below:
+        # With batches, the mean is the mean across batches. The sum is over the steps in the rollout/trajectory
 
         deps_up_to_t = (torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1)
 
         deps_less_than_t = deps_up_to_t - sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1) # take out the dependency in the given time step
 
         # Look at Loaded DiCE paper to see where this formulation comes from
-        loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * discounts * advantages).sum(dim=0).mean(dim=1)
-
+        # Right now since I am using GAE, the advantages already have the discounts in them, no need to multiply again
+        loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * advantages).sum(dim=0).mean(dim=1)
 
         dice_loss = -loaded_dice_rewards
 
-        final_state_vals = next_val_history[-1]
+        # if inner_repeat_train_on_same_samples and use_penalty:
+        #     kl_divs = kl_divs.unsqueeze(-1)
+        #
+        #     assert beta is not None
+        #
+        #     # TODO make adaptive
+        #     dice_loss += beta * kl_divs # we want to min the positive kl_div
 
-        # print(R_ts.shape)
-
+        final_state_vals = next_val_history[-1].detach()
+        # You DO need a detach on these. Because it's the target - it should be detached. It's a target value.
         values_loss = ((R_ts + (self.gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape) - val_history) ** 2).sum(dim=0).mean(dim=1)
 
         if use_nl_loss:
             # No LOLA/opponent shaping or whatever, just naive learning
-            # But this is not right because we aren't using the advantage estimation scheme.
             regular_nl_loss = -(log_p_act_or_p_act_ratio * advantages).sum(dim=0).mean(dim=1)
+            # Well I mean obviously if you do this there is no shaping because you can't differentiate through the inner update step...
             return regular_nl_loss, G_ts, values_loss
 
+
         return dice_loss, G_ts, values_loss
+
+
+    #
+    # def get_dice_loss(self, rewards, policy_history, val_history, next_val_history, use_nl_loss=False):
+    #
+    #     raise Exception("refactor this code and use the same/consistent one with IPD, especially considering modifications to the repeat_train code, and move it to a separate function so you don't have duplicate code")
+    #
+    #     G_ts, gamma_t_r_ts, log_p_act_or_p_act_ratio, discounts = self.get_loss_helper(
+    #         rewards, policy_history)
+    #
+    #     discounts = discounts.view(-1, 1, 1, 1)
+    #
+    #     R_ts = G_ts / discounts
+    #
+    #     # print(rewards.shape)
+    #     # print(val_history.shape)
+    #     # print(next_val_history.shape)
+    #
+    #     advantages = rewards + self.gamma * next_val_history - val_history
+    #
+    #
+    #     sum_over_agents_log_p_act_or_p_act_ratio = log_p_act_or_p_act_ratio.sum(dim=1)
+    #
+    #
+    #     deps_up_to_t = (torch.cumsum(sum_over_agents_log_p_act_or_p_act_ratio, dim=0)).reshape(-1, 1, self.batch_size, 1)
+    #
+    #     deps_less_than_t = deps_up_to_t - sum_over_agents_log_p_act_or_p_act_ratio.reshape(-1, 1, self.batch_size, 1) # take out the dependency in the given time step
+    #
+    #     # Look at Loaded DiCE paper to see where this formulation comes from
+    #     loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(deps_less_than_t)) * discounts * advantages).sum(dim=0).mean(dim=1)
+    #
+    #
+    #     dice_loss = -loaded_dice_rewards
+    #
+    #     final_state_vals = next_val_history[-1]
+    #
+    #     # print(R_ts.shape)
+    #
+    #     values_loss = ((R_ts + (self.gamma * discounts.flip(dims=[0])) * final_state_vals.reshape(1, *final_state_vals.shape) - val_history) ** 2).sum(dim=0).mean(dim=1)
+    #
+    #     if use_nl_loss:
+    #         # No LOLA/opponent shaping or whatever, just naive learning
+    #         # But this is not right because we aren't using the advantage estimation scheme.
+    #         regular_nl_loss = -(log_p_act_or_p_act_ratio * advantages).sum(dim=0).mean(dim=1)
+    #         return regular_nl_loss, G_ts, values_loss
+    #
+    #     return dice_loss, G_ts, values_loss
 
 
