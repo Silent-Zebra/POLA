@@ -244,8 +244,8 @@ class ContributionGame(Game):
 
         if self.contribution_scale:
             self.contribution_factor = contribution_factor * n
-        else:
-            assert self.contribution_factor > 1
+        # else:
+        #     assert self.contribution_factor > 1
 
         self.dec_value_mask = (2 ** torch.arange(n - 1, -1, -1)).float()
 
@@ -1324,7 +1324,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr_policies_outer", type=float, default=0.05,
                         help="outer loop learning rate: same learning rate across all policies for now")
     parser.add_argument("--lr_policies_inner", type=float, default=0.05,
-                        help="inner loop learning rate: this has no use in the naive learning case. Used for the gradient step done for the lookahead for other agents during LOLA (therefore, often scaled to be higher than the outer learning rate in non-proximal LOLA). This is the eta step size in the original LOLA paper. For prox, it is the learning rate on the inner prox loop.")
+                        help="inner loop learning rate (eta): this has no use in the naive learning case. Used for the gradient step done for the lookahead for other agents during LOLA (therefore, often scaled to be higher than the outer learning rate in non-proximal LOLA). Note that this has a different meaning for the Taylor approx vs. actual update versions. A value of eta=1 is perfectly reasonable for the Taylor approx version as this balances the scale of the gradient with the naive learning term (and will be multiplied by the outer learning rate after), whereas for the actual update version with neural net, 1 is way too big an inner learning rate. For prox, this is the learning rate on the inner prox loop so is not that important - you want big enough to be fast-ish, but small enough to converge.")
     parser.add_argument("--lr_values", type=float, default=0.025,
                         help="same learning rate across all policies for now. Should be around maybe 0.001 or less for neural nets to avoid instability")
     parser.add_argument("--inner_steps", type=int, default=1, help="inner loop steps for DiCE")
@@ -1538,7 +1538,6 @@ if __name__ == "__main__":
         else:
             print("Taylor Approx (Original) LOLA")
 
-        reward_percent_of_max = []
 
         for run in range(repeats):
 
@@ -1604,7 +1603,7 @@ if __name__ == "__main__":
                 coop_divisor = truncated_coop_payout
             else:
                 coop_divisor = inf_coop_payout
-            reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_divisor)
+            # reward_percent_of_max.append((G_ts_record.mean() + discounted_sum_of_adjustments) / coop_divisor)
 
             plot_results = True
             if plot_results:
@@ -1617,6 +1616,3 @@ if __name__ == "__main__":
 
                 plt.clf()
 
-        if args.env == 'ipd':
-            print("Average reward as % of max: {:.1%}".format(
-                sum(reward_percent_of_max) / repeats))
