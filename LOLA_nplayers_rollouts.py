@@ -2900,7 +2900,7 @@ if __name__ == "__main__":
                     G_ts_record[epoch] = torch.stack(losses).detach()
 
                 if (epoch + 1) % print_every == 0:
-                    print("Epoch: " + str(epoch + 1))
+                    print("Epoch: " + str(epoch + 1), flush=True)
                     curr = timer()
                     print("Time Elapsed: {:.1f} seconds".format(curr - start))
 
