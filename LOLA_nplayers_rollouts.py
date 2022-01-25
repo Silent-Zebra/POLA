@@ -80,7 +80,7 @@ class Game():
             # So then dd_stretch_factor * all state stretch is what you get in the DD state
 
     def print_policy_info(self, policy, i):
-        print("Policy {}".format(i+1))
+        print("Policy {}".format(i+1), flush=True)
         # print("(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
         print(policy)
 
@@ -1597,7 +1597,7 @@ def print_exact_policy(th, i):
     print(
         "---Agent {} Rollout---".format(i + 1))
     for j in range(len(th)):
-        print("Agent {} Policy".format(j+1))
+        print("Agent {} Policy".format(j+1), flush=True)
         print(torch.sigmoid(th[j]))
 
         if args.ill_condition:
@@ -1781,7 +1781,7 @@ def update_th(th, gradient_terms_or_Ls, lr_policies_outer, lr_policies_inner, al
                                 print("loop start")
                                 for j in range(len(new_th)):
                                     if j != i:
-                                        print("Agent {}".format(j))
+                                        print("Agent {}".format(j), flush=True)
                                         print(torch.sigmoid(new_th[j]))
 
                             new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy, gradient_terms_or_Ls, i, n,
@@ -2776,7 +2776,7 @@ if __name__ == "__main__":
                     # print(nl_updated_policies)
                     # print(lola_updated_policies)
                     for i in range(n_agents):
-                        print("Agent {}".format(i+1))
+                        print("Agent {}".format(i+1), flush=True)
                         print(lola_updates[i])
                         print(nl_updates[i])
                         print(lola_updates[i] - nl_updates[i])
