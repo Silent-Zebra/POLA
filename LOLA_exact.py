@@ -69,7 +69,7 @@ class Game():
             # So then dd_stretch_factor * all state stretch is what you get in the DD state
 
     def print_policy_info(self, policy, i):
-        print("Policy {}".format(i+1))
+        print("Policy {}".format(i+1), flush=True)
         # print("(Probabilities are for cooperation/contribution, for states 00...0 (no contrib,..., no contrib), 00...01 (only last player contrib), 00...010, 00...011, increasing in binary order ..., 11...11 , start)")
         print(policy)
 
@@ -106,6 +106,8 @@ class Game():
                                                         self.action_repr_dim,
                                                                 one_at_a_time=False,
                                                                 simple_2state_build=True)
+
+
         return state_batch
 
     # def print_value_info(self, vals, agent_num_i):
@@ -661,6 +663,81 @@ class ConvFC(nn.Module):
 
         return output
 
+def param_init_custom(policy_net, i, lst):
+    counter = 0
+    # print("AGENT {}".format(i + 1))
+    for param in policy_net.parameters():
+        # print(param.data)
+        param.data = torch.tensor(lst[counter]).requires_grad_()
+        # print(param.data)
+        counter += 1
+
+def custom_params1():
+    l1 = [[-1., 1, -1, 1, -1, 1],
+            [-1., 1, -1, 1, -1, 1]]
+    l2 = [0., 0]
+    l3 = [[-1., 1]]
+    l4 = [0.]
+    return [l1, l2, l3, l4]
+
+
+def custom_params2():
+    l1 = [[ 2., -2, 2, -2, 2, -2],
+            [2., -2, 2, -2, 2, -2]]
+    l2 = [0., 0]
+    l3 = [[-2., 2]]
+    l4 = [0.]
+    return [l1, l2, l3, l4]
+
+def custom_params3():
+    l1 = [[ 10., -10, 10, -10, 10, -10],
+            [10., -10, 10, -10, 10, -10]]
+    l2 = [0., 0]
+    l3 = [[-10., 10]]
+    l4 = [0.]
+    return [l1, l2, l3, l4]
+
+def custom_params4():
+    l1 = [[1.10075544848156,0.271947390364486,0.5,0.130126832157141,0.130126925381296,0],
+            [0.014266049429733,0.933207935354722,0,0.170190543863721,0.170190209312912,1.00132747214432]]
+    l2 = [0.289733193993689,0]
+    l3 = [[1,0.5]]
+    l4 = [-1.]
+    return [l1, l2, l3, l4]
+
+def custom_params5():
+    l1 = [[2.76875177202519,1.70283053656467,4,1.36349157832529,3.10003656119828,1],
+            [0.515125115736217,0.51494364232833,1,0.289569911385246,0.289593098155816,1]]
+    l2 = [1.62568597316727,0]
+    l3 = [[-0.4,0.6]]
+    l4 = [0.]
+    return [l1, l2, l3, l4]
+
+def custom_params6():
+    l1 = [[1,2,4,-3,-21225.4820706105,1],
+            [-0.453054202889886,-0.453054202889869,1,-1.63518194539645,-1.63518176759075,0.981576517439697]]
+    l2 = [-854.61133215301,1.13967597803765]
+    l3 = [[-5.1,6.9]]
+    l4 = [0.]
+    return [l1, l2, l3, l4]
+
+def custom_params7():
+    l1 = [[-0.734033738503211,0.381042660301521,0.445335913409754,0.259207802066714,-0.786281879857001,0.24595939105466],
+            [0.20005453974748,0.200061535711064,-0.249821855722634,-0.209748559258265,-0.209750444324398,0.24013508414252]]
+    l2 = [-7.54119786671168,-1.00078349130788]
+    l3 = [[-0.36,0.47]]
+    l4 = [0.]
+    return [l1, l2, l3, l4]
+
+
+# def custom_params0():
+#     l1 = [[ 0., 0,0, -0, 0, 0],
+#             [0., 0, 0, 0,0, 0]]
+#     l2 = [0., 0]
+#     l3 = [[0., 0]]
+#     l4 = [0.]
+#     return [l1, l2, l3, l4]
+
 
 # TODO maybe this should go into the game definition itself and be part of that class instead of separate
 def init_custom(dims, state_type, using_nn=True, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
@@ -690,7 +767,40 @@ def init_custom(dims, state_type, using_nn=True, env='ipd', nn_hidden_size=16, n
                 policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
                                   output_size=1)
 
+
+                if args.custom_param != 'random':
+                    if args.custom_param == 'mix':
+                        if i == 0:
+                            lst = custom_params1()
+                        elif i == 1:
+                            lst = custom_params3()
+                        # TODO do one param of one kind and one param of another kind
+                        #e.g. make a params list in the outer loop, maybe custom_params1 for 1 agent and custom_params4 for another agent
+                        # or mix 1 and 3, or something like that.
+                    else:
+                        if args.custom_param == '1':
+                            lst = custom_params1()
+                        elif args.custom_param == '2':
+                            lst = custom_params2()
+                        elif args.custom_param == '3':
+                            lst = custom_params3()
+                        elif args.custom_param == '4':
+                            lst = custom_params4()
+                        elif args.custom_param == '5':
+                            lst = custom_params5()
+                        elif args.custom_param == '6':
+                            lst = custom_params6()
+                        elif args.custom_param == '7':
+                            lst = custom_params7()
+                    param_init_custom(policy_net, i, lst)
+
             th.append(policy_net)
+
+
+            # print(policy_net.parameters())
+
+            # print(policy_net)
+
 
     # Tabular policies
     else:
@@ -743,13 +853,20 @@ def get_jacobian(terms, param):
     jac = []
     for term in terms:
         grad = torch.autograd.grad(term, param, retain_graph=True, create_graph=False)[0]
-        jac.append(grad)
+        jac.append(grad.flatten())
     jac = torch.vstack(jac)
     return jac
 
 
 def get_th_copy(th):
-    return copy.deepcopy(th)
+    if isinstance(th[0], NeuralNet):
+        new_th = init_custom(dims, args.state_type, args.using_nn, args.env,
+                         args.nn_hidden_size, args.nn_extra_hidden_layers)
+        for i in range(len(th)):
+            copyNN(new_th[i], th[i])
+        return new_th
+    else:
+        return copy.deepcopy(th)
 
 def build_policy_dist(coop_probs):
     # This version just for ipdn/exact.
@@ -823,7 +940,16 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
 
         # Non-diff to make it nl loss on outer loop, and we will use the other_terms from ift
         with torch.no_grad():
-            th_to_build_on[j] -= prox_f_step_sizes[j] * get_gradient(loss_j,
+            if isinstance(th[j], NeuralNet):
+                grads = []
+                for param in th_to_build_on[j].parameters():
+                    param_grad = get_gradient(loss_j, param)
+                    param.data -= prox_f_step_sizes[j] * param_grad
+                    # grads.append(param_grad)
+                # for param in th_to_build_on[j].parameters():
+
+            else:
+                th_to_build_on[j] -= prox_f_step_sizes[j] * get_gradient(loss_j,
                                                                th_to_build_on[
                                                                        j])
 
@@ -850,10 +976,10 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
             reduction='batchmean',
             log_target=False)
         # print("--INNER STEP--")
-        # print("Curr pol:")
-        # print(curr_pol)
         # print("Prev pol:")
         # print(prev_pol)
+        # print("Curr pol:")
+        # print(curr_pol)
 
         if (curr_prev_pol_div < threshold and curr_prev_pol_div_rev < threshold) or iters > max_iters:
             if args.print_prox_loops_info:
@@ -862,7 +988,10 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
                 print("Reached max prox iters")
             fixed_point_reached = True
 
-    return th_to_build_on[j].detach().clone().requires_grad_()
+    if isinstance(th_to_build_on[j], NeuralNet):
+        return get_th_copy(th_to_build_on)[j]
+    else:
+        return th_to_build_on[j].detach().clone().requires_grad_()
 
 # TODO everything that passes game as a parameter can instead be moved into the class itself
 # and made as a method of that class
@@ -870,7 +999,44 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j):
     # print("BE CAREFUL - CHECK EVERY STEP OF CODE, I DID A LOT OF EDITING, CHECK ALL THE CALLS, CHECK ALL BEHAVIOR")
     losses_for_ift = game.get_exact_loss(inner_lookahead_th)  # Note that new_th has only agent j updated
 
-    grad2_V1 = get_gradient(losses_for_ift[i], inner_lookahead_th[j])
+    if isinstance(inner_lookahead_th[j], NeuralNet):
+        # inner_lookahead_th_vector = torch.nn.utils.parameters_to_vector(inner_lookahead_th[j].parameters())
+        #
+        # # inner_lookahead_th_vector = None
+        # # for param in inner_lookahead_th[j].parameters():
+        # #     print(param.data)
+        # #     if inner_lookahead_th_vector is None:
+        # #         inner_lookahead_th_vector = param.data.flatten()
+        # #     else:
+        # #         inner_lookahead_th_vector = torch.cat((inner_lookahead_th_vector, param.data.flatten()))
+        #
+        # print(inner_lookahead_th_vector)
+        #
+        # grad2_V1 = get_gradient(losses_for_ift[i], inner_lookahead_th_vector)
+        # print(grad2_V1)
+        # 1/0
+        #
+        # # print(inner_lookahead_th_vector)
+        # # 1/0
+
+        grad2_V1 = []
+        for param in inner_lookahead_th[j].parameters():
+            g = get_gradient(losses_for_ift[i], param)
+            grad2_V1.append(g.flatten())
+        # print(grad2_V1)
+
+        grad2_V1 = torch.cat(grad2_V1)
+        # print(grad2_V1.shape)
+        # 1/0
+
+        # TODO ... just treat the params of neural net as a vector, do list dot if needed, rewrite the rest of this
+        # REWRITE THE ABOVE
+        # MAKE THE PARAMS just concated into a vector
+        # And then otherwise everything else should be plug and play.
+        # make this working, then run the code and add the results to the graphs/images...
+
+    else:
+        grad2_V1 = get_gradient(losses_for_ift[i], inner_lookahead_th[j])
 
     # We use inner_lookahead_th instead of new_th because inner_lookahead has only th[j] updated
     policy = game.get_policy_for_all_states(inner_lookahead_th, j)
@@ -891,18 +1057,55 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j):
     loss_j = losses_for_ift[j] + args.inner_beta * kl_div
     # Right the LR here shouldn't matter because it's a fixed point so the gradient should be close to 0 anyway.
     # BUT it will make an effect on the outer gradient update
-    f_at_fixed_point = inner_lookahead_th[j] - lr_policies_inner[j] * get_gradient(
-        loss_j, inner_lookahead_th[j])
+    if isinstance(inner_lookahead_th[j], NeuralNet):
+        f_at_fixed_point = []
+        for param in inner_lookahead_th[j].parameters():
+            f_at_fixed_point.append(param - lr_policies_inner[j] * get_gradient(loss_j, param))
+        # print(f_at_fixed_point)
+
+    else:
+        f_at_fixed_point = inner_lookahead_th[j] - lr_policies_inner[j] * get_gradient(
+            loss_j, inner_lookahead_th[j])
 
     print_info = args.print_prox_loops_info
     if print_info:
-        print(inner_lookahead_th[j])
+        game.print_policies_for_all_states(inner_lookahead_th)
+        # print(inner_lookahead_th[j])
 
-    grad0_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[i])
-    grad1_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[j])
+    if isinstance(inner_lookahead_th[j], NeuralNet):
+        f_at_fixed_point = torch.cat(list(map(torch.flatten, f_at_fixed_point)))
+        # print(f_at_fixed_point.shape)
+        # 1/0
+        grad0_f = []
+        for param in inner_lookahead_th[i].parameters():
+            jac = get_jacobian(f_at_fixed_point, param)
+            grad0_f.append(jac)
+            # print(jac.shape)
+        # print(grad0_f)
+        grad0_f = torch.hstack(grad0_f)
+        # print(grad0_f.shape)
+        # 1/0
+        grad1_f = []
+        for param in inner_lookahead_th[j].parameters():
+            jac = get_jacobian(f_at_fixed_point, param)
+            grad1_f.append(jac)
+            # print(jac.shape)
+        # print(grad1_f)
+        # print(grad1_f[0].shape)
+        grad1_f = torch.hstack(grad1_f)
 
+        # 1/0
+    else:
+        grad0_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[i])
+        grad1_f = get_jacobian(f_at_fixed_point, inner_lookahead_th[j])
+
+    # th[j], th[j] shape for grad1_f
+    # th[j], th[i] shape for grad0_f
+
+    # print(grad0_f)
+    # print(grad1_f)
     # This inverse can fail when init_state_rep = 1
-    mat_to_inv = torch.eye(th[j].shape[0]) - grad1_f
+    mat_to_inv = torch.eye(grad1_f.shape[0]) - grad1_f
     if mat_to_inv[-1, -1] == 0:
         print("UHOH - something bad is happening")
         mat_to_inv[
@@ -912,11 +1115,18 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j):
 
     grad_th1_th2prime = torch.inverse(mat_to_inv) @ grad0_f
 
+    # print(grad2_V1.shape)
+    # print(grad_th1_th2prime.shape)
+    # print(grad2_V1)
+    # print(grad_th1_th2prime)
+
     return grad2_V1, grad_th1_th2prime
 
 
 def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n, prox_f_step_sizes):
     other_terms = []
+    # print(starting_th)
+    # 1/0
     new_th = get_th_copy(starting_th)
 
     # i is the agent doing the rolling out of the other agents
@@ -927,17 +1137,20 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n, prox_f_step
 
             # Inner loop essentially
             # Each player on the copied th does a naive update (doesn't have to be differentiable here because of fixed point/IFT)
-            if not isinstance(inner_lookahead_th[j], torch.Tensor):
-                raise NotImplementedError
-            else:
-                # For each other player, do the prox operator
-                inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
-                                               game, j, prox_f_step_sizes, max_iters=args.prox_inner_max_iters)
-                # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
-                # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
-                # And then differentiate through the entire process
-                # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unroll process.
-                # For nice IFT primer, check out https://implicit-layers-tutorial.org/implicit_functions/
+            # if not isinstance(inner_lookahead_th[j], torch.Tensor):
+            #     inner_lookahead_th[j] = prox_f(inner_lookahead_th,
+            #                                    kl_div_target_th,
+            #                                    game, j, prox_f_step_sizes,
+            #                                    max_iters=args.prox_inner_max_iters)
+            # else:
+            # For each other player, do the prox operator
+            inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
+                                           game, j, prox_f_step_sizes, max_iters=args.prox_inner_max_iters)
+            # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
+            # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
+            # And then differentiate through the entire process
+            # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unroll process.
+            # For nice IFT primer, check out https://implicit-layers-tutorial.org/implicit_functions/
 
             grad2_V1, grad_th1_th2prime = get_ift_terms(inner_lookahead_th,
                                                         kl_div_target_th,
@@ -970,6 +1183,10 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
 
     loss_i = outer_loss[i] + args.outer_beta * kl_div
 
+    # print("-----")
+    # print(kl_div)
+    # print(loss_i)
+
     with torch.no_grad():
         if isinstance(new_th[i], torch.Tensor):
             if other_terms is not None:
@@ -978,12 +1195,24 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
             else:
                 new_th[i] -= lr_policies_outer[i] * (get_gradient(loss_i, new_th[i]))
         else:
+            assert optims_th_primes is not None
 
             # print(game.get_policy_for_all_states(new_th, i))
-            assert optims_th_primes is not None
-            optim_update(optims_th_primes[i], loss_i, new_th[i].parameters() )
+            optim_update(optims_th_primes[i], loss_i, new_th[i].parameters())
             # print(game.get_policy_for_all_states(new_th, i))
             # 1/0
+
+            if other_terms is not None:
+                counter = 0
+                sum_terms = sum(other_terms)
+                for param in new_th[i].parameters():
+                    param_len = param.flatten().shape[0]
+                    term_to_add = sum_terms[counter: counter + param_len]
+                    param.data -= lr_policies_outer[i] * term_to_add.reshape(param.shape)
+                    # TODO check if reshaping is correctly done
+                    counter += param_len
+
+            # print(game.get_policy_for_all_states(new_th, i))
 
 
     prev_pol = curr_pol.detach().clone()
@@ -1039,7 +1268,7 @@ def print_exact_policy(th, i):
     print(
         "---Agent {} Rollout---".format(i + 1))
     for j in range(len(th)):
-        print("Agent {} Policy".format(j+1))
+        print("Agent {} Policy".format(j+1), flush=True)
         print(torch.sigmoid(th[j]))
 
         if args.ill_condition:
@@ -1265,7 +1494,7 @@ def update_th_taylor_approx_exact_value(th, game):
                         print("loop start")
                         for j in range(len(new_th)):
                             if j != i:
-                                print("Agent {}".format(j))
+                                print("Agent {}".format(j), flush=True)
                                 print(torch.sigmoid(new_th[j]))
 
                     new_th, other_terms = inner_exact_loop_step(new_th,
@@ -1397,33 +1626,27 @@ def update_th_exact_value(th, game):
 
             curr_pol = game.get_policy_for_all_states(th, i).detach() # just an initialization, will be updated in the outer step loop
             # curr_pol = copy.deepcopy(th[i])
-            while not fixed_point_reached:
-                # treating th as th' here
-                # and static_th_copy as th which isn't moving
+
+            # treating th as th' here
+            # and static_th_copy as th which isn't moving
+            if args.inner_exact_prox:
                 if args.using_nn:
-                    # Reconstruct on every outer loop iter. The idea is this:
-                    # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
-                    # Then update own policy, ONCE
-                    # Then we repeat, starting from the static th for all other players' policies
-                    # but now we have the old policies of all other players but our own updated policy
-                    # Then the other players again solve the prox objective, but with our new policy
-                    # And then we take another step
-                    # And repeat
-                    # This is analogous to what the IFT does after we have found a fixed point (though we can't warm start here)
+                    # Do only once if we have inner_exact_prox
                     th_with_only_agent_i_updated = copy.deepcopy(
                         static_th_copy)
                     th_with_only_agent_i_updated[i] = th[i]
 
                     new_th, optims_th_primes = \
                         construct_f_th_and_diffoptim(n_agents, i,
-                                                         th_with_only_agent_i_updated,
-                                                         lr_policies_outer,
-                                                         lr_policies_inner
-                                                         )
+                                                     th_with_only_agent_i_updated,
+                                                     lr_policies_outer,
+                                                     lr_policies_inner
+                                                     )
                 else:
                     new_th = get_th_copy(static_th_copy)
                     new_th[i] = th[i]
 
+            while not fixed_point_reached:
 
                 # --- INNER LOOP ---
                 other_terms = None
@@ -1431,8 +1654,40 @@ def update_th_exact_value(th, game):
                     new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy,
                                           game, i, n, prox_f_step_sizes=lr_policies_inner)
 
+                    if args.using_nn:
+                        new_th, optims_th_primes = \
+                            construct_f_th_and_diffoptim(n_agents, i,
+                                                         new_th,
+                                                         lr_policies_outer,
+                                                         lr_policies_inner
+                                                         )
 
                 else:
+                    if args.using_nn:
+                        # Reconstruct on every outer loop iter. This is if no inner exact prox
+                        # The idea is this:
+                        # Starting from the static th, take steps updating all the other player policies for x inner steps (roughly until convegence or doesn't have to be)
+                        # Then update own policy, ONCE
+                        # Then we repeat, starting from the static th for all other players' policies
+                        # but now we have the old policies of all other players but our own updated policy
+                        # Then the other players again solve the prox objective, but with our new policy
+                        # And then we take another step
+                        # And repeat
+                        # This is analogous to what the IFT does after we have found a fixed point (though we can't warm start here)
+                        th_with_only_agent_i_updated = copy.deepcopy(
+                            static_th_copy)
+                        th_with_only_agent_i_updated[i] = th[i]
+
+                        new_th, optims_th_primes = \
+                            construct_f_th_and_diffoptim(n_agents, i,
+                                                         th_with_only_agent_i_updated,
+                                                         lr_policies_outer,
+                                                         lr_policies_inner
+                                                         )
+                    else:
+                        new_th = get_th_copy(static_th_copy)
+                        new_th[i] = th[i]
+
                     inner_losses = game.get_exact_loss(new_th)
 
                     for j in range(n):
@@ -1613,6 +1868,8 @@ if __name__ == "__main__":
     parser.add_argument("--state_type", type=str, default="one_hot",
                         choices=['mnist', 'one_hot', 'majorTD4', 'old'],
                         help="For IPD/social dilemma, choose the state/obs representation type. One hot is the default. MNIST feeds in MNIST digits (0 or 1) instead of one hot class 0, class 1, etc. Old is there to support original/old formulation where we just had state representation 0,1,2. This is fine with tabular but causes issues with function approximation (where since 1 is coop, 2 is essentially 'super coop')")
+    parser.add_argument("--custom_param", type=str, default="random",
+                        choices=['random', '1', '2', '3', '4', '5', '6', '7', 'mix'], help="For experimenting with custom setting for nn")
     parser.add_argument("--clip_epsilon", type=float, default=0.2, help="PPO style clip hyperparameter")
     parser.add_argument("--gamma", type=float, default=0.96, help="discount rate")
     parser.add_argument("--print_every", type=int, default=200, help="Print every x number of epochs")
@@ -1750,16 +2007,27 @@ if __name__ == "__main__":
         #                                  [0, -2., 0., 0., 1.]])
 
         # Below already very interesting and shows that regular LOLA tabular can fail too.
-        ill_cond_matrix1 = torch.tensor([[.2, 0, -4., 0, 0.],
-                                         [0., .2, -4, 0., 0.],
-                                         [0, 0., .2, 0, 0.],
-                                         [0, 0., -4., .2, 0.],
-                                         [0, 0., -4., 0., 1.]])
-        ill_cond_matrix2 = torch.tensor([[.2, -4, 0., 0, 0.],
-                                         [0., .2, 0, 0., 0.],
-                                         [0, -4., .2, 0, 0.],
-                                         [0, -4., 0., .2, 0.],
-                                         [0, -4., 0., 0., 2.]])
+        # ill_cond_matrix1 = torch.tensor([[.2, 0, -4., 0, 0.],
+        #                                  [0., .2, -4, 0., 0.],
+        #                                  [0, 0., .2, 0, 0.],
+        #                                  [0, 0., -4., .2, 0.],
+        #                                  [0, 0., -4., 0., 1.]])
+        # ill_cond_matrix2 = torch.tensor([[.2, -4, 0., 0, 0.],
+        #                                  [0., .2, 0, 0., 0.],
+        #                                  [0, -4., .2, 0, 0.],
+        #                                  [0, -4., 0., .2, 0.],
+        #                                  [0, -4., 0., 0., 1.]])
+
+        ill_cond_matrix1 = torch.tensor([[1, 0, -2., 0, 0.],
+                                         [0., 1, -2, 0., 0.],
+                                         [0, 0., 1, 0, 0.],
+                                         [0, 0., -2., 1, 0.],
+                                         [0, 0., -2., 0., 1.]])
+        ill_cond_matrix2 = torch.tensor([[1, -2, 0., 0, 0.],
+                                         [0., 1, 0, 0., 0.],
+                                         [0, -2., 1, 0, 0.],
+                                         [0, -2., 0., 1, 0.],
+                                         [0, -2., 0., 0., 1.]])
 
 
 
@@ -1948,7 +2216,7 @@ if __name__ == "__main__":
                 G_ts_record[epoch] = -torch.stack(losses).detach()
 
                 if (epoch + 1) % print_every == 0:
-                    print("Epoch: " + str(epoch + 1))
+                    print("Epoch: " + str(epoch + 1), flush=True)
                     curr = timer()
                     print("Time Elapsed: {:.1f} seconds".format(curr - start))
 
