@@ -18,8 +18,15 @@ import random
 
 from timeit import default_timer as timer
 
+import os
 
 
+def checkpoint(th, vals, tag, args):
+    ckpt_dict = {
+        "th": th,
+        "vals": vals
+    }
+    torch.save(ckpt_dict, os.path.join(args.save_dir, tag))
 
 def bin_inttensor_from_int(x, n):
     """Converts decimal value integer x into binary representation.
@@ -1109,6 +1116,16 @@ class RNN(nn.Module):
         return out
 
 
+def load_th_vals():
+    assert args.load_path is not None
+    assert args.using_nn # Not supported for tabular yet
+    print(f"loading model from {args.load_path}")
+    ckpt_dict = torch.load(args.load_path)
+    th = ckpt_dict["th"]
+    vals = ckpt_dict["vals"]
+    return th, vals
+
+
 # TODO maybe this should go into the game definition itself and be part of that class instead of separate
 def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
     th = []
@@ -1169,7 +1186,6 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
             # DONT FORGET THIS +1
             # Right now if you omit the +1 we get a bug where the first state is the prob in the all contrib state
             th.append(torch.nn.init.normal_(torch.empty(2**n_agents + 1, requires_grad=True), std=args.std))
-
 
     # optims_th = construct_optims(th, lr_policies)
     # optims = None
@@ -2291,9 +2307,9 @@ if __name__ == "__main__":
     # parser.add_argument("--outer_repeat_train_on_same_samples",
     #                     action="store_true",
     #                     help="Repeat train on the same samples in the outer loop too (from first outer loop rollout only)") Recommended not to use this for now. I don't understand it well enough.
-
-    # parser.add_argument("--use_clipping", action="store_true",
-    #                     help="Do the PPO style clipping")
+    parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
+    parser.add_argument("--checkpoint_every", type=int, default=1, help="Epochs between checkpoint save")
+    parser.add_argument("--save_dir", type=str, default='./checkpoints')
     parser.add_argument("--inner_penalty", action="store_true",
                         help="Apply PPO style adaptive KL penalty on inner loop steps")
     parser.add_argument("--outer_penalty", action="store_true",
@@ -2342,7 +2358,7 @@ if __name__ == "__main__":
                         help="value updates on the inner dice loop")
     parser.add_argument("--two_way_clip", action="store_true",
                         help="use 2 way clipping instead of PPO clip")
-    parser.add_argument("--base_cf_no_scale", type=float, default=1.6,
+    parser.add_argument("--base_cf_no_scale", type=float, default=1.33,
                         help="base contribution factor for no scaling (right now for 2 agents)")
     parser.add_argument("--base_cf_scale", type=float, default=0.6,
                         help="base contribution factor with scaling (right now for >2 agents)")
@@ -2590,7 +2606,11 @@ if __name__ == "__main__":
                                         full_seq_obs=args.using_rnn)
                 dims = game.dims
 
-            th, vals, optims_vals = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env)
+            if args.load_path is not None:
+                th, vals = load_th_vals()
+                optims_vals = construct_optims(vals, lr_values)
+            else:
+                th, vals, optims_vals = init_custom(dims, args.state_type, args.using_nn, args.using_rnn, args.env)
 
 
             if using_DiCE:
@@ -2898,6 +2918,10 @@ if __name__ == "__main__":
                     # Reevaluate to get the G_ts from synchronous play
                     losses = game.get_exact_loss(th)
                     G_ts_record[epoch] = torch.stack(losses).detach()
+
+                if (epoch + 1) % args.checkpoint_every == 0:
+                    now = datetime.datetime.now()
+                    checkpoint(th, vals, "checkpoint_{}_{}.pt".format(epoch + 1, now.strftime('%Y-%m-%d_%H-%M')), args)
 
                 if (epoch + 1) % print_every == 0:
                     print("Epoch: " + str(epoch + 1), flush=True)
