@@ -2140,8 +2140,14 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
             # --- INNER LOOP ---
             if args.inner_repeat_train_on_same_samples:
                 # Rollout in the environment only once per inner loop
-                action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
-                    mixed_thetas, mixed_vals)
+                if args.env == 'coin':
+                    obs_history, action_trajectory, rewards, policy_history, \
+                    val_history, next_val_history, avg_same_colour_coins_picked_total, \
+                    avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
+                        mixed_thetas, mixed_vals)
+                else:
+                    action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
+                        mixed_thetas, mixed_vals)
                 if outer_step == 0:
                     kl_div_target_policy_inner = policy_history.detach().clone()
                 for inner_step in range(K):
