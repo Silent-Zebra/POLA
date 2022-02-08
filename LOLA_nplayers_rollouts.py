@@ -20,6 +20,8 @@ from timeit import default_timer as timer
 
 import os
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 def checkpoint(th, vals, tag, args):
     ckpt_dict = {
@@ -1099,7 +1101,7 @@ class ConvFC(nn.Module):
 class RNN(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_rnn_layers, final_softmax):
         super().__init__()
-        self.RNN = nn.RNN(input_size=input_size,
+        self.rnn = nn.RNN(input_size=input_size,
                           hidden_size=hidden_size,
                           num_layers=num_rnn_layers,
                           nonlinearity='tanh',
@@ -1109,7 +1111,8 @@ class RNN(nn.Module):
         self.init_hidden_state = torch.zeros([num_rnn_layers, args.batch_size, hidden_size]).requires_grad_(True)
 
     def forward(self, x):
-        output, hn = self.RNN(x)
+        self.rnn.flatten_parameters()
+        output, hn = self.rnn(x)
         out = self.linear(output[:, -1, :])
         if self.final_softmax:
             out = torch.nn.functional.softmax(out, dim=-1)
@@ -1174,7 +1177,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
 
             # print(f_policy_net)
 
-            th.append(policy_net)
+            th.append(policy_net.to(device))
 
             # f_th.append(f_policy_net)
 
@@ -1220,7 +1223,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
                     vals_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size,
                                       extra_hidden_layers=nn_extra_hidden_layers,
                                       output_size=1, final_sigmoid=False)
-            vals.append(vals_net)
+            vals.append(vals_net.to(device))
             # f_vals_net = higher.patch.monkeypatch(vals_net,
             #                                         copy_initial_weights=True,
             #                                         track_higher_grads=False)
@@ -2590,10 +2593,9 @@ if __name__ == "__main__":
             # Using samples instead of exact here
 
             if args.env == "coin":
-                from coin_game import CoinGameVec
+                from coin_game import CoinGameGPU
                 # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
-                game = CoinGameVec(max_steps=rollout_len, batch_size=batch_size,
-                                   history_len=args.history_len, full_seq_obs=args.using_rnn)
+                game = CoinGameGPU(max_steps=rollout_len, batch_size=batch_size, gamma=args.gamma)
                 dims = game.dims_with_history
             elif args.env == "imp":
                 from matching_pennies import IteratedMatchingPennies
