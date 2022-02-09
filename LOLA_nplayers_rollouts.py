@@ -20,7 +20,6 @@ from timeit import default_timer as timer
 
 import os
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def checkpoint(th, vals, tag, args):
@@ -39,7 +38,7 @@ def bin_inttensor_from_int(x, n):
 
 
 def build_bin_matrix(n, size):
-    bin_mat = torch.zeros((size, n))
+    bin_mat = torch.zeros((size, n), device=device)
     for i in range(size):
         l = bin_inttensor_from_int(i, n)
         bin_mat[i] = l
@@ -113,7 +112,7 @@ class Game():
             dim = self.n_agents * self.history_len
 
         state_batch = torch.cat((build_bin_matrix(dim, 2 ** dim),
-                                 torch.Tensor([init_state_representation] * dim).reshape(1, -1)))
+                                 torch.Tensor([init_state_representation] * dim).reshape(1, -1).to(device)))
 
         if self.state_type == 'mnist':
             state_batch = self.build_mnist_state_from_classes(state_batch)
@@ -136,7 +135,7 @@ class Game():
             n_states = state_batch.shape[0] - 1
 
             two_step_state_batch = torch.zeros(
-                (n_states ** 2, 2, state_batch.shape[1]))
+                (n_states ** 2, 2, state_batch.shape[1]), device=device)
             # print(two_step_state_batch.shape)
             # print(state_batch.shape)
             for i in range(n_states):
@@ -321,7 +320,7 @@ class ContributionGame(Game):
         self.state_space = self.dims[0]
         self.bin_mat = build_bin_matrix(self.n_agents, 2 ** self.n_agents )
         # print(self.bin_mat)
-        self.payout_vectors = torch.zeros((n, 2 ** self.n_agents))  # one vector for each player, state space - 1 because one is the initial state. This is the r^1 or r^2 in the LOLA paper exact gradient formulation. In the 2p case this is for DD, DC, CD, CC
+        self.payout_vectors = torch.zeros((n, 2 ** self.n_agents), device=device)  # one vector for each player, state space - 1 because one is the initial state. This is the r^1 or r^2 in the LOLA paper exact gradient formulation. In the 2p case this is for DD, DC, CD, CC
 
         for agent in range(n):
             for state in range(2 ** self.n_agents):
@@ -336,7 +335,7 @@ class ContributionGame(Game):
     def build_mnist_state_from_classes(self, batch_tensor):
         batch_tensor_dims = batch_tensor.shape
 
-        mnist_state = torch.zeros((batch_tensor_dims[0], batch_tensor_dims[1], 28, 28))
+        mnist_state = torch.zeros((batch_tensor_dims[0], batch_tensor_dims[1], 28, 28), device=device)
         # Should try to optimize/vectorize
         for b in range(batch_tensor_dims[0]):
             for c in range(batch_tensor_dims[1]):
@@ -357,32 +356,30 @@ class ContributionGame(Game):
 
     def get_init_state_batch(self):
         if self.state_type == 'mnist':
-            integer_state_batch = torch.ones(
-                (self.batch_size,
-                 self.n_agents * self.history_len)) * init_state_representation
+            integer_state_batch = torch.ones((self.batch_size,
+                 self.n_agents * self.history_len), device=device) * init_state_representation
             init_state_batch = self.build_mnist_state_from_classes(integer_state_batch)
 
         elif self.state_type == 'one_hot':
             # Note that in the 1 hot state representation, class 0 is defect (0 contribution),
             # class 1 is cooperate (1 contribution)
             # class 2 is start state (unused (i.e. always 0) if initializing to coop in the first state (init_state_representation 1))
-            init_state_batch = torch.zeros(
-                (self.batch_size,
-                 self.n_agents * self.history_len, self.action_repr_dim))
+            init_state_batch = torch.zeros((self.batch_size,
+                 self.n_agents * self.history_len, self.action_repr_dim), device=device)
             init_state_batch[:,:,init_state_representation] += 1
             init_state_batch = init_state_batch.reshape(self.batch_size, self.n_agents * self.history_len * self.action_repr_dim)
 
         elif self.state_type == 'majorTD4':
             init_state_batch = torch.zeros(
                 (self.n_agents, self.batch_size,
-                 2 * self.history_len, self.action_repr_dim)) # additional self.n_agents at the beginning because we need different obs for different agents here
+                 2 * self.history_len, self.action_repr_dim), device=device) # additional self.n_agents at the beginning because we need different obs for different agents here
             init_state_batch[:, :, :, init_state_representation] += 1
             init_state_batch = init_state_batch.reshape(self.n_agents, self.batch_size, 2 * self.history_len * self.action_repr_dim)
             # So then here this is not really a state batch, but more of an observation batch
 
         else: # old / only for tabular, just 0, 1, or 2 for the state
             init_state_batch = torch.ones(
-                (self.batch_size, self.n_agents * self.history_len)) * init_state_representation
+                (self.batch_size, self.n_agents * self.history_len), device=device) * init_state_representation
 
         if self.full_seq_obs:
             init_state_batch = init_state_batch.unsqueeze(1)
@@ -451,8 +448,8 @@ class ContributionGame(Game):
         return policy, state_value
 
     def get_policy_vals_indices_for_iter(self, th, vals, state_batch, iter):
-        policies = torch.zeros((self.n_agents, self.batch_size, 1))
-        state_values = torch.zeros((self.n_agents, self.batch_size, 1))
+        policies = torch.zeros((self.n_agents, self.batch_size, 1), device=device)
+        state_values = torch.zeros((self.n_agents, self.batch_size, 1), device=device)
         for i in range(self.n_agents):
 
             if self.state_type == 'majorTD4':
@@ -484,7 +481,7 @@ class ContributionGame(Game):
             th, vals, ending_state_batch, iter)
 
         next_val_history = torch.zeros(
-            (self.num_iters, self.n_agents, self.batch_size, 1))
+            (self.num_iters, self.n_agents, self.batch_size, 1), device=device)
         next_val_history[:self.num_iters - 1, :, :, :] = \
             val_history[1:self.num_iters, :, :, :]
         next_val_history[-1, :, :, :] = ending_state_values
@@ -498,12 +495,12 @@ class ContributionGame(Game):
         # used to rollout in the environment)
         # next_val_history is also based off of the current values (vals)
 
-        coop_probs = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
+        coop_probs = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), device=device)
         init_state_batch = self.get_init_state_batch()
         state_batch = init_state_batch
 
         state_vals = torch.zeros(
-            (self.num_iters, self.n_agents, self.batch_size, 1))
+            (self.num_iters, self.n_agents, self.batch_size, 1), device=device)
 
         for iter in range(self.num_iters):
 
@@ -522,12 +519,12 @@ class ContributionGame(Game):
 
 
     def one_hot_to_simple_repr(self, one_hot_batch):
-        simple_repr_tensor = torch.zeros((one_hot_batch.shape[0], self.n_agents))
+        simple_repr_tensor = torch.zeros((one_hot_batch.shape[0], self.n_agents), device=device)
         # No history len > 1 supported here
         start = 0
         end = self.action_repr_dim
 
-        index_collector = torch.zeros((one_hot_batch.shape[0], self.action_repr_dim))
+        index_collector = torch.zeros((one_hot_batch.shape[0], self.action_repr_dim), device=device)
         for a in range(self.action_repr_dim):
             index_collector[:, a] += a
 
@@ -566,16 +563,16 @@ class ContributionGame(Game):
         state_batch = init_state_batch
 
         if self.state_type == 'mnist':
-            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.history_len, 28, 28))
+            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.history_len, 28, 28), device=device)
         elif self.state_type == 'majorTD4':
-            obs_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 2 * self.action_repr_dim * self.history_len))
+            obs_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 2 * self.action_repr_dim * self.history_len), device=device)
         else:
-            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.action_repr_dim * self.history_len))
+            obs_history = torch.zeros((self.num_iters, self.batch_size, self.n_agents * self.action_repr_dim * self.history_len), device=device)
         # trajectory just tracks actions, doesn't track the init state
-        action_trajectory = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), dtype=torch.int)
-        rewards = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
-        policy_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
-        val_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1))
+        action_trajectory = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), dtype=torch.int, device=device)
+        rewards = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), device=device)
+        policy_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), device=device)
+        val_history = torch.zeros((self.num_iters, self.n_agents, self.batch_size, 1), device=device)
 
         if self.full_seq_obs:
             obs_history = []
@@ -598,7 +595,7 @@ class ContributionGame(Game):
             if self.state_type == 'one_hot':
                 curr_step_batch = self.build_one_hot_from_batch(curr_step_batch, self.action_repr_dim)
             elif self.state_type == 'majorTD4':
-                curr_step_batch = torch.zeros((self.n_agents, self.batch_size, 2 * self.action_repr_dim * self.history_len))
+                curr_step_batch = torch.zeros((self.n_agents, self.batch_size, 2 * self.action_repr_dim * self.history_len), device=device)
                 for i in range(self.n_agents):
                     num_other_contributors = total_contrib - actions[i]
 
@@ -641,7 +638,9 @@ class ContributionGame(Game):
                 if self.state_type == 'mnist':
                     state_batch = self.build_mnist_state_from_classes(state_batch)
 
-            action_trajectory[iter] = torch.Tensor(actions)
+            action_trajectory[iter] = actions
+
+            # action_trajectory[iter] = torch.Tensor(actions).to(device)
 
             if self.full_seq_obs:
                 obs_history.append(state_batch)
@@ -665,7 +664,7 @@ class ContributionGame(Game):
     def get_loss_helper(self, trajectory, rewards, policy_history, old_policy_history = None):
         num_iters = len(trajectory)
 
-        discounts = torch.cumprod(self.gamma * torch.ones((num_iters)),
+        discounts = torch.cumprod(self.gamma * torch.ones((num_iters), device=device),
                                   dim=0) / self.gamma
 
         # Discounted rewards, not sum of rewards which G_t is
@@ -701,7 +700,7 @@ class ContributionGame(Game):
         # no LOLA loss here yet
         objective_nl = (log_p_act * G_ts).sum(dim=0)
 
-        log_p_times_G_t_matrix = torch.zeros((self.n_agents, self.n_agents))
+        log_p_times_G_t_matrix = torch.zeros((self.n_agents, self.n_agents), device=device)
         # so entry 0,0 is - (log_p_act[:,0] * G_ts[:,0]).sum(dim=0)
         # entry 1,1 is - (log_p_act[:,1] * G_ts[:,1]).sum(dim=0)
         # and so on
@@ -732,7 +731,7 @@ class ContributionGame(Game):
         # So then you also want grad_1 grad_3 of R_3
         # and so on
 
-        grad_1_grad_2_matrix = torch.zeros((self.n_agents, self.n_agents, self.batch_size, 1))
+        grad_1_grad_2_matrix = torch.zeros((self.n_agents, self.n_agents, self.batch_size, 1), device=device)
         for i in range(self.n_agents):
             for j in range(self.n_agents):
                 grad_1_grad_2_matrix[i][j] = (torch.FloatTensor(gamma_t_r_ts)[:,
@@ -758,7 +757,7 @@ class ContributionGame(Game):
                  param in
                  th[i].parameters()])
             grad_len = len(example_grad)
-            grad_log_p_act.append(torch.zeros((rollout_len, self.batch_size, grad_len)))
+            grad_log_p_act.append(torch.zeros((rollout_len, self.batch_size, grad_len)), device=device)
 
         for i in range(self.n_agents):
 
@@ -832,7 +831,7 @@ class ContributionGame(Game):
 
             if use_penalty:
                 # Calculate KL Divergence
-                kl_divs = torch.zeros((self.n_agents))
+                kl_divs = torch.zeros((self.n_agents), device=device)
 
                 if kl_div_target_policy is None:
                     assert old_policy_history is not None
@@ -2405,6 +2404,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    device = "cpu"
+    if args.using_nn and args.env == 'coin':
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     torch.autograd.set_detect_anomaly(True)
 
     init_state_representation = args.init_state_representation
@@ -2506,10 +2509,10 @@ if __name__ == "__main__":
             raise Exception("Having two of batch size, rollout len, or n_agents equal will cause insidious bugs when reshaping dimensions")
             # TODO refactor/think about a way to avoid these bugs
 
-        lr_policies_outer = torch.tensor([args.lr_policies_outer] * n_agents)
-        lr_policies_inner = torch.tensor([args.lr_policies_inner] * n_agents)
+        lr_policies_outer = torch.tensor([args.lr_policies_outer] * n_agents, device=device)
+        lr_policies_inner = torch.tensor([args.lr_policies_inner] * n_agents, device=device)
 
-        lr_values = torch.tensor([args.lr_values] * n_agents)
+        lr_values = torch.tensor([args.lr_values] * n_agents, device=device)
 
         if not contribution_scale:
             inf_coop_payout = 1 / (1 - gamma) * (contribution_factor - 1)
@@ -2636,9 +2639,9 @@ if __name__ == "__main__":
 
             # Run
             if using_samples:
-                G_ts_record = torch.zeros((num_epochs, n_agents, batch_size, 1))
+                G_ts_record = torch.zeros((num_epochs, n_agents, batch_size, 1) , device=device)
             else:
-                G_ts_record = torch.zeros((num_epochs, n_agents))
+                G_ts_record = torch.zeros((num_epochs, n_agents), device=device)
 
             if args.dice_grad_calc:
                 total_is_in_tft_direction_p1 = 0
