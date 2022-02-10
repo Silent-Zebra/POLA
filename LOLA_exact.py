@@ -1902,7 +1902,7 @@ if __name__ == "__main__":
     #                     help="use MNIST digits as state representation") # Deprecated, see state_type
     parser.add_argument("--init_state_representation", type=int, default=2)
     parser.add_argument("--rollout_len", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
-    parser.add_argument("--base_cf_no_scale", type=float, default=1.6,
+    parser.add_argument("--base_cf_no_scale", type=float, default=1.33,
                         help="base contribution factor for no scaling (right now for 2 agents)")
     parser.add_argument("--base_cf_scale", type=float, default=0.6,
                         help="base contribution factor with scaling (right now for >2 agents)")
