@@ -129,7 +129,6 @@ class Hp():
 hp = Hp()
 
 env = CoinGameGPU(max_steps=hp.len_rollout, batch_size=hp.batch_size)
-# ipd = IPD(hp.len_rollout, hp.batch_size)
 
 def magic_box(x):
     return torch.exp(x - x.detach())
@@ -184,6 +183,8 @@ def apply(batch_states, theta, hidden):
     batch_states = batch_states.flatten(start_dim=1)
     x = batch_states.matmul(theta[0])
     x = theta[1] + x
+
+    x = torch.relu(x)
     
     gate_x = x.matmul(theta[2])
     gate_x = gate_x + theta[3]
