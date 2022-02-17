@@ -3,26 +3,9 @@ import math
 import torch.nn as nn
 from torch.distributions import Categorical
 import numpy as np
+import argparse
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-
-class Hp():
-    def __init__(self):
-        self.lr_out = 0.005
-        self.lr_in = 0.0
-        self.lr_v = 0.005
-        self.gamma = 0.96
-        self.n_update = 1000  # 200 # epochs
-        self.len_rollout = 50
-        self.batch_size = 2048  # 256 # 4000 #256
-        self.use_baseline = True
-        self.seed = 2342
-        self.hidden_size = 16
-        self.print_every = 10
-
-
-hp = Hp()
 
 
 class CoinGameGPU:
@@ -175,8 +158,6 @@ class CoinGameGPU:
         blue_blue_matches.sum())
 
 
-env = CoinGameGPU(max_steps=hp.len_rollout, batch_size=hp.batch_size)
-
 
 def magic_box(x):
     return torch.exp(x - x.detach())
@@ -202,8 +183,8 @@ class Memory():
         rewards = torch.stack(self.rewards, dim=1)
 
         # apply discount:
-        cum_discount = torch.cumprod(hp.gamma * torch.ones(*rewards.size()),
-                                     dim=1).to(device) / hp.gamma
+        cum_discount = torch.cumprod(args.gamma * torch.ones(*rewards.size()),
+                                     dim=1).to(device) / args.gamma
         discounted_rewards = rewards * cum_discount
         discounted_values = values * cum_discount
 
@@ -217,7 +198,7 @@ class Memory():
         dice_objective = torch.mean(
             torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
 
-        if hp.use_baseline:
+        if use_baseline:
             # variance_reduction:
             baseline_term = torch.mean(
                 torch.sum((1 - magic_box(stochastic_nodes)) * discounted_values,
@@ -285,17 +266,17 @@ def step(theta1, theta2, values1, values2):
     score1 = 0
     score2 = 0
     h_p1, h_v1, h_p2, h_v2 = (
-    torch.zeros(hp.batch_size, hp.hidden_size).to(device),
-    torch.zeros(hp.batch_size, hp.hidden_size).to(device),
-    torch.zeros(hp.batch_size, hp.hidden_size).to(device),
-    torch.zeros(hp.batch_size, hp.hidden_size).to(device))
-    for t in range(hp.len_rollout):
+    torch.zeros(args.batch_size, args.hidden_size).to(device),
+    torch.zeros(args.batch_size, args.hidden_size).to(device),
+    torch.zeros(args.batch_size, args.hidden_size).to(device),
+    torch.zeros(args.batch_size, args.hidden_size).to(device))
+    for t in range(args.len_rollout):
         a1, lp1, v1, h_p1, h_v1 = act(s1, theta1, values1, h_p1, h_v1)
         a2, lp2, v2, h_p2, h_v2 = act(s2, theta2, values2, h_p2, h_v2)
         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
         # cumulate scores
-        score1 += torch.mean(r1) / float(hp.len_rollout)
-        score2 += torch.mean(r2) / float(hp.len_rollout)
+        score1 += torch.mean(r1) / float(args.len_rollout)
+        score2 += torch.mean(r2) / float(args.len_rollout)
 
         # print(info)
 
@@ -349,8 +330,8 @@ class Agent():
         ]).to(device)
 
         self.reset_parameters()
-        self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=hp.lr_out)
-        self.value_optimizer = torch.optim.Adam(self.theta_v, lr=hp.lr_v)
+        self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=args.lr_out)
+        self.value_optimizer = torch.optim.Adam(self.theta_v, lr=args.lr_v)
 
     def reset_parameters(self):
         std = 1.0 / math.sqrt(self.hidden_size)
@@ -375,12 +356,12 @@ class Agent():
         (s1, s2) = env.reset()
         other_memory = Memory()
         h_p1, h_v1, h_p2, h_v2 = (
-        torch.zeros(hp.batch_size, self.hidden_size).to(device),
-        torch.zeros(hp.batch_size, self.hidden_size).to(device),
-        torch.zeros(hp.batch_size, self.hidden_size).to(device),
-        torch.zeros(hp.batch_size, self.hidden_size).to(device))
+        torch.zeros(args.batch_size, self.hidden_size).to(device),
+        torch.zeros(args.batch_size, self.hidden_size).to(device),
+        torch.zeros(args.batch_size, self.hidden_size).to(device),
+        torch.zeros(args.batch_size, self.hidden_size).to(device))
 
-        for t in range(hp.len_rollout):
+        for t in range(args.len_rollout):
             a1, lp1, v1, h_p1, h_v1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
             a2, lp2, v2, h_p2, h_v2 = act(s2, other_theta, other_values, h_p2,
@@ -396,11 +377,11 @@ class Agent():
         (s1, s2) = env.reset()
         memory = Memory()
         h_p1, h_v1, h_p2, h_v2 = (
-        torch.zeros(hp.batch_size, self.hidden_size).to(device),
-        torch.zeros(hp.batch_size, self.hidden_size).to(device),
-        torch.zeros(hp.batch_size, self.hidden_size).to(device),
-        torch.zeros(hp.batch_size, self.hidden_size).to(device))
-        for t in range(hp.len_rollout):
+        torch.zeros(args.batch_size, self.hidden_size).to(device),
+        torch.zeros(args.batch_size, self.hidden_size).to(device),
+        torch.zeros(args.batch_size, self.hidden_size).to(device),
+        torch.zeros(args.batch_size, self.hidden_size).to(device))
+        for t in range(args.len_rollout):
             a1, lp1, v1, h_p1, h_v1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
             a2, lp2, v2, h_p2, h_v2 = act(s2, other_theta, other_values, h_p2,
@@ -419,7 +400,7 @@ class Agent():
 def play(agent1, agent2, n_lookaheads):
     joint_scores = []
     print("start iterations with", n_lookaheads, "lookaheads:")
-    for update in range(hp.n_update):
+    for update in range(args.n_update):
         # copy other's parameters:
         theta1_ = [torch.tensor(tp.detach(), requires_grad=True) for tp in
                    agent1.theta_p]
@@ -435,9 +416,9 @@ def play(agent1, agent2, n_lookaheads):
             grad2 = agent1.in_lookahead(theta2_, values2_)
             grad1 = agent2.in_lookahead(theta1_, values1_)
             # update other's theta
-            theta2_ = [theta2_[i] - hp.lr_in * grad2[i] for i in
+            theta2_ = [theta2_[i] - args.lr_in * grad2[i] for i in
                        range(len(theta2_))]
-            theta1_ = [theta1_[i] - hp.lr_in * grad1[i] for i in
+            theta1_ = [theta1_[i] - args.lr_in * grad1[i] for i in
                        range(len(theta1_))]
 
         # update own parameters from out_lookahead:
@@ -453,7 +434,7 @@ def play(agent1, agent2, n_lookaheads):
         joint_scores.append(0.5 * (score[0] + score[1]))
 
         # print
-        if update % hp.print_every == 0:
+        if update % args.print_every == 0:
             #             p1 = [p.item() for p in torch.sigmoid(agent1.theta)]
             #             p2 = [p.item() for p in torch.sigmoid(agent2.theta)]
             #             print('update', update, 'score (%.3f,%.3f)' % (score[0], score[1]) , 'policy (agent1) = {%.3f, %.3f, %.3f, %.3f, %.3f}' % (p1[0], p1[1], p1[2], p1[3], p1[4]),' (agent2) = {%.3f, %.3f, %.3f, %.3f, %.3f}' % (p2[0], p2[1], p2[2], p2[3], p2[4]))
@@ -470,8 +451,33 @@ def play(agent1, agent2, n_lookaheads):
     return joint_scores
 
 
-lookaheads = 0
-input_size = 36
-action_size = 4
-scores = play(Agent(input_size, hp.hidden_size, action_size),
-              Agent(input_size, hp.hidden_size, action_size), lookaheads)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser("NPLOLA")
+    parser.add_argument("--lookaheads", type=int, default=1, help="inner loop steps for DiCE")
+    parser.add_argument("--lr_out", type=float, default=0.005,
+                        help="outer loop learning rate: same learning rate across all policies for now")
+    parser.add_argument("--lr_in", type=float, default=0.05,
+                        help="inner loop learning rate (eta): this has no use in the naive learning case. Used for the gradient step done for the lookahead for other agents during LOLA (therefore, often scaled to be higher than the outer learning rate in non-proximal LOLA). Note that this has a different meaning for the Taylor approx vs. actual update versions. A value of eta=1 is perfectly reasonable for the Taylor approx version as this balances the scale of the gradient with the naive learning term (and will be multiplied by the outer learning rate after), whereas for the actual update version with neural net, 1 is way too big an inner learning rate. For prox, this is the learning rate on the inner prox loop so is not that important - you want big enough to be fast-ish, but small enough to converge.")
+    parser.add_argument("--lr_v", type=float, default=0.001,
+                        help="same learning rate across all policies for now. Should be around maybe 0.001 or less for neural nets to avoid instability")
+    parser.add_argument("--gamma", type=float, default=0.96, help="discount rate")
+    parser.add_argument("--n_update", type=int, default=1000, help="number of epochs to run")
+    parser.add_argument("--len_rollout", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=2342, help="for seed")
+    parser.add_argument("--hidden_size", type=int, default=16)
+    parser.add_argument("--print_every", type=int, default=10, help="Print every x number of epochs")
+
+    use_baseline = True
+
+    args = parser.parse_args()
+
+    input_size = 36
+    action_size = 4
+
+    env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size)
+
+    scores = play(Agent(input_size, args.hidden_size, action_size),
+                  Agent(input_size, args.hidden_size, action_size), args.lookaheads)
