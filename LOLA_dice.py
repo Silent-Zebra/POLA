@@ -38,13 +38,13 @@ class CoinGameGPU:
         red_pos_flat = torch.randint(self.grid_size * self.grid_size,
                                      size=(self.batch_size,)).to(device)
         self.red_pos = torch.stack(
-            (red_pos_flat // self.grid_size, red_pos_flat % self.grid_size),
+            (torch.div(red_pos_flat, self.grid_size, rounding_mode='floor') , red_pos_flat % self.grid_size),
             dim=-1)
 
         blue_pos_flat = torch.randint(self.grid_size * self.grid_size,
                                       size=(self.batch_size,)).to(device)
         self.blue_pos = torch.stack(
-            (blue_pos_flat // self.grid_size, blue_pos_flat % self.grid_size),
+            (torch.div(blue_pos_flat, self.grid_size, rounding_mode='floor'), blue_pos_flat % self.grid_size),
             dim=-1)
 
         red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
@@ -52,10 +52,10 @@ class CoinGameGPU:
         blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
                                            size=(self.batch_size,)).to(device)
 
-        self.red_coin_pos = torch.stack((red_coin_pos_flat // self.grid_size,
+        self.red_coin_pos = torch.stack((torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
                                          red_coin_pos_flat % self.grid_size),
                                         dim=-1)
-        self.blue_coin_pos = torch.stack((blue_coin_pos_flat // self.grid_size,
+        self.blue_coin_pos = torch.stack((torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
                                           blue_coin_pos_flat % self.grid_size),
                                          dim=-1)
 
@@ -77,7 +77,7 @@ class CoinGameGPU:
                                           size=(self.batch_size,)).to(device)[
             mask_red]
         self.red_coin_pos[mask_red] = torch.stack((
-                                                  red_coin_pos_flat // self.grid_size,
+                                                  torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
                                                   red_coin_pos_flat % self.grid_size),
                                                   dim=-1)
 
@@ -88,7 +88,7 @@ class CoinGameGPU:
                                            size=(self.batch_size,)).to(device)[
             mask_blue]
         self.blue_coin_pos[mask_blue] = torch.stack((
-                                                    blue_coin_pos_flat // self.grid_size,
+                                                    torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
                                                     blue_coin_pos_flat % self.grid_size),
                                                     dim=-1)
 
@@ -402,13 +402,13 @@ def play(agent1, agent2, n_lookaheads):
     print("start iterations with", n_lookaheads, "lookaheads:")
     for update in range(args.n_update):
         # copy other's parameters:
-        theta1_ = [torch.tensor(tp.detach(), requires_grad=True) for tp in
+        theta1_ = [tp.detach().clone().requires_grad_(True) for tp in
                    agent1.theta_p]
-        values1_ = [torch.tensor(tv.detach(), requires_grad=True) for tv in
+        values1_ = [tv.detach().clone().requires_grad_(True) for tv in
                     agent1.theta_v]
-        theta2_ = [torch.tensor(tp.detach(), requires_grad=True) for tp in
+        theta2_ = [tp.detach().clone().requires_grad_(True) for tp in
                    agent2.theta_p]
-        values2_ = [torch.tensor(tv.detach(), requires_grad=True) for tv in
+        values2_ = [tv.detach().clone().requires_grad_(True) for tv in
                     agent2.theta_v]
 
         for k in range(n_lookaheads):
@@ -474,6 +474,9 @@ if __name__ == "__main__":
     use_baseline = True
 
     args = parser.parse_args()
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     input_size = 36
     action_size = 4
