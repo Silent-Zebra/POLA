@@ -829,31 +829,31 @@ class ContributionGame(Game):
                     log_p_act_or_p_act_ratio = pos_adv * torch.minimum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1+clip_epsilon) + \
                                                (1-pos_adv) * torch.maximum(log_p_act_or_p_act_ratio,torch.zeros_like(log_p_act_or_p_act_ratio) + 1-clip_epsilon)
 
-            if use_penalty:
-                # Calculate KL Divergence
-                kl_divs = torch.zeros((self.n_agents), device=device)
+        if use_penalty:
+            # Calculate KL Divergence
+            kl_divs = torch.zeros((self.n_agents), device=device)
 
-                assert kl_div_curr_policy is not None
-                assert kl_div_target_policy is not None
+            assert kl_div_curr_policy is not None
+            assert kl_div_target_policy is not None
 
-                # Commented out to make sure I know what is happening here
-                # if kl_div_target_policy is None:
-                #     assert old_policy_history is not None
-                #     kl_div_target_policy = old_policy_history
+            # Commented out to make sure I know what is happening here
+            # if kl_div_target_policy is None:
+            #     assert old_policy_history is not None
+            #     kl_div_target_policy = old_policy_history
 
-                for i in range(self.n_agents):
+            for i in range(self.n_agents):
 
-                    policy_dist_i = self.build_policy_dist(kl_div_curr_policy, i)
-                    kl_target_dist_i = self.build_policy_dist(kl_div_target_policy, i)
+                policy_dist_i = self.build_policy_dist(kl_div_curr_policy, i)
+                kl_target_dist_i = self.build_policy_dist(kl_div_target_policy, i)
 
-                    kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist_i),
-                                                    target=kl_target_dist_i.detach(),
-                                                    reduction='batchmean',
-                                                    log_target=False)
-                    # print(kl_div)
-                    kl_divs[i] = kl_div
+                kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist_i),
+                                                target=kl_target_dist_i.detach(),
+                                                reduction='batchmean',
+                                                log_target=False)
+                # print(kl_div)
+                kl_divs[i] = kl_div
 
-                # print(kl_divs)
+            # print(kl_divs)
 
         sum_over_agents_log_p_act_or_p_act_ratio = log_p_act_or_p_act_ratio.sum(dim=1)
 
@@ -870,7 +870,7 @@ class ContributionGame(Game):
 
         dice_loss = -loaded_dice_rewards
 
-        if inner_repeat_train_on_same_samples and use_penalty:
+        if use_penalty:
             kl_divs = kl_divs.unsqueeze(-1)
 
             assert beta is not None
@@ -2453,6 +2453,10 @@ if __name__ == "__main__":
         if not args.inner_repeat_train_on_same_samples:
             raise Exception("You need repeat train for consistent kl penalty with samples (must use same samples)")
 
+    if args.outer_penalty or args.outer_clip:
+        if not args.inner_repeat_train_on_same_samples:
+            raise Exception("CHECK THIS - I think code needs inner_repeat right now")
+
     # if args.outer_penalty or args.outer_clip:
     #     if not args.outer_repeat_train_on_same_samples:
     #         raise Exception("You need repeat train for consistent kl penalty with samples (must use same samples)")
@@ -2939,13 +2943,13 @@ if __name__ == "__main__":
                                     action_trajectory, rewards,
                                     policy_history, val_history,
                                     next_val_history,
-                                    old_policy_history=policy_history, use_penalty=args.outer_penalty,
-                                    use_clipping=args.outer_clip, beta=args.outer_beta)
+                                    old_policy_history=policy_history, use_penalty=False,
+                                    use_clipping=args.outer_clip)
                             else:
                                 _, G_ts, _ = game.get_dice_loss(
                                     action_trajectory, rewards,
                                     policy_history, val_history,
-                                    next_val_history)
+                                    next_val_history, use_penalty=False)
                                     # use_penalty=args.outer_penalty,
                                     # use_clipping=args.outer_clip, beta=args.outer_beta)
 
