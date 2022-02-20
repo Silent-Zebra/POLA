@@ -792,7 +792,7 @@ class ContributionGame(Game):
 
 
     def get_dice_loss(self, trajectory, rewards, policy_history, val_history, next_val_history,
-                      old_policy_history=None, kl_div_target_policy=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
+                      old_policy_history=None, kl_div_target_policy=None, kl_div_curr_policy=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
 
         if old_policy_history is not None:
             old_policy_history = old_policy_history.detach()
@@ -833,13 +833,17 @@ class ContributionGame(Game):
                 # Calculate KL Divergence
                 kl_divs = torch.zeros((self.n_agents), device=device)
 
-                if kl_div_target_policy is None:
-                    assert old_policy_history is not None
-                    kl_div_target_policy = old_policy_history
+                assert kl_div_curr_policy is not None
+                assert kl_div_target_policy is not None
+
+                # Commented out to make sure I know what is happening here
+                # if kl_div_target_policy is None:
+                #     assert old_policy_history is not None
+                #     kl_div_target_policy = old_policy_history
 
                 for i in range(self.n_agents):
 
-                    policy_dist_i = self.build_policy_dist(policy_history, i)
+                    policy_dist_i = self.build_policy_dist(kl_div_curr_policy, i)
                     kl_target_dist_i = self.build_policy_dist(kl_div_target_policy, i)
 
                     kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist_i),
@@ -2141,7 +2145,14 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
 
             # --- INNER LOOP ---
             if args.inner_repeat_train_on_same_samples:
-                # Rollout in the environment only once per inner loop
+                # if not args.outer_repeat_train_on_same_samples or outer_step == 0:
+                    # Rollout in the environment only once per inner loop
+                    # Do only 1 inner loop set of rollouts/updates if we are doing outer repeat train
+                    # With outer repeat train, try just 1 single inner and 1 single outer rollout.
+                    # Then yes, we don't have an adaptive inner player policy, we just have one pass at the inner policy update
+                    # This allows us to not have to retake x inner steps on each outer step
+                    # We can still get invariance from the prox solution, but we do lose the
+                    # symmetry property. But still the invariance motivation should be there.
                 if args.env == 'coin':
                     obs_history, action_trajectory, rewards, policy_history, \
                     val_history, next_val_history, avg_same_colour_coins_picked_total, \
@@ -2164,6 +2175,8 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 # Here we allow for multiple inner rollouts in a loop of multiple outer rollouts
                 # We also can use a penalty formulation whether we want repeat train or not.
                 for inner_step in range(K):
+                    if args.outer_repeat_train_on_same_samples:
+                        raise NotImplementedError
 
                     if args.env == 'coin':
                         obs_history, action_trajectory, rewards, policy_history, \
@@ -2210,8 +2223,10 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                         mixed_thetas, mixed_vals)
                 if outer_step == 0:
                     kl_div_target_policy_outer = policy_history.detach().clone()
+                    obs_history_for_kl_div = copy.deepcopy(obs_history)
 
             if args.outer_repeat_train_on_same_samples:
+                raise NotImplementedError # Still don't understand well enough what is actually happening here
                 new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
                     mixed_thetas, mixed_vals, obs_history)
                 dice_loss, _, values_loss = game.get_dice_loss(
@@ -2222,12 +2237,15 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                     use_penalty=args.outer_penalty,
                     use_clipping=args.outer_clip, beta=args.outer_beta)
             else:
+                kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
+                    mixed_thetas, mixed_vals, obs_history_for_kl_div)
                 dice_loss, _, values_loss = game.get_dice_loss(
                     action_trajectory, rewards,
                     policy_history, val_history,
                     next_val_history,
                     old_policy_history=policy_history,
                     kl_div_target_policy=kl_div_target_policy_outer,
+                    kl_div_curr_policy=kl_div_policy,
                     use_nl_loss=args.inner_nl_loss,
                     use_penalty=args.outer_penalty,
                     use_clipping=args.outer_clip,
@@ -2427,9 +2445,17 @@ if __name__ == "__main__":
     if args.outer_exact_prox:
         assert args.inner_exact_prox or args.no_taylor_approx
 
-    if args.inner_penalty or args.outer_penalty or args.inner_clip or args.outer_clip:
+    if args.inner_penalty or args.inner_clip:
+        print("!!! Warning: check this !!!")
+        # look up the for_kl_div stuff I did for outer loop, would prob need to do for inner as well.
+        raise NotImplementedError
+
         if not args.inner_repeat_train_on_same_samples:
-            print("!!! Warning: check this !!!")
+            raise Exception("You need repeat train for consistent kl penalty with samples (must use same samples)")
+
+    # if args.outer_penalty or args.outer_clip:
+    #     if not args.outer_repeat_train_on_same_samples:
+    #         raise Exception("You need repeat train for consistent kl penalty with samples (must use same samples)")
 
         # assert args.inner_repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
 
