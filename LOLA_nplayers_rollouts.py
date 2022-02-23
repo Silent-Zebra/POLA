@@ -22,10 +22,11 @@ import os
 
 
 
-def checkpoint(th, vals, tag, args):
+def checkpoint(th, vals, G_ts, tag, args):
     ckpt_dict = {
         "th": th,
-        "vals": vals
+        "vals": vals,
+        "Gts": G_ts
     }
     torch.save(ckpt_dict, os.path.join(args.save_dir, tag))
 
@@ -2961,8 +2962,16 @@ if __name__ == "__main__":
                     G_ts_record[epoch] = torch.stack(losses).detach()
 
                 if (epoch + 1) % args.checkpoint_every == 0:
+                    if using_samples:
+                        avg_gts_to_plot = (
+                                    G_ts_record + discounted_sum_of_adjustments).mean(
+                            dim=2).view(num_epochs, n_agents)
+                    else:
+                        avg_gts_to_plot = G_ts_record
+
                     now = datetime.datetime.now()
-                    checkpoint(th, vals, "checkpoint_{}_{}.pt".format(epoch + 1, now.strftime('%Y-%m-%d_%H-%M')), args)
+                    checkpoint(th, vals, avg_gts_to_plot, "checkpoint_{}_{}.pt".format(epoch + 1, now.strftime('%Y-%m-%d_%H-%M')), args)
+
 
                 if (epoch + 1) % print_every == 0:
                     print("Epoch: " + str(epoch + 1), flush=True)
