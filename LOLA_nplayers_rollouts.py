@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import math
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -157,7 +158,15 @@ class Game():
             values = vals[i]
         else:
             state_batch = self.build_all_combs_state_batch()
-            values = vals[i](state_batch)
+
+            if args.gru:
+                init_hidden = torch.zeros(state_batch.shape[0], args.nn_hidden_size).to(device)
+
+                h, values = vals[i](state_batch[:, 0, :], init_hidden)
+                h, values = vals[i](state_batch[:, 1, :], h)
+
+            else:
+                values = vals[i](state_batch)
             values = values.squeeze(-1)
         print(values)
 
@@ -165,7 +174,7 @@ class Game():
         for i in range(len(vals)):
             self.print_value_info(vals, i)
 
-    def get_nn_policy_for_batch(self, pol, state_batch):
+    def get_nn_policy_for_batch(self, pol, state_batch, hidden=None):
 
         if args.ill_condition:
 
@@ -180,7 +189,12 @@ class Game():
             # when combined with the all_state_stretch_factor, the effect is to magnify the DD state updates (policy amplified away from 0.5),
             # and scale down the updates in other states (policy brought closer to 0.5)
         else:
-            policy = torch.sigmoid(pol(state_batch))
+            if hidden is None:
+                policy = torch.sigmoid(pol(state_batch))
+            else:
+                new_hidden, logits = pol(state_batch, hidden)
+                policy = torch.sigmoid(logits)
+                return new_hidden, policy
 
         return policy
 
@@ -193,7 +207,20 @@ class Game():
 
         else:
             state_batch = self.build_all_combs_state_batch()
-            policy = self.get_nn_policy_for_batch(th[i], state_batch)
+            if args.gru:
+                init_hidden = torch.zeros(state_batch.shape[0], args.nn_hidden_size).to(device)
+
+                # print(state_batch[:, -1, :].shape)
+                # print(state_batch[:, -1, :])
+                h, policy = self.get_nn_policy_for_batch(th[i], state_batch[:, 0, :],
+                                                      init_hidden)
+                # print(state_batch[:, -1, :])
+
+                h, policy = self.get_nn_policy_for_batch(th[i], state_batch[:, 1, :],
+                                                      h)
+
+            else:
+                policy = self.get_nn_policy_for_batch(th[i], state_batch)
             policy = policy.squeeze(-1)
 
             # if args.ill_condition:
@@ -400,11 +427,11 @@ class ContributionGame(Game):
             indices = list(map(self.int_from_bin_inttensor, state_batch))
         return indices
 
-    def get_policy_and_state_value(self, pol, val, i, state_batch, iter):
+    def get_policy_and_state_value(self, pol, val, i, state_batch, iter, h_p=None, h_v=None):
+        # hidden right now being used for the GRU implementation by hand
 
         if isinstance(pol, torch.Tensor) or isinstance(val, torch.Tensor):
-            state_batch_indices = self.get_state_batch_indices(state_batch,
-                                                           iter)
+            state_batch_indices = self.get_state_batch_indices(state_batch, iter)
 
         if isinstance(pol, torch.Tensor):
             if args.ill_condition:
@@ -412,7 +439,10 @@ class ContributionGame(Game):
             else:
                 policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
         else:
-            policy = self.get_nn_policy_for_batch(pol, state_batch)
+            if h_p is None:
+                policy = self.get_nn_policy_for_batch(pol, state_batch)
+            else:
+                new_h_p, policy = self.get_nn_policy_for_batch(pol, state_batch, h_p)
             # if args.ill_condition:
             #     simple_state_repr_batch = self.one_hot_to_simple_repr(state_batch)
             #     # Essentially replicating the ill_conditioning in the exact case
@@ -428,7 +458,12 @@ class ContributionGame(Game):
             state_value = val[state_batch_indices].reshape(-1, 1)
 
         else:
-            state_value = val(state_batch)
+            if h_v is None:
+                state_value = val(state_batch)
+            else:
+                new_h_v, state_value = val(state_batch, h_v)
+                return policy, state_value, new_h_p, new_h_v
+
 
             # print(state_value.shape)
             # 1/0
@@ -448,7 +483,7 @@ class ContributionGame(Game):
 
         return policy, state_value
 
-    def get_policy_vals_indices_for_iter(self, th, vals, state_batch, iter):
+    def get_policy_vals_indices_for_iter(self, th, vals, state_batch, iter, h_p = None, h_v = None):
         policies = torch.zeros((self.n_agents, self.batch_size, 1), device=device)
         state_values = torch.zeros((self.n_agents, self.batch_size, 1), device=device)
         for i in range(self.n_agents):
@@ -462,24 +497,37 @@ class ContributionGame(Game):
 
             else:
                 # same state batch for all agents
-                policy, state_value = self.get_policy_and_state_value(th[i],
+                if h_p is None and h_v is None:
+                    policy, state_value = self.get_policy_and_state_value(th[i],
                                                                       vals[i], i,
                                                                       state_batch,
                                                                       iter)
+                else:
+                    policy, state_value, new_h_p, new_h_v = self.get_policy_and_state_value(th[i], vals[i],
+                                                                          i, state_batch,
+                                                                          iter, h_p, h_v)
+
 
 
             policies[i] = policy
             state_values[i] = state_value
 
-        return policies, state_values
+        if h_p is None and h_v is None:
+            return policies, state_values
+        else:
+            return policies, state_values, h_p, h_v
 
-    def get_next_val_history(self, th, vals, val_history, ending_state_batch, iter):
+    def get_next_val_history(self, th, vals, val_history, ending_state_batch, iter, h_p=None, h_v = None):
         # My notation and naming here is a bit questionable. Sorry. Vals is the actual parameterized value function
         # Val_history or state_vals as in some of the other functions are the state values for the given states in
         # some rollout/trajectory
 
-        policies, ending_state_values = self.get_policy_vals_indices_for_iter(
-            th, vals, ending_state_batch, iter)
+        if args.gru:
+            policies, ending_state_values, _, _ = self.get_policy_vals_indices_for_iter(
+                th, vals, ending_state_batch[:, -1, :], iter, h_p, h_v)
+        else:
+            policies, ending_state_values = self.get_policy_vals_indices_for_iter(
+                th, vals, ending_state_batch, iter)
 
         next_val_history = torch.zeros(
             (self.num_iters, self.n_agents, self.batch_size, 1), device=device)
@@ -505,15 +553,28 @@ class ContributionGame(Game):
 
         for iter in range(self.num_iters):
 
-            policies, state_values = self.get_policy_vals_indices_for_iter(
-                th, vals, state_batch, iter)
+            if args.gru:
+                if iter == 0:
+                    h_p = torch.zeros(args.batch_size, args.nn_hidden_size)
+                    h_v = torch.zeros(args.batch_size, args.nn_hidden_size)
+
+                policies, state_values, h_p, h_v = self.get_policy_vals_indices_for_iter(
+                    th, vals, state_batch[:, -1, :], iter, h_p, h_v)
+            else:
+                policies, state_values = self.get_policy_vals_indices_for_iter(
+                    th, vals, state_batch, iter)
 
             coop_probs[iter] = policies
             state_vals[iter] = state_values
 
             state_batch = obs_history[iter].float() # get the next state batch from the state history
 
-        next_val_history = self.get_next_val_history(th, vals, state_vals, state_batch,
+        if args.gru:
+            next_val_history = self.get_next_val_history(th, vals, state_vals,
+                                                         state_batch,
+                                                         iter + 1, h_p, h_v)
+        else:
+            next_val_history = self.get_next_val_history(th, vals, state_vals, state_batch,
                                                      iter + 1)
 
         return coop_probs, state_vals, next_val_history
@@ -582,7 +643,15 @@ class ContributionGame(Game):
         # This loop can't be skipped due to sequential nature of environment
         for iter in range(self.num_iters):
 
-            policies, state_values = self.get_policy_vals_indices_for_iter(th, vals, state_batch, iter)
+            if args.gru:
+                if iter == 0:
+                    h_p = torch.zeros(args.batch_size, args.nn_hidden_size)
+                    h_v = torch.zeros(args.batch_size, args.nn_hidden_size)
+
+                policies, state_values, h_p, h_v = self.get_policy_vals_indices_for_iter(
+                    th, vals, state_batch[:, -1, :], iter, h_p, h_v)
+            else:
+                policies, state_values = self.get_policy_vals_indices_for_iter(th, vals, state_batch, iter)
 
             policy_history[iter] = policies
             val_history[iter] = state_values
@@ -658,7 +727,10 @@ class ContributionGame(Game):
             agent_rewards -= adjustment_to_make_rewards_negative
             rewards[iter] = agent_rewards
 
-        next_val_history = self.get_next_val_history(th, vals, val_history, state_batch, iter + 1) # iter doesn't even matter here as long as > 0
+        if args.gru:
+            next_val_history = self.get_next_val_history(th, vals, val_history, state_batch, iter + 1, h_p, h_v)
+        else:
+            next_val_history = self.get_next_val_history(th, vals, val_history, state_batch, iter + 1) # iter doesn't even matter here as long as > 0
 
         return action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history
 
@@ -1102,19 +1174,89 @@ class ConvFC(nn.Module):
         return output
 
 
+class GRU(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.gru = nn.ParameterList([
+            # Linear 1
+            nn.Parameter(
+                torch.zeros((input_size, hidden_size * 3), requires_grad=True)),
+            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+
+            # x2h GRU
+            nn.Parameter(torch.zeros((hidden_size * 3, hidden_size * 3),
+                                     requires_grad=True)),
+            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+
+            # h2h GRU
+            nn.Parameter(torch.zeros((hidden_size, hidden_size * 3),
+                                     requires_grad=True)),
+            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+
+            # Linear 2
+            nn.Parameter(
+                torch.zeros((hidden_size, output_size), requires_grad=True)),
+            nn.Parameter(torch.zeros(output_size, requires_grad=True)),
+        ]).to(device)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        std = 1.0 / math.sqrt(self.hidden_size)
+        for w in self.gru:
+            w.data.uniform_(-std, std)
+
+    def forward(self, batch_states, hidden):
+
+        theta = self.gru
+        batch_states = batch_states.flatten(start_dim=1)
+
+        x = batch_states.matmul(theta[0])
+        x = theta[1] + x
+
+        x = torch.relu(x)
+
+        gate_x = x.matmul(theta[2])
+        gate_x = gate_x + theta[3]
+
+        # print(theta[4].shape)
+        # print(hidden.shape)
+
+        gate_h = hidden.matmul(theta[4])
+        gate_h = gate_h + theta[5]
+
+        #     gate_x = gate_x.squeeze()
+        #     gate_h = gate_h.squeeze()
+
+        i_r, i_i, i_n = gate_x.chunk(3, 1)
+        h_r, h_i, h_n = gate_h.chunk(3, 1)
+
+        resetgate = torch.sigmoid(i_r + h_r)
+        inputgate = torch.sigmoid(i_i + h_i)
+        newgate = torch.tanh(i_n + (resetgate * h_n))
+
+        hy = newgate + inputgate * (hidden - newgate)
+
+        out = hy.matmul(theta[6])
+        out = out + theta[7]
+
+        return hy, out
+
+
 class RNN(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_rnn_layers, final_softmax):
         super().__init__()
-        # self.rnn = nn.RNN(input_size=input_size,
-        #                   hidden_size=hidden_size,
-        #                   num_layers=num_rnn_layers,
-        #                   nonlinearity='tanh',
-        #                   batch_first=True)
-        self.rnn = nn.GRU(input_size=input_size,
+        self.rnn = nn.RNN(input_size=input_size,
                           hidden_size=hidden_size,
                           num_layers=num_rnn_layers,
-                          # nonlinearity='tanh',
+                          nonlinearity='tanh',
                           batch_first=True)
+        # self.rnn = nn.GRU(input_size=input_size,
+        #                   hidden_size=hidden_size,
+        #                   num_layers=num_rnn_layers,
+        #                   # nonlinearity='tanh',
+        #                   batch_first=True)
         self.linear = nn.Linear(hidden_size, output_size)
         self.final_softmax = final_softmax
         self.init_hidden_state = torch.zeros([num_rnn_layers, args.batch_size, hidden_size]).requires_grad_(True)
@@ -1139,7 +1281,7 @@ def load_th_vals():
 
 
 # TODO maybe this should go into the game definition itself and be part of that class instead of separate
-def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_hidden_size=16, nn_extra_hidden_layers=0):
+def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd'):
     th = []
     # f_th = []
 
@@ -1158,27 +1300,34 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
                                     # mnist specific input is 28x28x1
                                     conv_out_channels=dims[i],
                                     input_size=28,
-                                    hidden_size=nn_hidden_size,
+                                    hidden_size=args.nn_hidden_size,
                                     output_size=1,
                                     final_sigmoid=False)
             else:
 
                 if env == 'coin':
                     if using_rnn:
-                        policy_net = RNN(input_size=dims[i], hidden_size=nn_hidden_size, output_size=4,
-                                         num_rnn_layers=nn_extra_hidden_layers+1, final_softmax=True) # 1 rnn layer
+                        if args.gru:
+                            policy_net = GRU(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=4)
+
+                        else:
+                            policy_net = RNN(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=4,
+                                         num_rnn_layers=args.nn_extra_hidden_layers+1, final_softmax=True) # 1 rnn layer
                     else:
                         policy_net = NeuralNet(input_size=dims[i],
-                                           hidden_size=nn_hidden_size,
-                                           extra_hidden_layers=nn_extra_hidden_layers,
+                                           hidden_size=args.nn_hidden_size,
+                                           extra_hidden_layers=args.nn_extra_hidden_layers,
                                            output_size=4, final_sigmoid=False, final_softmax=True) # TODO probably should dynamically code this
                 else:
                     if using_rnn:
-                        policy_net = RNN(input_size=dims[i], hidden_size=nn_hidden_size, output_size=1,
-                                         num_rnn_layers=nn_extra_hidden_layers+1, final_softmax=False)
+                        if args.gru:
+                            policy_net = GRU(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=1)
+                        else:
+                            policy_net = RNN(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=1,
+                                         num_rnn_layers=args.nn_extra_hidden_layers+1, final_softmax=False)
                     else:
 
-                        policy_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size, extra_hidden_layers=nn_extra_hidden_layers,
+                        policy_net = NeuralNet(input_size=dims[i], hidden_size=args.nn_hidden_size, extra_hidden_layers=args.nn_extra_hidden_layers,
                                   output_size=1)
 
             # f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
@@ -1186,7 +1335,10 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
 
             # print(f_policy_net)
 
-            th.append(policy_net.to(device))
+            if args.gru:
+                th.append(policy_net)
+            else:
+                th.append(policy_net.to(device))
 
             # f_th.append(f_policy_net)
 
@@ -1212,27 +1364,39 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd', nn_
         if using_nn:
             if using_rnn:
                 if env == 'coin':
-                    vals_net = RNN(input_size=dims[i],
-                                   hidden_size=nn_hidden_size, output_size=1,
-                                   num_rnn_layers=nn_extra_hidden_layers + 1,
+                    if args.gru:
+                        vals_net = GRU(input_size=dims[i],
+                                   hidden_size=args.nn_hidden_size, output_size=1)
+                    else:
+                        vals_net = RNN(input_size=dims[i],
+                                   hidden_size=args.nn_hidden_size, output_size=1,
+                                   num_rnn_layers=args.nn_extra_hidden_layers + 1,
                                    final_softmax=False)
                 else:
-                    vals_net = RNN(input_size=dims[i], hidden_size=nn_hidden_size, output_size=1,
-                                         num_rnn_layers=nn_extra_hidden_layers+1, final_softmax=False)
+                    if args.gru:
+                        vals_net = GRU(input_size=dims[i],
+                                       hidden_size=args.nn_hidden_size,
+                                       output_size=1)
+                    else:
+                        vals_net = RNN(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=1,
+                                         num_rnn_layers=args.nn_extra_hidden_layers+1, final_softmax=False)
             else:
                 if state_type == 'mnist':
                     vals_net = ConvFC(conv_in_channels=dims[i],
                                       # mnist specific input is 28x28x1
                                       conv_out_channels=dims[i],
                                       input_size=28,
-                                      hidden_size=nn_hidden_size,
+                                      hidden_size=args.nn_hidden_size,
                                       output_size=1,
                                       final_sigmoid=False)
                 else:
-                    vals_net = NeuralNet(input_size=dims[i], hidden_size=nn_hidden_size,
-                                      extra_hidden_layers=nn_extra_hidden_layers,
+                    vals_net = NeuralNet(input_size=dims[i], hidden_size=args.nn_hidden_size,
+                                      extra_hidden_layers=args.nn_extra_hidden_layers,
                                       output_size=1, final_sigmoid=False)
-            vals.append(vals_net.to(device))
+            if args.gru:
+                vals.append(vals_net)
+            else:
+                vals.append(vals_net.to(device))
             # f_vals_net = higher.patch.monkeypatch(vals_net,
             #                                         copy_initial_weights=True,
             #                                         track_higher_grads=False)
@@ -1269,7 +1433,10 @@ def construct_diff_optims(th_or_vals, lrs, f_th_or_vals):
 def construct_optims(th_or_vals, lrs):
     optims = []
     for i in range(len(th_or_vals)):
-        if not isinstance(th_or_vals[i], torch.Tensor):
+        if isinstance(th_or_vals[i], GRU):
+            optim = torch.optim.SGD(th_or_vals[i].gru, lr=lrs[i])
+            optims.append(optim)
+        elif not isinstance(th_or_vals[i], torch.Tensor):
             optim = torch.optim.SGD(th_or_vals[i].parameters(), lr=lrs[i])
             optims.append(optim)
         else:
@@ -2394,6 +2561,8 @@ if __name__ == "__main__":
     parser.add_argument("--rollout_len", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
     parser.add_argument("--using_rnn", action="store_true",
                         help="use RNN (for coin game)") # TODO only supported for coin right now
+    parser.add_argument("--gru", action="store_true",
+                        help="use GRU (hand built one by Chris)")
     parser.add_argument("--inner_nl_loss", action="store_true",
                         help="use naive learning (no shaping) loss on inner dice loop")
     parser.add_argument("--inner_val_updates", action="store_true",
