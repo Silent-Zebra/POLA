@@ -503,9 +503,9 @@ class ContributionGame(Game):
                                                                       state_batch,
                                                                       iter)
                 else:
-                    policy, state_value, new_h_p, new_h_v = self.get_policy_and_state_value(th[i], vals[i],
+                    policy, state_value, h_p[i], h_v[i] = self.get_policy_and_state_value(th[i], vals[i],
                                                                           i, state_batch,
-                                                                          iter, h_p, h_v)
+                                                                          iter, h_p[i], h_v[i])
 
 
 
@@ -517,7 +517,7 @@ class ContributionGame(Game):
         else:
             return policies, state_values, h_p, h_v
 
-    def get_next_val_history(self, th, vals, val_history, ending_state_batch, iter, h_p=None, h_v = None):
+    def get_next_val_history(self, th, vals, val_history, ending_state_batch, iter, h_p=None, h_v=None):
         # My notation and naming here is a bit questionable. Sorry. Vals is the actual parameterized value function
         # Val_history or state_vals as in some of the other functions are the state values for the given states in
         # some rollout/trajectory
@@ -555,8 +555,8 @@ class ContributionGame(Game):
 
             if args.gru:
                 if iter == 0:
-                    h_p = torch.zeros(args.batch_size, args.nn_hidden_size)
-                    h_v = torch.zeros(args.batch_size, args.nn_hidden_size)
+                    h_p = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
+                    h_v = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
 
                 policies, state_values, h_p, h_v = self.get_policy_vals_indices_for_iter(
                     th, vals, state_batch[:, -1, :], iter, h_p, h_v)
@@ -641,12 +641,13 @@ class ContributionGame(Game):
 
 
         # This loop can't be skipped due to sequential nature of environment
+        # self.num_iters is rollout_len
         for iter in range(self.num_iters):
 
             if args.gru:
                 if iter == 0:
-                    h_p = torch.zeros(args.batch_size, args.nn_hidden_size)
-                    h_v = torch.zeros(args.batch_size, args.nn_hidden_size)
+                    h_p = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
+                    h_v = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
 
                 policies, state_values, h_p, h_v = self.get_policy_vals_indices_for_iter(
                     th, vals, state_batch[:, -1, :], iter, h_p, h_v)
@@ -1259,7 +1260,7 @@ class RNN(nn.Module):
         #                   batch_first=True)
         self.linear = nn.Linear(hidden_size, output_size)
         self.final_softmax = final_softmax
-        self.init_hidden_state = torch.zeros([num_rnn_layers, args.batch_size, hidden_size]).requires_grad_(True)
+        # self.init_hidden_state = torch.zeros([num_rnn_layers, args.batch_size, hidden_size]).requires_grad_(True)
 
     def forward(self, x):
         self.rnn.flatten_parameters()
@@ -1312,11 +1313,11 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd'):
 
                         else:
                             policy_net = RNN(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=4,
-                                         num_rnn_layers=args.nn_extra_hidden_layers+1, final_softmax=True) # 1 rnn layer
+                                         num_rnn_layers=args.nn_hidden_layers+1, final_softmax=True) # 1 rnn layer
                     else:
                         policy_net = NeuralNet(input_size=dims[i],
                                            hidden_size=args.nn_hidden_size,
-                                           extra_hidden_layers=args.nn_extra_hidden_layers,
+                                           extra_hidden_layers=args.nn_hidden_layers,
                                            output_size=4, final_sigmoid=False, final_softmax=True) # TODO probably should dynamically code this
                 else:
                     if using_rnn:
@@ -1324,10 +1325,10 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd'):
                             policy_net = GRU(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=1)
                         else:
                             policy_net = RNN(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=1,
-                                         num_rnn_layers=args.nn_extra_hidden_layers+1, final_softmax=False)
+                                         num_rnn_layers=args.nn_hidden_layers+1, final_softmax=False)
                     else:
 
-                        policy_net = NeuralNet(input_size=dims[i], hidden_size=args.nn_hidden_size, extra_hidden_layers=args.nn_extra_hidden_layers,
+                        policy_net = NeuralNet(input_size=dims[i], hidden_size=args.nn_hidden_size, extra_hidden_layers=args.nn_hidden_layers,
                                   output_size=1)
 
             # f_policy_net = higher.patch.monkeypatch(policy_net, copy_initial_weights=True,
@@ -1370,7 +1371,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd'):
                     else:
                         vals_net = RNN(input_size=dims[i],
                                    hidden_size=args.nn_hidden_size, output_size=1,
-                                   num_rnn_layers=args.nn_extra_hidden_layers + 1,
+                                   num_rnn_layers=args.nn_hidden_layers + 1,
                                    final_softmax=False)
                 else:
                     if args.gru:
@@ -1379,7 +1380,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd'):
                                        output_size=1)
                     else:
                         vals_net = RNN(input_size=dims[i], hidden_size=args.nn_hidden_size, output_size=1,
-                                         num_rnn_layers=args.nn_extra_hidden_layers+1, final_softmax=False)
+                                         num_rnn_layers=args.nn_hidden_layers+1, final_softmax=False)
             else:
                 if state_type == 'mnist':
                     vals_net = ConvFC(conv_in_channels=dims[i],
@@ -1391,7 +1392,7 @@ def init_custom(dims, state_type, using_nn=True, using_rnn=False, env='ipd'):
                                       final_sigmoid=False)
                 else:
                     vals_net = NeuralNet(input_size=dims[i], hidden_size=args.nn_hidden_size,
-                                      extra_hidden_layers=args.nn_extra_hidden_layers,
+                                      extra_hidden_layers=args.nn_hidden_layers,
                                       output_size=1, final_sigmoid=False)
             if args.gru:
                 vals.append(vals_net)
@@ -2695,6 +2696,10 @@ if __name__ == "__main__":
     if args.history_len > 1:
         assert args.using_nn # Right now only supported for func approx.
 
+    if args.gru:
+        assert args.using_rnn
+    if args.using_rnn:
+        assert args.using_nn
 
     n_agents_list = args.n_agents_list
 
