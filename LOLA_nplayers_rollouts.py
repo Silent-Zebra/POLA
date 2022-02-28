@@ -555,8 +555,8 @@ class ContributionGame(Game):
 
             if args.gru:
                 if iter == 0:
-                    h_p = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
-                    h_v = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
+                    h_p = [torch.zeros(args.batch_size, args.nn_hidden_size)] * self.n_agents
+                    h_v = [torch.zeros(args.batch_size, args.nn_hidden_size)] * self.n_agents
 
                 policies, state_values, h_p, h_v = self.get_policy_vals_indices_for_iter(
                     th, vals, state_batch[:, -1, :], iter, h_p, h_v)
@@ -646,8 +646,8 @@ class ContributionGame(Game):
 
             if args.gru:
                 if iter == 0:
-                    h_p = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
-                    h_v = torch.zeros(self.n_agents, args.batch_size, args.nn_hidden_size)
+                    h_p = [torch.zeros(args.batch_size, args.nn_hidden_size)] * self.n_agents
+                    h_v = [torch.zeros(args.batch_size, args.nn_hidden_size)] * self.n_agents
 
                 policies, state_values, h_p, h_v = self.get_policy_vals_indices_for_iter(
                     th, vals, state_batch[:, -1, :], iter, h_p, h_v)
