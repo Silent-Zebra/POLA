@@ -208,6 +208,8 @@ class Game():
         else:
             state_batch = self.build_all_combs_state_batch()
             if args.gru:
+                # Single agent init_hidden is fine here since we are only
+                # working with a single agent i
                 init_hidden = torch.zeros(state_batch.shape[0], args.nn_hidden_size).to(device)
 
                 # print(state_batch[:, -1, :].shape)
@@ -2642,7 +2644,7 @@ if __name__ == "__main__":
 
     if args.outer_penalty or args.outer_clip:
         if not args.inner_repeat_train_on_same_samples:
-            raise Exception("CHECK THIS - I think code needs inner_repeat right now")
+            print("CHECK THIS - Does code need inner_repeat?")
 
     # if args.outer_penalty or args.outer_clip:
     #     if not args.outer_repeat_train_on_same_samples:
