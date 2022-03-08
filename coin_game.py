@@ -17,10 +17,10 @@ class CoinGameGPU(Game):
     NUM_AGENTS = 2
     NUM_ACTIONS = 4
     MOVES = torch.stack([
-        torch.LongTensor([0, 1]),
-        torch.LongTensor([0, -1]),
-        torch.LongTensor([1, 0]),
-        torch.LongTensor([-1, 0]),
+        torch.LongTensor([0, 1]), # right
+        torch.LongTensor([0, -1]), # left
+        torch.LongTensor([1, 0]), # down
+        torch.LongTensor([-1, 0]), # up
     ], dim=0).to(device)
 
     def __init__(self, max_steps, batch_size, nn_hidden_size, grid_size=3, gamma=0.96, gru=True):
@@ -216,18 +216,18 @@ class CoinGameGPU(Game):
         if self.full_seq_obs:
 
             print("Simple One Step Example")
-            sample_obs = torch.FloatTensor([[[0, 0, 0],
-                                             [0, 1, 0],
+            sample_obs = torch.FloatTensor([[[0, 1, 0],
+                                             [0, 0, 0],
                                              [0, 0, 0]],  # agent 1
                                             [[0, 0, 0],
                                              [1, 0, 0],
                                              [0, 0, 0]],  # agent 2
-                                            [[0, 0, 0],
-                                             [0, 0, 1],
-                                             [0, 0, 0]],
-                                            # red coin - so we should ideally want agent 1 to move right and agent 2 to not move left
-                                            [[0, 0, 0],
+                                            [[1, 0, 0],
                                              [0, 0, 0],
+                                             [0, 0, 0]],
+                                            # we want agent 1 moving left and agent 2 moving right
+                                            [[0, 0, 0],
+                                             [0, 1, 0],
                                              [0, 0, 0]]]).reshape(1, 36)
 
             self.print_info_on_sample_obs(sample_obs, th, vals)
@@ -245,7 +245,7 @@ class CoinGameGPU(Game):
                                                [1, 0, 0]],
                                               # red coin
                                               [[0, 0, 0],
-                                               [0, 0, 0],
+                                               [0, 1, 0],
                                                [0, 0, 0]]]).reshape(1, 36)
             sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
                                                [1, 0, 0],
@@ -253,7 +253,7 @@ class CoinGameGPU(Game):
                                               [[0, 0, 0],
                                                [0, 0, 0],
                                                [1, 0, 0]],  # agent 2
-                                              [[0, 0, 0],
+                                              [[0, 1, 0],
                                                [0, 0, 0],
                                                [0, 0, 0]],
                                               # red coin
@@ -278,7 +278,7 @@ class CoinGameGPU(Game):
                                                [1, 0, 0]],
                                               # red coin
                                               [[0, 0, 0],
-                                               [0, 0, 0],
+                                               [0, 1, 0],
                                                [0, 0, 0]]]).reshape(1, 36)
             sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
                                                [1, 0, 0],
@@ -292,7 +292,7 @@ class CoinGameGPU(Game):
                                               # red coin
                                               [[0, 0, 0],
                                                [0, 0, 0],
-                                               [0, 0, 0]]]).reshape(1, 36)
+                                               [0, 1, 0]]]).reshape(1, 36)
             sample_obs_3 = torch.FloatTensor([[[0, 0, 0],
                                                [0, 0, 0],
                                                [1, 0, 0]],  # agent 1
@@ -312,82 +312,85 @@ class CoinGameGPU(Game):
 
             self.print_info_on_sample_obs(sample_obs, th, vals)
 
-            print("P1 Defects")
-            # This one meant to test the idea of p1 defects by taking p2 coin - will p2 retaliate?
-            sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],  # agent 1
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 1, 0]],  # agent 2
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],
-                                              # red coin
-                                              [[0, 0, 0],
-                                               [1, 0, 0],
-                                               [0, 0, 0]]]).reshape(1, 36)
-            sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
-                                               [1, 0, 0],
-                                               [0, 0, 0]],  # agent 1
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [1, 0, 0]],  # agent 2
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 1, 0]],
-                                              # red coin
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]]]).reshape(1, 36)
-            sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+            # TODO Put back in the equivalent (opposite) for P2 too (based on P1 choices).
 
-            self.print_info_on_sample_obs(sample_obs, th, vals)
 
-            print("P1 Cooperates")
-            # This one meant similar to above except p1 cooperates by not taking coin.
-            # Then p2 collects p2 coin (blue). Will it also collect the other agent coin?
-            sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],  # agent 1
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 1, 0]],  # agent 2
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],
-                                              # red coin
-                                              [[0, 0, 0],
-                                               [1, 0, 0],
-                                               [0, 0, 0]]]).reshape(1, 36)
-            sample_obs_2 = torch.FloatTensor([[[0, 1, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],  # agent 1
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [1, 0, 0]],  # agent 2
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],
-                                              # red coin
-                                              [[0, 0, 0],
-                                               [1, 0, 0],
-                                               [0, 0, 0]]]).reshape(1, 36)
-            sample_obs_3 = torch.FloatTensor([[[0, 0, 1],
-                                               [0, 0, 0],
-                                               [0, 0, 0]],  # agent 1
-                                              [[0, 0, 0],
-                                               [1, 0, 0],
-                                               [0, 0, 0]],  # agent 2
-                                              [[0, 0, 0],
-                                               [0, 1, 0],
-                                               [0, 0, 0]],
-                                              # red coin
-                                              [[0, 0, 0],
-                                               [0, 0, 0],
-                                               [0, 0, 0]]]).reshape(1, 36)
-            sample_obs = torch.stack(
-                (sample_obs_1, sample_obs_2, sample_obs_3), dim=1)
+            # print("P1 Defects")
+            # # This one meant to test the idea of p1 defects by taking p2 coin - will p2 retaliate?
+            # sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],  # agent 1
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 1, 0]],  # agent 2
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],
+            #                                   # red coin
+            #                                   [[0, 0, 0],
+            #                                    [1, 0, 0],
+            #                                    [0, 0, 0]]]).reshape(1, 36)
+            # sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
+            #                                    [1, 0, 0],
+            #                                    [0, 0, 0]],  # agent 1
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [1, 0, 0]],  # agent 2
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 1, 0]],
+            #                                   # red coin
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]]]).reshape(1, 36)
+            # sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+            #
+            # self.print_info_on_sample_obs(sample_obs, th, vals)
+            #
+            # print("P1 Cooperates")
+            # # This one meant similar to above except p1 cooperates by not taking coin.
+            # # Then p2 collects p2 coin (blue). Will it also collect the other agent coin?
+            # sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],  # agent 1
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 1, 0]],  # agent 2
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],
+            #                                   # red coin
+            #                                   [[0, 0, 0],
+            #                                    [1, 0, 0],
+            #                                    [0, 0, 0]]]).reshape(1, 36)
+            # sample_obs_2 = torch.FloatTensor([[[0, 1, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],  # agent 1
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [1, 0, 0]],  # agent 2
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],
+            #                                   # red coin
+            #                                   [[0, 0, 0],
+            #                                    [1, 0, 0],
+            #                                    [0, 0, 0]]]).reshape(1, 36)
+            # sample_obs_3 = torch.FloatTensor([[[0, 0, 1],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]],  # agent 1
+            #                                   [[0, 0, 0],
+            #                                    [1, 0, 0],
+            #                                    [0, 0, 0]],  # agent 2
+            #                                   [[0, 0, 0],
+            #                                    [0, 1, 0],
+            #                                    [0, 0, 0]],
+            #                                   # red coin
+            #                                   [[0, 0, 0],
+            #                                    [0, 0, 0],
+            #                                    [0, 0, 0]]]).reshape(1, 36)
+            # sample_obs = torch.stack(
+            #     (sample_obs_1, sample_obs_2, sample_obs_3), dim=1)
 
             self.print_info_on_sample_obs(sample_obs, th, vals)
 
