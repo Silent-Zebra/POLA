@@ -174,9 +174,9 @@ class Game():
         for i in range(len(vals)):
             self.print_value_info(vals, i)
 
-    def get_nn_policy_for_batch(self, pol, state_batch, hidden=None):
+    def get_nn_policy_for_batch(self, pol, state_batch, hidden=None, ill_condition=False):
 
-        if args.ill_condition:
+        if ill_condition:
 
             simple_state_repr_batch = self.one_hot_to_simple_repr(state_batch)
 
@@ -215,14 +215,14 @@ class Game():
                 # print(state_batch[:, -1, :].shape)
                 # print(state_batch[:, -1, :])
                 h, policy = self.get_nn_policy_for_batch(th[i], state_batch[:, 0, :],
-                                                      init_hidden)
+                                                      init_hidden, ill_condition=args.ill_condition)
                 # print(state_batch[:, -1, :])
 
                 h, policy = self.get_nn_policy_for_batch(th[i], state_batch[:, 1, :],
-                                                      h)
+                                                      h, ill_condition=args.ill_condition)
 
             else:
-                policy = self.get_nn_policy_for_batch(th[i], state_batch)
+                policy = self.get_nn_policy_for_batch(th[i], state_batch, ill_condition=args.ill_condition)
             policy = policy.squeeze(-1)
 
             # if args.ill_condition:
@@ -442,9 +442,9 @@ class ContributionGame(Game):
                 policy = torch.sigmoid(pol)[state_batch_indices].reshape(-1, 1)
         else:
             if h_p is None:
-                policy = self.get_nn_policy_for_batch(pol, state_batch)
+                policy = self.get_nn_policy_for_batch(pol, state_batch, ill_condition=args.ill_condition)
             else:
-                new_h_p, policy = self.get_nn_policy_for_batch(pol, state_batch, h_p)
+                new_h_p, policy = self.get_nn_policy_for_batch(pol, state_batch, h_p, ill_condition=args.ill_condition)
             # if args.ill_condition:
             #     simple_state_repr_batch = self.one_hot_to_simple_repr(state_batch)
             #     # Essentially replicating the ill_conditioning in the exact case
@@ -868,7 +868,8 @@ class ContributionGame(Game):
 
 
     def get_dice_loss(self, trajectory, rewards, policy_history, val_history, next_val_history,
-                      old_policy_history=None, kl_div_target_policy=None, kl_div_curr_policy=None, use_nl_loss=False, use_clipping=False, use_penalty=False, beta=None):
+                      old_policy_history=None, kl_div_target_policy=None, kl_div_curr_policy=None,
+                      use_nl_loss=False, inner_repeat_train_on_same_samples=True, use_clipping=False, use_penalty=False, beta=None):
 
         if old_policy_history is not None:
             old_policy_history = old_policy_history.detach()
@@ -2207,16 +2208,51 @@ def construct_mixed_th_vals_and_diffoptims(n_agents, i, starting_th, starting_va
 
 def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
                     val_history, next_val_history, mixed_thetas, mixed_vals,
-                    obs_history, kl_div_target_policy_inner, obs_history_for_kl_div,
+                    obs_history, kl_div_target_policy_inner, obs_history_for_kl_div, act_history_for_kl_div,
                     optims_th_primes, optims_vals_primes):
+    if args.env == 'coin':
+        taken_act_prob_history, full_cat_prob_policy_history = policy_history
+
     if inner_step == 0:
-        dice_loss, _, values_loss = game.get_dice_loss(
-            action_trajectory, rewards,
-            policy_history, val_history, next_val_history,
-            old_policy_history=policy_history,
-            use_nl_loss=args.inner_nl_loss,
-            use_penalty=False,
-            use_clipping=args.inner_clip, beta=args.inner_beta)
+        if args.env == 'coin':
+            kl_taken_act_probs, kl_full_cat_act_probs, kl_div_vals, _ = game.get_policies_vals_for_states(
+                mixed_thetas, mixed_vals, obs_history_for_kl_div,
+                act_history_for_kl_div)
+
+
+            # print(torch.sum(torch.abs(
+            #     obs_history_for_kl_div[:, 0, :, :] - obs_history[
+            #                                          :, 0, :, :])))
+            # print(torch.sum(torch.abs(
+            #     obs_history_for_kl_div[:, 1, :, :] - obs_history[
+            #                                          :, 1, :, :])))
+            # print(torch.sum(torch.abs(
+            #     kl_div_target_policy_inner[:, 0, :, :] - kl_full_cat_act_probs[
+            #                                              :, 0, :, :])))
+            # print(torch.sum(torch.abs(
+            #     kl_div_target_policy_inner[:, 1, :, :] - kl_full_cat_act_probs[
+            #                                              :, 1, :, :])))
+            # 1/0
+
+            dice_loss, _, values_loss = game.get_dice_loss(
+                action_trajectory, rewards,
+                taken_act_prob_history, val_history, next_val_history,
+                old_policy_history=taken_act_prob_history,
+                use_nl_loss=args.inner_nl_loss,
+                inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                use_penalty=False,
+                use_clipping=args.inner_clip, beta=args.inner_beta)
+
+
+        else:
+
+            dice_loss, _, values_loss = game.get_dice_loss(
+                action_trajectory, rewards,
+                policy_history, val_history, next_val_history,
+                old_policy_history=policy_history,
+                use_nl_loss=args.inner_nl_loss, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                use_penalty=False,
+                use_clipping=args.inner_clip, beta=args.inner_beta)
         # dice_loss, _, values_loss = game.get_dice_loss(
         #     action_trajectory, rewards,
         #     policy_history, val_history, next_val_history,
@@ -2226,21 +2262,48 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
         #     use_clipping=args.inner_clip, beta=args.inner_beta)
 
     else:
-        # This is essentially the repeat_train formulation on the inner loop
-        new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-            mixed_thetas, mixed_vals, obs_history)
-        kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
-            mixed_thetas, mixed_vals, obs_history_for_kl_div)
-        # Using the new policies and vals now
-        # Always be careful not to overwrite/reuse names of existing variables
-        dice_loss, _, values_loss = game.get_dice_loss(
-            action_trajectory, rewards, new_policies, new_vals,
-            next_new_vals, old_policy_history=policy_history,
-            kl_div_target_policy=kl_div_target_policy_inner,
-            kl_div_curr_policy=kl_div_policy,
-            use_nl_loss=args.inner_nl_loss,
-            use_penalty=args.inner_penalty,
-            use_clipping=args.inner_clip, beta=args.inner_beta)
+        if args.env == 'coin':
+            taken_act_probs, full_cat_act_probs, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                mixed_thetas, mixed_vals, obs_history, action_trajectory)
+            kl_taken_act_probs, kl_full_cat_act_probs, kl_div_vals, _ = game.get_policies_vals_for_states(
+                mixed_thetas, mixed_vals, obs_history_for_kl_div, act_history_for_kl_div)
+
+            # print(kl_div_target_policy_inner.shape)
+            # print(kl_full_cat_act_probs.shape)
+            #
+            # print(torch.sum(torch.abs(
+            #     kl_div_target_policy_inner[:, 0, :, :] - kl_full_cat_act_probs[
+            #                                              :, 0, :, :])))
+            # print(torch.sum(torch.abs(
+            #     kl_div_target_policy_inner[:,1,:,:] - kl_full_cat_act_probs[:,1,:,:])))
+
+            dice_loss, _, values_loss = game.get_dice_loss(
+                action_trajectory, rewards, taken_act_probs, new_vals,
+                next_new_vals, old_policy_history=taken_act_prob_history,
+                kl_div_target_policy=kl_div_target_policy_inner,
+                full_cat_act_probs=kl_full_cat_act_probs,
+                use_nl_loss=args.inner_nl_loss,
+                use_penalty=args.inner_penalty,
+                inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                use_clipping=args.inner_clip, beta=args.inner_beta)
+
+
+        else:
+            # This is essentially the repeat_train formulation on the inner loop
+            new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                mixed_thetas, mixed_vals, obs_history)
+            kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
+                mixed_thetas, mixed_vals, obs_history_for_kl_div)
+            # Using the new policies and vals now
+            # Always be careful not to overwrite/reuse names of existing variables
+            dice_loss, _, values_loss = game.get_dice_loss(
+                action_trajectory, rewards, new_policies, new_vals,
+                next_new_vals, old_policy_history=policy_history,
+                kl_div_target_policy=kl_div_target_policy_inner,
+                kl_div_curr_policy=kl_div_policy,
+                use_nl_loss=args.inner_nl_loss,
+                use_penalty=args.inner_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                use_clipping=args.inner_clip, beta=args.inner_beta)
 
     for j in range(n_agents):
         if j != i:
@@ -2333,23 +2396,40 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                     # We can still get invariance from the prox solution, but we do lose the
                     # symmetry property. But still the invariance motivation should be there.
                     if args.env == 'coin':
-                        obs_history, action_trajectory, rewards, policy_history, \
+                        obs_history, action_trajectory, rewards, taken_act_prob_history, full_cat_prob_policy_history, \
                         val_history, next_val_history, avg_same_colour_coins_picked_total, \
                         avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
                             mixed_thetas, mixed_vals)
+                        if outer_step == 0:
+                            kl_div_target_policy_inner = full_cat_prob_policy_history.detach().clone()
                     else:
                         action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                             mixed_thetas, mixed_vals)
-                    if outer_step == 0:
-                        kl_div_target_policy_inner = policy_history.detach().clone()
+                        if outer_step == 0:
+                            kl_div_target_policy_inner = policy_history.detach().clone()
                     for inner_step in range(K):
                         if inner_step == 0:
                             obs_history_for_kl_div = copy.deepcopy(obs_history)
-                        dice_inner_step(i, inner_step, action_trajectory, rewards,
+                            act_history_for_kl_div = copy.deepcopy(action_trajectory) # need action history here, really, not the cat probs
+
+                        if args.env == 'coin':
+                            dice_inner_step(i, inner_step, action_trajectory,
+                                            rewards,
+                                            (taken_act_prob_history, full_cat_prob_policy_history),
+                                            val_history, next_val_history,
+                                            mixed_thetas, mixed_vals,
+                                            obs_history,
+                                            kl_div_target_policy_inner,
+                                            obs_history_for_kl_div,
+                                            act_history_for_kl_div,
+                                            optims_th_primes,
+                                            optims_vals_primes)
+                        else:
+                            dice_inner_step(i, inner_step, action_trajectory, rewards,
                                             policy_history,
                                             val_history, next_val_history,
                                             mixed_thetas, mixed_vals,
-                                            obs_history, kl_div_target_policy_inner, obs_history_for_kl_div,
+                                            obs_history, kl_div_target_policy_inner, obs_history_for_kl_div, act_history_for_kl_div,
                                             optims_th_primes, optims_vals_primes)
             else:
                 # Original LOLA-DiCE formulation. Note that in the original DiCE, there is only 1 outer step
@@ -2360,27 +2440,32 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                         raise NotImplementedError # use with inner_repeat_train for now
 
                     if args.env == 'coin':
-                        obs_history, action_trajectory, rewards, policy_history, \
+                        obs_history, action_trajectory, rewards, taken_act_prob_history, full_cat_prob_policy_history, \
                         val_history, next_val_history, avg_same_colour_coins_picked_total, \
                         avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
                             mixed_thetas, mixed_vals)
+
+                        if outer_step == 0:
+                            kl_div_target_policy_inner = full_cat_prob_policy_history.detach().clone()
+
 
                     else:
                         action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                             mixed_thetas, mixed_vals)
 
-                    if outer_step == 0:
-                        kl_div_target_policy_inner = policy_history.detach().clone()
+                        if outer_step == 0:
+                            kl_div_target_policy_inner = policy_history.detach().clone()
                     # 0 below because we are not doing repeat train, and we are instead re-rolling out every time
                     # So the inner_step is 0 here on purpose
                     # The inner step was meant in terms of repeat train on same samples, how many times you have repeated training on same samples
                     if inner_step == 0:
                         obs_history_for_kl_div = copy.deepcopy(obs_history)
+                        act_history_for_kl_div = copy.deepcopy(action_trajectory)
                     dice_inner_step(i, 0, action_trajectory, rewards,
                                     policy_history, val_history,
                                     next_val_history, mixed_thetas,
                                     mixed_vals, obs_history,
-                                    kl_div_target_policy_inner, obs_history_for_kl_div,
+                                    kl_div_target_policy_inner, obs_history_for_kl_div, act_history_for_kl_div,
                                     optims_th_primes, optims_vals_primes)
 
             # --- OUTER STEP ---
@@ -2397,45 +2482,67 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 # action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                 #     mixed_thetas, mixed_vals)
                 if args.env == 'coin':
-                    obs_history, action_trajectory, rewards, policy_history, \
+                    obs_history, action_trajectory, rewards, taken_act_prob_history, full_cat_prob_policy_history, \
                     val_history, next_val_history, avg_same_colour_coins_picked_total, \
                     avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
                         mixed_thetas, mixed_vals)
+                    if outer_step == 0:
+                        kl_div_target_policy_outer = full_cat_prob_policy_history.detach().clone()
+                        obs_history_for_kl_div = copy.deepcopy(obs_history)
+                        act_history_for_kl_div = copy.deepcopy(action_trajectory)
                 else:
                     action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                         mixed_thetas, mixed_vals)
-                if outer_step == 0:
-                    kl_div_target_policy_outer = policy_history.detach().clone()
-                    obs_history_for_kl_div = copy.deepcopy(obs_history)
+                    if outer_step == 0:
+                        kl_div_target_policy_outer = policy_history.detach().clone()
+                        obs_history_for_kl_div = copy.deepcopy(obs_history)
+                        act_history_for_kl_div = copy.deepcopy(action_trajectory)
 
             if args.outer_repeat_train_on_same_samples:
                 # raise NotImplementedError # Still don't understand well enough what is actually happening here
                 new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-                    mixed_thetas, mixed_vals, obs_history)
+                    mixed_thetas, mixed_vals, obs_history, action_trajectory)
                 kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
-                    mixed_thetas, mixed_vals, obs_history_for_kl_div)
+                    mixed_thetas, mixed_vals, obs_history_for_kl_div, act_history_for_kl_div)
                 dice_loss, _, values_loss = game.get_dice_loss(
                     action_trajectory, rewards, new_policies, new_vals,
                     next_new_vals, old_policy_history=policy_history,
                     kl_div_target_policy=kl_div_target_policy_outer,
                     kl_div_curr_policy=kl_div_policy,
                     use_nl_loss=args.inner_nl_loss,
-                    use_penalty=args.outer_penalty,
+                    use_penalty=args.outer_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
                     use_clipping=args.outer_clip, beta=args.outer_beta)
             else:
-                kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
-                    mixed_thetas, mixed_vals, obs_history_for_kl_div)
-                dice_loss, _, values_loss = game.get_dice_loss(
-                    action_trajectory, rewards,
-                    policy_history, val_history,
-                    next_val_history,
-                    old_policy_history=policy_history,
-                    kl_div_target_policy=kl_div_target_policy_outer,
-                    kl_div_curr_policy=kl_div_policy,
-                    use_nl_loss=args.inner_nl_loss,
-                    use_penalty=args.outer_penalty,
-                    use_clipping=args.outer_clip,
-                    beta=args.outer_beta)
+                if args.env == 'coin':
+                    kl_taken_act_probs, kl_full_cat_act_probs, kl_div_vals, _ = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals, obs_history_for_kl_div, act_history_for_kl_div)
+
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        taken_act_prob_history, val_history,
+                        next_val_history,
+                        old_policy_history=taken_act_prob_history,
+                        kl_div_target_policy=kl_div_target_policy_outer,
+                        full_cat_act_probs=kl_full_cat_act_probs,
+                        use_nl_loss=args.inner_nl_loss,
+                        use_penalty=args.outer_penalty,
+                        inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
+                else:
+                    kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals, obs_history_for_kl_div)
+                    dice_loss, _, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        kl_div_target_policy=kl_div_target_policy_outer,
+                        kl_div_curr_policy=kl_div_policy,
+                        use_nl_loss=args.inner_nl_loss,
+                        use_penalty=args.outer_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
             # dice_loss, _, values_loss = game.get_dice_loss(
             #     action_trajectory, rewards,
             #     policy_history, val_history,
@@ -2472,17 +2579,32 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                 copyNN(vals[i], mixed_vals[i])
 
             for _ in range(args.extra_value_updates):
-                _, val_history, next_val_history = game.get_policies_vals_for_states(
-                    mixed_thetas, mixed_vals, obs_history)
+                if args.env == 'coin':
+                    _, val_history, next_val_history = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals, obs_history, action_trajectory)
+                    raise NotImplementedError
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        use_penalty=args.outer_penalty,
+                        inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
 
-                dice_loss, G_ts, values_loss = game.get_dice_loss(
-                    action_trajectory, rewards,
-                    policy_history, val_history,
-                    next_val_history,
-                    old_policy_history=policy_history,
-                    use_penalty=args.outer_penalty,
-                    use_clipping=args.outer_clip,
-                    beta=args.outer_beta)
+                else:
+                    _, val_history, next_val_history = game.get_policies_vals_for_states(
+                        mixed_thetas, mixed_vals, obs_history)
+
+                    dice_loss, G_ts, values_loss = game.get_dice_loss(
+                        action_trajectory, rewards,
+                        policy_history, val_history,
+                        next_val_history,
+                        old_policy_history=policy_history,
+                        use_penalty=args.outer_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                        use_clipping=args.outer_clip,
+                        beta=args.outer_beta)
 
                 if isinstance(vals[i], torch.Tensor):
                     grad_val = get_gradient(values_loss[i], vals[i])
@@ -2821,7 +2943,7 @@ if __name__ == "__main__":
             if args.env == "coin":
                 from coin_game import CoinGameGPU
                 # 150 was their default in the alshedivat repo. But they did that for IPD too, which is not really necessary given the high-ish discount rate
-                game = CoinGameGPU(max_steps=rollout_len, batch_size=batch_size, gamma=args.gamma)
+                game = CoinGameGPU(max_steps=rollout_len, batch_size=batch_size, nn_hidden_size=args.nn_hidden_size, gamma=args.gamma, gru=args.gru)
                 dims = game.dims_with_history
             elif args.env == "imp":
                 from matching_pennies import IteratedMatchingPennies
@@ -2895,7 +3017,7 @@ if __name__ == "__main__":
                             next_val_history,
                             old_policy_history=policy_history,
                             use_nl_loss=True,
-                            use_penalty=args.outer_penalty,
+                            use_penalty=args.outer_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
                             use_clipping=args.outer_clip,
                             beta=args.outer_beta)
 
@@ -2944,6 +3066,8 @@ if __name__ == "__main__":
                                 if inner_step == 0:
                                     obs_history_for_kl_div = copy.deepcopy(
                                         obs_history)
+                                    act_history_for_kl_div = copy.deepcopy(
+                                        action_trajectory)
 
                                 # print(inner_step)
                                 dice_inner_step(i, inner_step,
@@ -2957,6 +3081,7 @@ if __name__ == "__main__":
                                                 obs_history,
                                                 kl_div_target_policy_inner,
                                                 obs_history_for_kl_div,
+                                                act_history_for_kl_div,
                                                 optims_th_primes,
                                                 optims_vals_primes)
 
@@ -2979,7 +3104,7 @@ if __name__ == "__main__":
                                 old_policy_history=policy_history,
                                 kl_div_target_policy=kl_div_target_policy_outer,
                                 use_nl_loss=args.inner_nl_loss,
-                                use_penalty=args.outer_penalty,
+                                use_penalty=args.outer_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
                                 use_clipping=args.outer_clip,
                                 beta=args.outer_beta)
 
@@ -3108,18 +3233,19 @@ if __name__ == "__main__":
                         # (otherwise you would use values from async rollouts which
                         # usually correlates with the sync play results but is sometimes a bit weird)
                         if args.env == 'coin':
-                            if inner_repeat_train_on_same_samples:
-                                raise NotImplementedError("Again repeat train not yet supported here")
-                            obs_history, act_history, rewards, policy_history, val_history, \
+                            # if inner_repeat_train_on_same_samples:
+                            #     raise NotImplementedError("Again repeat train not yet supported here")
+                            obs_history, act_history, rewards, taken_act_prob_history, full_cat_prob_policy_history, val_history, \
                             next_val_history, avg_same_colour_coins_picked_total, \
                             avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
                                 th, vals)
 
                             dice_loss, G_ts, values_loss = \
-                                game.get_dice_loss(act_history, rewards, policy_history,
+                                game.get_dice_loss(act_history, rewards, taken_act_prob_history,
                                                    val_history,
                                                    next_val_history,
-                                                   use_nl_loss=args.inner_nl_loss)
+                                                   use_nl_loss=args.inner_nl_loss,
+                                                   use_penalty=False)
                         elif args.env == 'imp':
                             if inner_repeat_train_on_same_samples:
                                 raise Exception(
@@ -3140,13 +3266,13 @@ if __name__ == "__main__":
                                     action_trajectory, rewards,
                                     policy_history, val_history,
                                     next_val_history,
-                                    old_policy_history=policy_history, use_penalty=False,
+                                    old_policy_history=policy_history, use_penalty=False, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
                                     use_clipping=args.outer_clip)
                             else:
                                 _, G_ts, _ = game.get_dice_loss(
                                     action_trajectory, rewards,
                                     policy_history, val_history,
-                                    next_val_history, use_penalty=False)
+                                    next_val_history, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples, use_penalty=False)
                                     # use_penalty=args.outer_penalty,
                                     # use_clipping=args.outer_clip, beta=args.outer_beta)
 
