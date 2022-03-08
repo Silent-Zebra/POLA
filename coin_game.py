@@ -186,9 +186,9 @@ class CoinGameGPU(Game):
         # print(sample_obs.shape)
 
         h_p = [torch.zeros(sample_obs.shape[2],
-                           self.nn_hidden_size)] * self.n_agents
+                           self.nn_hidden_size).to(device)] * self.n_agents
         h_v = [torch.zeros(sample_obs.shape[2],
-                           self.nn_hidden_size)] * self.n_agents
+                           self.nn_hidden_size).to(device)] * self.n_agents
 
         for t in range(sample_obs.shape[1]):
 
@@ -499,8 +499,8 @@ class CoinGameGPU(Game):
 
             if self.gru:
                 if iter == 0:
-                    h_p = [torch.zeros(self.batch_size, self.nn_hidden_size)] * self.n_agents
-                    h_v = [torch.zeros(self.batch_size, self.nn_hidden_size)] * self.n_agents
+                    h_p = [torch.zeros(self.batch_size, self.nn_hidden_size).to(device)] * self.n_agents
+                    h_v = [torch.zeros(self.batch_size, self.nn_hidden_size).to(device)] * self.n_agents
 
                 # print(obs_history.shape)
                 # print(obs_history)
@@ -598,9 +598,9 @@ class CoinGameGPU(Game):
         avg_coins_picked_total = 0
 
         h_p = [torch.zeros(self.batch_size,
-                           self.nn_hidden_size)] * self.n_agents
+                           self.nn_hidden_size).to(device)] * self.n_agents
         h_v = [torch.zeros(self.batch_size,
-                           self.nn_hidden_size)] * self.n_agents
+                           self.nn_hidden_size).to(device)] * self.n_agents
 
         while not done:
 
