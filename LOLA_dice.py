@@ -247,11 +247,12 @@ def apply(batch_states, theta, hidden):
 
 def act(batch_states, theta_p, theta_v, h_p, h_v):
     h_p, out = apply(batch_states, theta_p, h_p)
+    categorical_act_probs = torch.softmax(out, dim=-1)
     h_v, values = apply(batch_states, theta_v, h_v)
-    dist = Categorical(torch.softmax(out, dim=-1))
+    dist = Categorical(categorical_act_probs)
     actions = dist.sample()
     log_probs_actions = dist.log_prob(actions)
-    return actions, log_probs_actions, values.squeeze(-1), h_p, h_v
+    return actions, log_probs_actions, values.squeeze(-1), h_p, h_v, categorical_act_probs
 
 
 def get_gradient(objective, theta):
@@ -271,13 +272,12 @@ def step(theta1, theta2, values1, values2):
     torch.zeros(args.batch_size, args.hidden_size).to(device),
     torch.zeros(args.batch_size, args.hidden_size).to(device))
     for t in range(args.len_rollout):
-        a1, lp1, v1, h_p1, h_v1 = act(s1, theta1, values1, h_p1, h_v1)
-        a2, lp2, v2, h_p2, h_v2 = act(s2, theta2, values2, h_p2, h_v2)
+        a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, theta1, values1, h_p1, h_v1)
+        a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, theta2, values2, h_p2, h_v2)
         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
         # cumulate scores
         score1 += torch.mean(r1) / float(args.len_rollout)
         score2 += torch.mean(r2) / float(args.len_rollout)
-
         # print(info)
 
     return (score1, score2), info
@@ -352,6 +352,22 @@ class Agent():
         loss.backward()
         self.value_optimizer.step()
 
+    def get_policies_for_states(self):
+        h_p1, h_v1 = (
+            torch.zeros(args.batch_size, self.hidden_size).to(device),
+            torch.zeros(args.batch_size, self.hidden_size).to(device))
+
+        cat_act_probs = []
+
+        for t in range(args.len_rollout):
+            s1 = self.state_history[t]
+            a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
+                                                          self.theta_v, h_p1,
+                                                          h_v1)
+            cat_act_probs.append(cat_act_probs1)
+
+        return torch.stack(cat_act_probs, dim=1)
+
     def in_lookahead(self, other_theta, other_values):
         (s1, s2) = env.reset()
         other_memory = Memory()
@@ -362,9 +378,9 @@ class Agent():
         torch.zeros(args.batch_size, self.hidden_size).to(device))
 
         for t in range(args.len_rollout):
-            a1, lp1, v1, h_p1, h_v1 = act(s1, self.theta_p, self.theta_v, h_p1,
+            a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
-            a2, lp2, v2, h_p2, h_v2 = act(s2, other_theta, other_values, h_p2,
+            a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta, other_values, h_p2,
                                           h_v2)
             (s1, s2), (r1, r2), _, _ = env.step((a1, a2))
             other_memory.add(lp2, lp1, v2, r2)
@@ -373,7 +389,7 @@ class Agent():
         grad = get_gradient(other_objective, other_theta)
         return grad
 
-    def out_lookahead(self, other_theta, other_values):
+    def out_lookahead(self, other_theta, other_values, first_outer_step=False):
         (s1, s2) = env.reset()
         memory = Memory()
         h_p1, h_v1, h_p2, h_v2 = (
@@ -381,49 +397,93 @@ class Agent():
         torch.zeros(args.batch_size, self.hidden_size).to(device),
         torch.zeros(args.batch_size, self.hidden_size).to(device),
         torch.zeros(args.batch_size, self.hidden_size).to(device))
+        if first_outer_step:
+            cat_act_probs_self = []
+            state_history = []
+            state_history.append(s1)
         for t in range(args.len_rollout):
-            a1, lp1, v1, h_p1, h_v1 = act(s1, self.theta_p, self.theta_v, h_p1,
+            a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
-            a2, lp2, v2, h_p2, h_v2 = act(s2, other_theta, other_values, h_p2,
+            a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta, other_values, h_p2,
                                           h_v2)
             (s1, s2), (r1, r2), _, _ = env.step((a1, a2))
             memory.add(lp1, lp2, v1, r1)
+            if first_outer_step:
+                cat_act_probs_self.append(cat_act_probs1)
+                state_history.append(s1)
+
+        if not first_outer_step:
+            curr_pol_probs = self.get_policies_for_states()
+            kl_div = torch.nn.functional.kl_div(torch.log(curr_pol_probs), self.ref_cat_act_probs.detach(), log_target=False, reduction='batchmean')
+            print(kl_div)
 
         # update self theta
         objective = memory.dice_objective()
+        if not first_outer_step:
+            objective += args.outer_beta * kl_div
         self.theta_update(objective)
         # update self value:
         v_loss = memory.value_loss()
         self.value_update(v_loss)
 
+        if first_outer_step:
+            self.ref_cat_act_probs = torch.stack(cat_act_probs_self, dim=1)
+            self.state_history = torch.stack(state_history, dim=0)
+            # return torch.stack(cat_act_probs_self, dim=1), torch.stack(state_history, dim=1)
 
-def play(agent1, agent2, n_lookaheads):
+def play(agent1, agent2, n_lookaheads, outer_steps):
     joint_scores = []
-    print("start iterations with", n_lookaheads, "lookaheads:")
+    print("start iterations with", n_lookaheads, "inner steps and", outer_steps, "outer steps:")
     for update in range(args.n_update):
-        # copy other's parameters:
-        theta1_ = [tp.detach().clone().requires_grad_(True) for tp in
-                   agent1.theta_p]
-        values1_ = [tv.detach().clone().requires_grad_(True) for tv in
-                    agent1.theta_v]
-        theta2_ = [tp.detach().clone().requires_grad_(True) for tp in
-                   agent2.theta_p]
-        values2_ = [tv.detach().clone().requires_grad_(True) for tv in
-                    agent2.theta_v]
 
-        for k in range(n_lookaheads):
-            # estimate other's gradients from in_lookahead:
-            grad2 = agent1.in_lookahead(theta2_, values2_)
-            grad1 = agent2.in_lookahead(theta1_, values1_)
-            # update other's theta
-            theta2_ = [theta2_[i] - args.lr_in * grad2[i] for i in
-                       range(len(theta2_))]
-            theta1_ = [theta1_[i] - args.lr_in * grad1[i] for i in
-                       range(len(theta1_))]
+        start_theta1 = [tp.detach().clone().requires_grad_(True) for tp in
+                            agent1.theta_p]
+        start_val1 = [tv.detach().clone().requires_grad_(True) for tv in
+                        agent1.theta_v]
+        start_theta2 = [tp.detach().clone().requires_grad_(True) for tp in
+                            agent2.theta_p]
+        start_val2 = [tv.detach().clone().requires_grad_(True) for tv in
+                        agent2.theta_v]
 
-        # update own parameters from out_lookahead:
-        agent1.out_lookahead(theta2_, values2_)
-        agent2.out_lookahead(theta1_, values1_)
+        for outer_step in range(outer_steps):
+            # copy other's parameters:
+            theta2_ = [tp.detach().clone().requires_grad_(True) for tp in
+                       start_theta2]
+            values2_ = [tv.detach().clone().requires_grad_(True) for tv in
+                        start_val2]
+
+            for k in range(n_lookaheads):
+                # estimate other's gradients from in_lookahead:
+                grad2 = agent1.in_lookahead(theta2_, values2_)
+                # update other's theta
+                theta2_ = [theta2_[i] - args.lr_in * grad2[i] for i in
+                           range(len(theta2_))]
+
+            # update own parameters from out_lookahead:
+            if outer_step == 0:
+                agent1.out_lookahead(theta2_, values2_, first_outer_step=True)
+            else:
+                agent1.out_lookahead(theta2_, values2_, first_outer_step=False)
+
+
+        for outer_step in range(outer_steps):
+            theta1_ = [tp.detach().clone().requires_grad_(True) for tp in
+                       start_theta1]
+            values1_ = [tv.detach().clone().requires_grad_(True) for tv in
+                        start_val1]
+
+            for k in range(n_lookaheads):
+                # estimate other's gradients from in_lookahead:
+                grad1 = agent2.in_lookahead(theta1_, values1_)
+                # update other's theta
+
+                theta1_ = [theta1_[i] - args.lr_in * grad1[i] for i in
+                           range(len(theta1_))]
+
+            if outer_step == 0:
+                agent2.out_lookahead(theta1_, values1_, first_outer_step=True)
+            else:
+                agent2.out_lookahead(theta1_, values1_, first_outer_step=False)
 
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
@@ -456,7 +516,8 @@ def play(agent1, agent2, n_lookaheads):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("NPLOLA")
-    parser.add_argument("--lookaheads", type=int, default=1, help="inner loop steps for DiCE")
+    parser.add_argument("--inner_steps", type=int, default=1, help="inner loop steps for DiCE")
+    parser.add_argument("--outer_steps", type=int, default=1, help="outer loop steps for POLA")
     parser.add_argument("--lr_out", type=float, default=0.005,
                         help="outer loop learning rate: same learning rate across all policies for now")
     parser.add_argument("--lr_in", type=float, default=0.05,
@@ -467,9 +528,10 @@ if __name__ == "__main__":
     parser.add_argument("--n_update", type=int, default=1000, help="number of epochs to run")
     parser.add_argument("--len_rollout", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
     parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--seed", type=int, default=2342, help="for seed")
+    parser.add_argument("--seed", type=int, default=1, help="for seed")
     parser.add_argument("--hidden_size", type=int, default=16)
-    parser.add_argument("--print_every", type=int, default=10, help="Print every x number of epochs")
+    parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
+    parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
 
     use_baseline = True
 
@@ -484,4 +546,5 @@ if __name__ == "__main__":
     env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size)
 
     scores = play(Agent(input_size, args.hidden_size, action_size),
-                  Agent(input_size, args.hidden_size, action_size), args.lookaheads)
+                  Agent(input_size, args.hidden_size, action_size),
+                  args.inner_steps, args.outer_steps)
