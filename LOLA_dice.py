@@ -81,6 +81,23 @@ def print_policy_and_value_info(th, vals):
 
     print_info_on_sample_obs(sample_obs, th, vals)
 
+    print("Simple One Step Example 2")
+    sample_obs = torch.FloatTensor([[[0, 0, 0],
+                                     [0, 0, 0],
+                                     [0, 0, 1]],  # agent 1
+                                    [[0, 0, 0],
+                                     [0, 1, 0],
+                                     [0, 0, 0]],  # agent 2
+                                    [[0, 0, 0],
+                                     [0, 0, 1],
+                                     [0, 0, 0]],
+                                    # we want agent 1 moving up and agent 2 moving down
+                                    [[0, 0, 0],
+                                     [0, 0, 0],
+                                     [0, 1, 0]]]).reshape(1, 36)
+
+    print_info_on_sample_obs(sample_obs, th, vals)
+
     # This one meant to test the idea of p2 defects by taking p1 coin - will p1 retaliate?
     print("P2 Defects")
     sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
@@ -169,10 +186,10 @@ class CoinGameGPU:
     NUM_AGENTS = 2
     NUM_ACTIONS = 4
     MOVES = torch.stack([
-        torch.LongTensor([0, 1]),
-        torch.LongTensor([0, -1]),
-        torch.LongTensor([1, 0]),
-        torch.LongTensor([-1, 0]),
+        torch.LongTensor([0, 1]), # right
+        torch.LongTensor([0, -1]), # left
+        torch.LongTensor([1, 0]), # down
+        torch.LongTensor([-1, 0]), # up
     ], dim=0).to(device)
 
     def __init__(self, max_steps, batch_size, grid_size=3):
@@ -307,8 +324,8 @@ class CoinGameGPU:
             done = torch.zeros(self.batch_size).to(device)
 
         return observations, reward, done, (
-        red_red_matches.sum(), red_blue_matches.sum(), blue_red_matches.sum(),
-        blue_blue_matches.sum())
+        red_red_matches.float().mean(), red_blue_matches.float().mean(),
+        blue_red_matches.float().mean(), blue_blue_matches.float().mean())
 
 
 
@@ -424,6 +441,8 @@ def step(theta1, theta2, values1, values2):
     torch.zeros(args.batch_size, args.hidden_size).to(device),
     torch.zeros(args.batch_size, args.hidden_size).to(device),
     torch.zeros(args.batch_size, args.hidden_size).to(device))
+    rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
+
     for t in range(args.len_rollout):
         a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, theta1, values1, h_p1, h_v1)
         a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, theta2, values2, h_p2, h_v2)
@@ -432,8 +451,13 @@ def step(theta1, theta2, values1, values2):
         score1 += torch.mean(r1) / float(args.len_rollout)
         score2 += torch.mean(r2) / float(args.len_rollout)
         # print(info)
+        rr_matches, rb_matches, br_matches, bb_matches = info
+        rr_matches_record += rr_matches
+        rb_matches_record += rb_matches
+        br_matches_record += br_matches
+        bb_matches_record += bb_matches
 
-    return (score1, score2), info
+    return (score1, score2), (rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record)
 
 
 class Agent():
