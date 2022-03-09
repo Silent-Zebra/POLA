@@ -4,9 +4,28 @@ import torch.nn as nn
 from torch.distributions import Categorical
 import numpy as np
 import argparse
+import os
+import datetime
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
+def checkpoint(agent1, agent2, info, tag, args):
+    ckpt_dict = {
+        "agent1": agent1,
+        "agent2": agent2,
+        "info": info
+    }
+    torch.save(ckpt_dict, os.path.join(args.save_dir, tag))
+
+def load_from_checkpoint():
+    assert args.load_path is not None
+    print(f"loading model from {args.load_path}")
+    ckpt_dict = torch.load(args.load_path)
+    agent1 = ckpt_dict["agent1"]
+    agent2 = ckpt_dict["agent2"]
+    info = ckpt_dict["info"]
+    return agent1, agent2, info
 
 class CoinGameGPU:
     """
@@ -434,6 +453,9 @@ class Agent():
 def play(agent1, agent2, n_lookaheads, outer_steps):
     joint_scores = []
     print("start iterations with", n_lookaheads, "inner steps and", outer_steps, "outer steps:")
+    same_colour_coins_record = []
+    diff_colour_coins_record = []
+    coins_collected_info = (same_colour_coins_record, diff_colour_coins_record)
     for update in range(args.n_update):
 
         start_theta1 = [tp.detach().clone().requires_grad_(True) for tp in
@@ -489,8 +511,10 @@ def play(agent1, agent2, n_lookaheads, outer_steps):
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
                            agent2.theta_v)
         rr_matches, rb_matches, br_matches, bb_matches = info
-        same_colour_coins = rr_matches + bb_matches
-        diff_colour_coins = rb_matches + br_matches
+        same_colour_coins = (rr_matches + bb_matches).item()
+        diff_colour_coins = (rb_matches + br_matches).item()
+        same_colour_coins_record.append(same_colour_coins)
+        diff_colour_coins_record.append(diff_colour_coins)
         joint_scores.append(0.5 * (score[0] + score[1]))
 
         # print
@@ -508,6 +532,12 @@ def play(agent1, agent2, n_lookaheads, outer_steps):
             print("RB coins {}".format(rb_matches))
             print("BR coins {}".format(br_matches))
             print("BB coins {}".format(bb_matches))
+
+        if update % args.checkpoint_every == 0:
+            now = datetime.datetime.now()
+            checkpoint(agent1, agent2, coins_collected_info,
+                       "checkpoint_{}_{}.pt".format(update + 1, now.strftime(
+                           '%Y-%m-%d_%H-%M')), args)
 
     return joint_scores
 
@@ -532,6 +562,9 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_size", type=int, default=16)
     parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
+    parser.add_argument("--save_dir", type=str, default='./checkpoints')
+    parser.add_argument("--checkpoint_every", type=int, default=10, help="Epochs between checkpoint save")
+    parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
 
     use_baseline = True
 
@@ -545,6 +578,11 @@ if __name__ == "__main__":
 
     env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size)
 
-    scores = play(Agent(input_size, args.hidden_size, action_size),
-                  Agent(input_size, args.hidden_size, action_size),
-                  args.inner_steps, args.outer_steps)
+    if args.load_path is None:
+        agent1 = Agent(input_size, args.hidden_size, action_size)
+        agent2 = Agent(input_size, args.hidden_size, action_size)
+    else:
+        agent1, agent2, coins_collected_info = load_from_checkpoint()
+        print(coins_collected_info)
+
+    scores = play(agent1, agent2, args.inner_steps, args.outer_steps)
