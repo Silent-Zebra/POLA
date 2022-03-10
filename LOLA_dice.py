@@ -578,6 +578,8 @@ class Agent():
             cat_act_probs_self = []
             state_history = []
             state_history.append(s1)
+        if args.ent_reg > 0:
+            ent_vals = []
         for t in range(args.len_rollout):
             a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
@@ -588,6 +590,8 @@ class Agent():
             if first_outer_step:
                 cat_act_probs_self.append(cat_act_probs1)
                 state_history.append(s1)
+            if args.ent_reg > 0:
+                ent_vals.append(cat_act_probs1)
 
         if not first_outer_step:
             curr_pol_probs = self.get_policies_for_states()
@@ -597,7 +601,12 @@ class Agent():
         # update self theta
         objective = memory.dice_objective()
         if not first_outer_step:
-            objective += args.outer_beta * kl_div
+            objective += args.outer_beta * kl_div # we want to min kl div
+        if args.ent_reg > 0:
+            ent_vals = torch.stack(ent_vals, dim=0)
+            ent_calc = - (ent_vals * torch.log(ent_vals)).sum(dim=-1).mean()
+            # print(ent_calc)
+            objective += -ent_calc * args.ent_reg # but we want to max entropy (min negative entropy)
         self.theta_update(objective)
         # update self value:
         v_loss = memory.value_loss()
@@ -717,7 +726,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr_v", type=float, default=0.001,
                         help="same learning rate across all policies for now. Should be around maybe 0.001 or less for neural nets to avoid instability")
     parser.add_argument("--gamma", type=float, default=0.96, help="discount rate")
-    parser.add_argument("--n_update", type=int, default=1000, help="number of epochs to run")
+    parser.add_argument("--n_update", type=int, default=5000, help="number of epochs to run")
     parser.add_argument("--len_rollout", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=1, help="for seed")
@@ -725,8 +734,10 @@ if __name__ == "__main__":
     parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
     parser.add_argument("--save_dir", type=str, default='./checkpoints')
-    parser.add_argument("--checkpoint_every", type=int, default=10, help="Epochs between checkpoint save")
+    parser.add_argument("--checkpoint_every", type=int, default=1000, help="Epochs between checkpoint save")
     parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
+    parser.add_argument("--ent_reg", type=float, default=0.0, help="entropy regularizer")
+
 
     use_baseline = True
 
