@@ -298,16 +298,16 @@ class CoinGameGPU:
         red_red_matches = self._same_pos(self.red_pos, self.red_coin_pos)
         red_reward[red_red_matches] += 1
         red_blue_matches = self._same_pos(self.red_pos, self.blue_coin_pos)
-        red_reward[red_blue_matches] += 1
+        red_reward[red_blue_matches] += args.diff_coin_reward
 
         blue_reward = torch.zeros(self.batch_size).to(device)
         blue_red_matches = self._same_pos(self.blue_pos, self.red_coin_pos)
-        blue_reward[blue_red_matches] += 1
+        blue_reward[blue_red_matches] += args.diff_coin_reward
         blue_blue_matches = self._same_pos(self.blue_pos, self.blue_coin_pos)
         blue_reward[blue_blue_matches] += 1
 
-        red_reward[blue_red_matches] -= 2
-        blue_reward[red_blue_matches] -= 2
+        red_reward[blue_red_matches] += args.diff_coin_cost # -= 2
+        blue_reward[red_blue_matches] += args.diff_coin_cost # -= 2
 
         self._generate_coins()
         reward = [red_reward.float(), blue_reward.float()]
@@ -596,7 +596,10 @@ class Agent():
         if not first_outer_step:
             curr_pol_probs = self.get_policies_for_states()
             kl_div = torch.nn.functional.kl_div(torch.log(curr_pol_probs), self.ref_cat_act_probs.detach(), log_target=False, reduction='batchmean')
+            # print(curr_pol_probs.shape)
             print(kl_div)
+            # kl_div2 = (curr_pol_probs * torch.log(curr_pol_probs / self.ref_cat_act_probs.detach())).sum() / self.batch_size
+            # print(kl_div2)
 
         # update self theta
         objective = memory.dice_objective()
@@ -737,6 +740,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_every", type=int, default=1000, help="Epochs between checkpoint save")
     parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
     parser.add_argument("--ent_reg", type=float, default=0.0, help="entropy regularizer")
+    parser.add_argument("--diff_coin_reward", type=float, default=1.0, help="changes problem setting difficulty (the reward for picking up coin of different colour)")
+    parser.add_argument("--diff_coin_cost", type=float, default=-2.0, help="changes problem setting (the cost to the opponent when you pick up a coin of their colour)")
 
 
     use_baseline = True
