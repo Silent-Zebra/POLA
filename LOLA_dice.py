@@ -733,7 +733,7 @@ if __name__ == "__main__":
     parser.add_argument("--len_rollout", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=1, help="for seed")
-    parser.add_argument("--hidden_size", type=int, default=16)
+    parser.add_argument("--hidden_size", type=int, default=32)
     parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
     parser.add_argument("--save_dir", type=str, default='./checkpoints')
@@ -743,6 +743,7 @@ if __name__ == "__main__":
     parser.add_argument("--diff_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of different colour)")
     parser.add_argument("--diff_coin_cost", type=float, default=-2.0, help="changes problem setting (the cost to the opponent when you pick up a coin of their colour)")
     parser.add_argument("--same_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of same colour)")
+    parser.add_argument("--grid_size", type=int, default=3)
 
 
     use_baseline = True
@@ -755,7 +756,7 @@ if __name__ == "__main__":
     input_size = 36
     action_size = 4
 
-    env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size)
+    env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
 
     if args.load_path is None:
         agent1 = Agent(input_size, args.hidden_size, action_size)
