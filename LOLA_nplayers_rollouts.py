@@ -2289,21 +2289,38 @@ def dice_inner_step(i, inner_step, action_trajectory, rewards, policy_history,
 
 
         else:
-            # This is essentially the repeat_train formulation on the inner loop
-            new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
-                mixed_thetas, mixed_vals, obs_history)
-            kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
-                mixed_thetas, mixed_vals, obs_history_for_kl_div)
+            if args.inner_repeat_train_on_same_samples:
+
+                # This is essentially the repeat_train formulation on the inner loop
+                new_policies, new_vals, next_new_vals = game.get_policies_vals_for_states(
+                    mixed_thetas, mixed_vals, obs_history)
+                kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
+                    mixed_thetas, mixed_vals, obs_history_for_kl_div)
+                dice_loss, _, values_loss = game.get_dice_loss(
+                    action_trajectory, rewards, new_policies, new_vals,
+                    next_new_vals, old_policy_history=policy_history,
+                    kl_div_target_policy=kl_div_target_policy_inner,
+                    kl_div_curr_policy=kl_div_policy,
+                    use_nl_loss=args.inner_nl_loss,
+                    use_penalty=args.inner_penalty,
+                    inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                    use_clipping=args.inner_clip, beta=args.inner_beta)
+            else:
+                kl_div_policy, kl_div_vals, _ = game.get_policies_vals_for_states(
+                    mixed_thetas, mixed_vals, obs_history_for_kl_div)
+                dice_loss, _, values_loss = game.get_dice_loss(
+                    action_trajectory, rewards,
+                    policy_history, val_history, next_val_history,
+                    kl_div_target_policy=kl_div_target_policy_inner,
+                    kl_div_curr_policy=kl_div_policy,
+                    use_nl_loss=args.inner_nl_loss,
+                    inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
+                    use_penalty=args.inner_penalty,
+                    use_clipping=args.inner_clip, beta=args.inner_beta)
+
             # Using the new policies and vals now
             # Always be careful not to overwrite/reuse names of existing variables
-            dice_loss, _, values_loss = game.get_dice_loss(
-                action_trajectory, rewards, new_policies, new_vals,
-                next_new_vals, old_policy_history=policy_history,
-                kl_div_target_policy=kl_div_target_policy_inner,
-                kl_div_curr_policy=kl_div_policy,
-                use_nl_loss=args.inner_nl_loss,
-                use_penalty=args.inner_penalty, inner_repeat_train_on_same_samples=args.inner_repeat_train_on_same_samples,
-                use_clipping=args.inner_clip, beta=args.inner_beta)
+
 
     for j in range(n_agents):
         if j != i:
@@ -2445,7 +2462,7 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                         avg_diff_colour_coins_picked_total, avg_coins_picked_total = game.rollout(
                             mixed_thetas, mixed_vals)
 
-                        if outer_step == 0:
+                        if inner_step == 0 and outer_step == 0:
                             kl_div_target_policy_inner = full_cat_prob_policy_history.detach().clone()
 
 
@@ -2453,15 +2470,15 @@ def dice_update_th_new_loop(th, vals, n_agents, inner_steps, outer_steps, lr_pol
                         action_trajectory, rewards, policy_history, val_history, next_val_history, obs_history = game.rollout(
                             mixed_thetas, mixed_vals)
 
-                        if outer_step == 0:
+                        if inner_step == 0 and outer_step == 0:
                             kl_div_target_policy_inner = policy_history.detach().clone()
                     # 0 below because we are not doing repeat train, and we are instead re-rolling out every time
                     # So the inner_step is 0 here on purpose
                     # The inner step was meant in terms of repeat train on same samples, how many times you have repeated training on same samples
-                    if inner_step == 0:
+                    if inner_step == 0 and outer_step == 0:
                         obs_history_for_kl_div = copy.deepcopy(obs_history)
                         act_history_for_kl_div = copy.deepcopy(action_trajectory)
-                    dice_inner_step(i, 0, action_trajectory, rewards,
+                    dice_inner_step(i, inner_step, action_trajectory, rewards,
                                     policy_history, val_history,
                                     next_val_history, mixed_thetas,
                                     mixed_vals, obs_history,
@@ -2755,24 +2772,11 @@ if __name__ == "__main__":
     if args.outer_exact_prox:
         assert args.inner_exact_prox or args.no_taylor_approx
 
-    if args.inner_penalty or args.inner_clip:
-        # print("!!! Warning: check this !!!")
-        # # look up the for_kl_div stuff I did for outer loop, would prob need to do for inner as well.
-        # raise NotImplementedError
-
-        if not args.inner_repeat_train_on_same_samples:
-            raise NotImplementedError("Be careful here. Not really tested")
-            raise Exception("You need repeat train for consistent kl penalty with samples (must use same samples)")
-
-    if args.outer_penalty or args.outer_clip:
-        if not args.inner_repeat_train_on_same_samples:
-            print("CHECK THIS - Does code need inner_repeat?")
 
     # if args.outer_penalty or args.outer_clip:
-    #     if not args.outer_repeat_train_on_same_samples:
-    #         raise Exception("You need repeat train for consistent kl penalty with samples (must use same samples)")
+    #     if not args.inner_repeat_train_on_same_samples:
+    #         print("CHECK THIS - Does code need inner_repeat?")
 
-        # assert args.inner_repeat_train_on_same_samples # I suppose you could also have this with DiCE rollouts while keeping track of the old policy. But right now not supported
 
     if args.inner_repeat_train_on_same_samples:
         assert args.using_DiCE
