@@ -412,7 +412,7 @@ class ContributionGame(Game):
     #     return policy_dist_i
 
 
-    def get_exact_loss(self, th):
+    def get_exact_loss(self, th, return_p_mat_only=False):
         """
         Theta denotes (unnormalized) action probabilities at each of the states:
         DD DC CD CC start (where DD = both defect, DC = agent 1 defects while agent 2 cooperates, etc.)
@@ -492,6 +492,9 @@ class ContributionGame(Game):
 
         # Remember M is just the steady state probabilities for each of the states (discounted state visitation count, not a probability)
         # It is a vector, not a matrix.
+
+        if return_p_mat_only:
+            return M
 
         L_all = []
         for i in range(self.n_agents):
@@ -906,6 +909,11 @@ def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build, i
 
 # TODO perhaps the inner_loop step can pass the lr to this prox_f and we can scale the inner lr by eta, if we want more control over it
 
+def get_discounted_state_visitation_weighted_kl(kl_div_no_reduce, p_mat):
+    weighted_kl_div = (kl_div_no_reduce.sum(dim=-1) * p_mat.reshape(1, -1)).mean()
+    weighted_kl_div = weighted_kl_div / p_mat.sum()
+    return weighted_kl_div
+
 def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters = 0, max_iters = 1000, threshold = 1e-8):
     # For each other player, do the prox operator
     # (this function just does on a single player, it should be used within the loop iterating over all players)
@@ -930,11 +938,35 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
 
         # policy_dist, target_policy_dist = build_policy_and_target_policy_dists(th_to_build_on[j], kl_div_target_th[j], j)
 
+
+        kl_div_reduction = 'batchmean'
+
+        if args.visitation_weighted_kl:
+            kl_div_reduction = 'none'
+
+            p_mat = game.get_exact_loss(th_to_build_on, return_p_mat_only=True)
+            if args.init_state_representation == 2:
+                p_mat = torch.cat((p_mat, torch.ones(1)))
+            elif args.init_state_representation == 1:
+                p_mat[-1] += 1
+                p_mat = torch.cat((p_mat, torch.zeros(1)))
+            else:
+                raise NotImplementedError
+
+
+
+
+            # weighted_kl_div = (kl_div.sum(dim=-1) * p_mat.reshape(1, -1)).mean()
+            # weighted_kl_div = weighted_kl_div / p_mat.sum()
+            # kl_div = weighted_kl_div
         kl_div = torch.nn.functional.kl_div(input=torch.log(policy_dist),
                                             target=target_policy_dist,
-                                            reduction='batchmean',
+                                            reduction=kl_div_reduction,
                                             log_target=False)
-        # Again we have this awkward reward formulation
+
+        if args.visitation_weighted_kl:
+            kl_div = get_discounted_state_visitation_weighted_kl(kl_div, p_mat)
+
         loss_j = inner_losses[j] + args.inner_beta * kl_div
         # No eta here because we are going to solve it exactly anyway
 
@@ -964,22 +996,27 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes, iters =
             curr_pol, prev_pol, j, policies_are_logits=False)
         # policy_dist, target_policy_dist = build_policy_and_target_policy_dists(curr_pol, prev_pol, j)
 
+
         curr_prev_pol_div = torch.nn.functional.kl_div(
             input=torch.log(policy_dist),
             target=target_policy_dist,
-            reduction='batchmean',
+            reduction=kl_div_reduction,
             log_target=False)
 
         curr_prev_pol_div_rev = torch.nn.functional.kl_div(
             input=torch.log(target_policy_dist),
             target=policy_dist,
-            reduction='batchmean',
+            reduction=kl_div_reduction,
             log_target=False)
         # print("--INNER STEP--")
         # print("Prev pol:")
         # print(prev_pol)
         # print("Curr pol:")
         # print(curr_pol)
+
+        if args.visitation_weighted_kl:
+            curr_prev_pol_div = get_discounted_state_visitation_weighted_kl(curr_prev_pol_div, p_mat)
+            curr_prev_pol_div_rev = get_discounted_state_visitation_weighted_kl(curr_prev_pol_div_rev, p_mat)
 
         if (curr_prev_pol_div < threshold and curr_prev_pol_div_rev < threshold) or iters > max_iters:
             if args.print_prox_loops_info:
@@ -1900,7 +1937,7 @@ if __name__ == "__main__":
     parser.add_argument("--history_len", type=int, default=1, help="Number of steps lookback that each agent gets as state")
     # parser.add_argument("--mnist_states", action="store_true",
     #                     help="use MNIST digits as state representation") # Deprecated, see state_type
-    parser.add_argument("--init_state_representation", type=int, default=2)
+    parser.add_argument("--init_state_representation", type=int, default=2, help="2 = separate state. 1 = coop. 0 = defect (0 not tested, recommended not to use)")
     parser.add_argument("--rollout_len", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
     parser.add_argument("--base_cf_no_scale", type=float, default=1.33,
                         help="base contribution factor for no scaling (right now for 2 agents)")
@@ -1938,6 +1975,7 @@ if __name__ == "__main__":
                         help="Use limited horizon (rollout_len) for the exact gradient case")
     parser.add_argument("--mnist_coop_class", type=int, default=1, help="Digit class to use in place of the observation when an agent cooperates, when using MNIST state representation")
     parser.add_argument("--mnist_defect_class", type=int, default=0, help="Digit class to use in place of the observation when an agent defects, when using MNIST state representation")
+    parser.add_argument("--visitation_weighted_kl", action="store_true", help="Weight KL term in each state of policy by the discounted visitation frequency")
 
 
     args = parser.parse_args()
@@ -1948,6 +1986,8 @@ if __name__ == "__main__":
         assert args.actual_update
 
     init_state_representation = args.init_state_representation
+
+
 
     rollout_len = args.rollout_len
 
