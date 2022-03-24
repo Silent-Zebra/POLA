@@ -318,8 +318,8 @@ class OGCoinGameGPU:
         red_reward[torch.logical_and(blue_matches, self.red_coin)] -= 2
         blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] -= 2
 
-        total_rb_matches = torch.logical_and(blue_matches, self.red_coin).float().mean()
-        total_br_matches = torch.logical_and(red_matches, 1 - self.red_coin).float().mean()
+        total_rb_matches = torch.logical_and(red_matches, 1 - self.red_coin).float().mean()
+        total_br_matches = torch.logical_and(blue_matches, self.red_coin).float().mean()
 
         total_rr_matches = red_matches.float().mean() - total_rb_matches
         total_bb_matches = blue_matches.float().mean() - total_br_matches
