@@ -306,15 +306,22 @@ class OGCoinGameGPU:
 
         # Compute rewards
         red_matches = self._same_pos(self.red_pos, self.coin_pos)
-        red_reward = torch.zeros_like(self.red_coin)
-        red_reward[red_matches] = 1
+        red_reward = torch.zeros_like(self.red_coin).float()
+        # red_reward[red_matches] = 1
 
         blue_matches = self._same_pos(self.blue_pos, self.coin_pos)
-        blue_reward = torch.zeros_like(self.red_coin)
-        blue_reward[blue_matches] = 1
+        blue_reward = torch.zeros_like(self.red_coin).float()
+        # blue_reward[blue_matches] = 1
 
-        red_reward[torch.logical_and(blue_matches, self.red_coin)] -= 2
-        blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] -= 2
+        red_reward[torch.logical_and(red_matches, self.red_coin)] = args.same_coin_reward
+        blue_reward[torch.logical_and(blue_matches, 1 - self.red_coin)] = args.same_coin_reward
+        red_reward[torch.logical_and(red_matches, 1 - self.red_coin)] = args.diff_coin_reward
+        blue_reward[torch.logical_and(blue_matches, self.red_coin)] = args.diff_coin_reward
+
+        red_reward[torch.logical_and(blue_matches, self.red_coin)] += (args.diff_coin_cost)
+        blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] += (args.diff_coin_cost)
+        # red_reward[torch.logical_and(blue_matches, self.red_coin)] -= 2
+        # blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] -= 2
 
         total_rb_matches = torch.logical_and(red_matches, 1 - self.red_coin).float().mean()
         total_br_matches = torch.logical_and(blue_matches, self.red_coin).float().mean()
@@ -340,6 +347,7 @@ class OGCoinGameGPU:
         return observations, reward, done, (
         total_rr_matches, total_rb_matches,
         total_br_matches, total_bb_matches)
+
 
 
 
