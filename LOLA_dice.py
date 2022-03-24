@@ -259,12 +259,10 @@ class OGCoinGameGPU:
         state2[:, 2] = state[:, 3]
         state2[:, 3] = state[:, 2]
         observations = [state, state2]
-        # print(state)
-        # print(state2)
-        # 1/0
         return observations
 
     def _generate_coins(self):
+
         mask = torch.logical_or(self._same_pos(self.coin_pos, self.blue_pos), self._same_pos(self.coin_pos, self.red_pos))
         self.red_coin = torch.where(mask, 1 - self.red_coin, self.red_coin)
 
@@ -327,7 +325,13 @@ class OGCoinGameGPU:
         self._generate_coins()
         reward = [red_reward.float(), blue_reward.float()]
         state = self._generate_state()
-        observations = [state, state]
+        state2 = state.clone()
+        state2[:, 0] = state[:, 1]
+        state2[:, 1] = state[:, 0]
+        state2[:, 2] = state[:, 3]
+        state2[:, 3] = state[:, 2]
+        observations = [state, state2]
+        # observations = [state, state]
         if self.step_count >= self.max_steps:
             done = torch.ones_like(self.red_coin)
         else:
@@ -336,6 +340,7 @@ class OGCoinGameGPU:
         return observations, reward, done, (
         total_rr_matches, total_rb_matches,
         total_br_matches, total_bb_matches)
+
 
 
 class CoinGameGPU:
