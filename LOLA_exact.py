@@ -1562,9 +1562,9 @@ def update_th_taylor_approx_exact_value(th, game):
 
                         print(kl_div_error_check)
 
-
                     except:
                         numerical_issue = True
+
 
                     if numerical_issue or kl_div_error_check > 10:
                         print("Numerical Error occured")
@@ -1723,8 +1723,36 @@ def update_th_exact_value(th, game):
                 # --- INNER LOOP ---
                 other_terms = None
                 if args.inner_exact_prox:
-                    new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy,
+                    temp_new_th, other_terms = inner_exact_loop_step(new_th, static_th_copy,
                                           game, i, n, prox_f_step_sizes=lr_policies_inner)
+
+                    numerical_issue = False
+                    try:
+                        new_pol = game.get_policy_for_all_states(temp_new_th, i)
+                        prev_pol = game.get_policy_for_all_states(new_th, i)
+
+                        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+                            new_pol, prev_pol, i, policies_are_logits=False)
+
+                        kl_div_error_check = torch.nn.functional.kl_div(
+                            input=torch.log(policy_dist),
+                            target=target_policy_dist,
+                            reduction='batchmean',
+                            log_target=False)
+
+                        print(kl_div_error_check)
+
+                    except:
+                        numerical_issue = True
+
+                    if numerical_issue or kl_div_error_check > 10:
+                        print("Numerical Error occured")
+                        print(kl_div_error_check)
+
+                        continue
+
+                    else:
+                        new_th = temp_new_th
 
                     if args.using_nn:
                         new_th, optims_th_primes = \
