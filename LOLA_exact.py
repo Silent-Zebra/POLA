@@ -1566,7 +1566,7 @@ def update_th_taylor_approx_exact_value(th, game):
                         numerical_issue = True
 
 
-                    if numerical_issue or kl_div_error_check > 10:
+                    if numerical_issue or kl_div_error_check > 20:
                         print("Numerical Error occured")
                         print(kl_div_error_check)
 
@@ -1745,7 +1745,7 @@ def update_th_exact_value(th, game):
                     except:
                         numerical_issue = True
 
-                    if numerical_issue or kl_div_error_check > 10:
+                    if numerical_issue or kl_div_error_check > 20:
                         print("Numerical Error occured")
                         print(kl_div_error_check)
 
