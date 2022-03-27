@@ -349,8 +349,6 @@ class OGCoinGameGPU:
         total_br_matches, total_bb_matches)
 
 
-
-
 class CoinGameGPU:
     """
     Vectorized Coin Game environment.
@@ -680,8 +678,14 @@ class Agent():
         ]).to(device)
 
         self.reset_parameters()
-        self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=args.lr_out)
-        self.value_optimizer = torch.optim.Adam(self.theta_v, lr=args.lr_v)
+        if args.optim.lower() == 'adam':
+            self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=args.lr_out)
+            self.value_optimizer = torch.optim.Adam(self.theta_v, lr=args.lr_v)
+        elif args.optim.lower() == 'sgd':
+            self.theta_optimizer = torch.optim.SGD(self.theta_p, lr=args.lr_out)
+            self.value_optimizer = torch.optim.SGD(self.theta_v, lr=args.lr_v)
+        else:
+            raise Exception("Unknown or Not Implemented Optimizer")
 
     def reset_parameters(self):
         std = 1.0 / math.sqrt(self.hidden_size)
@@ -918,6 +922,7 @@ if __name__ == "__main__":
     parser.add_argument("--same_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of same colour)")
     parser.add_argument("--grid_size", type=int, default=3)
     parser.add_argument("--og_coin_game", action="store_true", help="use the original coin game formulation")
+    parser.add_argument("--optim", type=str, default="adam")
 
 
     use_baseline = True
