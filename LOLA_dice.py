@@ -722,7 +722,24 @@ class Agent():
 
         return torch.stack(cat_act_probs, dim=1)
 
-    def in_lookahead(self, other_theta, other_values):
+    def get_other_policies_for_states(self, other_theta, other_values, state_history):
+        # Perhaps really should not be named 1, but whatever.
+        h_p1, h_v1 = (
+            torch.zeros(args.batch_size, self.hidden_size).to(device),
+            torch.zeros(args.batch_size, self.hidden_size).to(device))
+
+        cat_act_probs = []
+
+        for t in range(args.len_rollout):
+            s1 = state_history[t]
+            a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, other_theta,
+                                                          other_values, h_p1,
+                                                          h_v1)
+            cat_act_probs.append(cat_act_probs1)
+
+        return torch.stack(cat_act_probs, dim=1)
+
+    def in_lookahead(self, other_theta, other_values, first_inner_step=False):
         (s1, s2) = env.reset()
         other_memory = Memory()
         h_p1, h_v1, h_p2, h_v2 = (
@@ -731,6 +748,11 @@ class Agent():
         torch.zeros(args.batch_size, self.hidden_size).to(device),
         torch.zeros(args.batch_size, self.hidden_size).to(device))
 
+        if first_inner_step:
+            cat_act_probs_other = []
+            other_state_history = []
+            other_state_history.append(s2)
+
         for t in range(args.len_rollout):
             a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
@@ -738,9 +760,26 @@ class Agent():
                                           h_v2)
             (s1, s2), (r1, r2), _, _ = env.step((a1, a2))
             other_memory.add(lp2, lp1, v2, r2)
+            if first_inner_step:
+                cat_act_probs_other.append(cat_act_probs2)
+                other_state_history.append(s2)
+
+        if not first_inner_step:
+            curr_pol_probs = self.get_other_policies_for_states(other_theta, other_values, self.other_state_history)
+            kl_div = torch.nn.functional.kl_div(torch.log(curr_pol_probs), self.ref_cat_act_probs_other.detach(), log_target=False, reduction='batchmean')
+            # print(curr_pol_probs.shape)
+            print(kl_div)
 
         other_objective = other_memory.dice_objective()
+        if not first_inner_step:
+            other_objective += args.inner_beta * kl_div # we want to min kl div
+
         grad = get_gradient(other_objective, other_theta)
+
+        if first_inner_step:
+            self.ref_cat_act_probs_other = torch.stack(cat_act_probs_other, dim=1)
+            self.other_state_history = torch.stack(other_state_history, dim=0)
+
         return grad
 
     def out_lookahead(self, other_theta, other_values, first_outer_step=False):
@@ -821,9 +860,12 @@ def play(agent1, agent2, n_lookaheads, outer_steps):
             values2_ = [tv.detach().clone().requires_grad_(True) for tv in
                         start_val2]
 
-            for k in range(n_lookaheads):
-                # estimate other's gradients from in_lookahead:
-                grad2 = agent1.in_lookahead(theta2_, values2_)
+            for inner_step in range(n_lookaheads):
+                if inner_step == 0:
+                    # estimate other's gradients from in_lookahead:
+                    grad2 = agent1.in_lookahead(theta2_, values2_, first_inner_step=True)
+                else:
+                    grad2 = agent1.in_lookahead(theta2_, values2_, first_inner_step=False)
                 # update other's theta
                 theta2_ = [theta2_[i] - args.lr_in * grad2[i] for i in
                            range(len(theta2_))]
@@ -841,11 +883,13 @@ def play(agent1, agent2, n_lookaheads, outer_steps):
             values1_ = [tv.detach().clone().requires_grad_(True) for tv in
                         start_val1]
 
-            for k in range(n_lookaheads):
+            for inner_step in range(n_lookaheads):
                 # estimate other's gradients from in_lookahead:
-                grad1 = agent2.in_lookahead(theta1_, values1_)
+                if inner_step == 0:
+                    grad1 = agent2.in_lookahead(theta1_, values1_, first_inner_step=True)
+                else:
+                    grad1 = agent2.in_lookahead(theta1_, values1_, first_inner_step=False)
                 # update other's theta
-
                 theta1_ = [theta1_[i] - args.lr_in * grad1[i] for i in
                            range(len(theta1_))]
 
@@ -913,6 +957,7 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_size", type=int, default=32)
     parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
+    parser.add_argument("--inner_beta", type=float, default=0.0, help="for inner kl penalty with POLA")
     parser.add_argument("--save_dir", type=str, default='./checkpoints')
     parser.add_argument("--checkpoint_every", type=int, default=1000, help="Epochs between checkpoint save")
     parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
