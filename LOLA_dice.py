@@ -632,7 +632,7 @@ def step(theta1, theta2, values1, values2):
 
 
 class Agent():
-    def __init__(self, input_size, hidden_size, action_size, theta_p=None):
+    def __init__(self, input_size, hidden_size, action_size, lr_p, lr_v, theta_p=None):
         self.hidden_size = hidden_size
         self.theta_p = nn.ParameterList([
             # Linear 1
@@ -683,11 +683,11 @@ class Agent():
             self.theta_p = theta_p
 
         if args.optim.lower() == 'adam':
-            self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=args.lr_out)
-            self.value_optimizer = torch.optim.Adam(self.theta_v, lr=args.lr_v)
+            self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=lr_p)
+            self.value_optimizer = torch.optim.Adam(self.theta_v, lr=lr_v)
         elif args.optim.lower() == 'sgd':
-            self.theta_optimizer = torch.optim.SGD(self.theta_p, lr=args.lr_out)
-            self.value_optimizer = torch.optim.SGD(self.theta_v, lr=args.lr_v)
+            self.theta_optimizer = torch.optim.SGD(self.theta_p, lr=lr_p)
+            self.value_optimizer = torch.optim.SGD(self.theta_v, lr=lr_v)
         else:
             raise Exception("Unknown or Not Implemented Optimizer")
 
@@ -883,55 +883,59 @@ class Agent():
         # Then a simple supervised loss, softmax on policy, MSE vs the targeted probability, or no, KL div between the current policy and the desired one.
 
 
-    def opp_model(self, prev_model_theta_p=None):
-        agent_opp = Agent(input_size, args.hidden_size, action_size, prev_model_theta_p)
+    def opp_model(self, om_lr_p, om_lr_v, prev_model_theta_p=None):
+        agent_opp = Agent(input_size, args.hidden_size, action_size, om_lr_p, om_lr_v, prev_model_theta_p)
 
         other_theta_p = agent_opp.theta_p
         other_theta_v = agent_opp.theta_v
 
-        # should only do 1 collect, but I guess we can do multiple "batches"
-        # where repeating the below would be the same as collecting one big batch of environment interaction
-        state_history, other_state_history, act_history, other_act_history =\
-            self.rollout_collect_data_for_opp_model(other_theta_p, other_theta_v)
 
-        opp_model_threshold = 1e-3
-        c_e_loss = 100
-        opp_model_iters = 0
-        opp_model_steps = args.opp_model_steps
+        opp_model_data_batches = 1000
 
-        other_act_history = torch.nn.functional.one_hot(other_act_history,
-                                                        action_size)
+        for batch in range(opp_model_data_batches):
+            # should only do 1 collect, but I guess we can do multiple "batches"
+            # where repeating the below would be the same as collecting one big batch of environment interaction
+            state_history, other_state_history, act_history, other_act_history =\
+                self.rollout_collect_data_for_opp_model(other_theta_p, other_theta_v)
 
-        # while c_e_loss > opp_model_threshold:
-        for opp_model_iter in range(opp_model_steps):
-            # THis may not work with large batches... you may need just x iters... something like that.
+            opp_model_threshold = 1e-3
+            c_e_loss = 100
+            opp_model_iters = 0
+            opp_model_steps_per_data_batch = args.opp_model_steps
 
-            curr_pol_probs = self.get_other_policies_for_states(other_theta_p,
-                                                                other_theta_v,
-                                                                other_state_history)
-            # Maybe we don't need to model the values for now? It can be learned as the rollouts for POLA are happening
+            other_act_history = torch.nn.functional.one_hot(other_act_history,
+                                                            action_size)
 
-            # KL div: p log p - p log q
-            # use p for target, since it has 0 and 1
-            # Then p log p has no deriv so can drop it, with respect to model
-            # then -p log q
+            # while c_e_loss > opp_model_threshold:
+            for opp_model_iter in range(opp_model_steps_per_data_batch):
+                # THis may not work with large batches... you may need just x iters... something like that.
 
-            c_e_loss = - (other_act_history * torch.log(curr_pol_probs)).sum(dim=-1).mean()
+                curr_pol_probs = self.get_other_policies_for_states(other_theta_p,
+                                                                    other_theta_v,
+                                                                    other_state_history)
+                # Maybe we don't need to model the values for now? It can be learned as the rollouts for POLA are happening
 
-            print(opp_model_iters)
-            print(c_e_loss)
-            # print(curr_pol_probs)
+                # KL div: p log p - p log q
+                # use p for target, since it has 0 and 1
+                # Then p log p has no deriv so can drop it, with respect to model
+                # then -p log q
 
-            agent_opp.theta_update(c_e_loss)
-            opp_model_iters += 1
+                c_e_loss = - (other_act_history * torch.log(curr_pol_probs)).sum(dim=-1).mean()
 
-            # TODO VALUE UPDATE TOO? LEARN THE VAL FUNCTION TOO?
+                print(opp_model_iters)
+                print(c_e_loss)
+                # print(curr_pol_probs)
 
-            # Calculate targets based on the action history (other act history)
+                agent_opp.theta_update(c_e_loss)
+                opp_model_iters += 1
 
-            # Then KL div to train the opp model. Do for x gradient steps? Or until KL div reaches below some threshold
+                # TODO VALUE UPDATE TOO? LEARN THE VAL FUNCTION TOO?
 
-        print(f"Finished opp model in {opp_model_iters} iters")
+                # Calculate targets based on the action history (other act history)
+
+                # Then KL div to train the opp model. Do for x gradient steps? Or until KL div reaches below some threshold
+
+            # print(f"Finished opp model in {opp_model_iters} iters")
 
         return agent_opp.theta_p
 
@@ -956,8 +960,8 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
         agent2_theta_p_model, agent1_theta_p_model = None, None
 
         if use_opp_model:
-            agent2_theta_p_model = agent1.opp_model(agent2_theta_p_model)
-            agent1_theta_p_model = agent2.opp_model(agent1_theta_p_model)
+            agent2_theta_p_model = agent1.opp_model(args.om_lr_p, args.om_lr_v, agent2_theta_p_model)
+            agent1_theta_p_model = agent2.opp_model(args.om_lr_p, args.om_lr_v, agent1_theta_p_model)
 
         for outer_step in range(outer_steps):
             # copy other's parameters:
@@ -1082,10 +1086,12 @@ if __name__ == "__main__":
     parser.add_argument("--grid_size", type=int, default=3)
     parser.add_argument("--og_coin_game", action="store_true", help="use the original coin game formulation")
     parser.add_argument("--optim", type=str, default="adam")
-    parser.add_argument("--opp_model", action="store_true", default="Use Opponent Modeling")
+    parser.add_argument("--opp_model", action="store_true", help="Use Opponent Modeling")
     parser.add_argument("--opp_model_steps", type=int, default=300, help="How many steps to train opp model on beginning of each POLA epoch")
-
-
+    parser.add_argument("--om_lr_p", type=float, default=0.01,
+                        help="learning rate for opponent modeling (imitation/supervised learning) for policy")
+    parser.add_argument("--om_lr_v", type=float, default=0.001,
+                        help="learning rate for opponent modeling (imitation/supervised learning) for value")
     use_baseline = True
 
     args = parser.parse_args()
@@ -1103,8 +1109,8 @@ if __name__ == "__main__":
         env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
 
     if args.load_path is None:
-        agent1 = Agent(input_size, args.hidden_size, action_size)
-        agent2 = Agent(input_size, args.hidden_size, action_size)
+        agent1 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
+        agent2 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     else:
         agent1, agent2, coins_collected_info = load_from_checkpoint()
         print(coins_collected_info)
