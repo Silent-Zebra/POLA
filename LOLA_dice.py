@@ -1,3 +1,5 @@
+# Adapted from https://github.com/alexis-jacq/LOLA_DiCE/blob/master/ipd_DiCE.py. GRU from Chris.
+
 import torch
 import math
 import torch.nn as nn
@@ -520,14 +522,17 @@ class Memory():
     def dice_objective(self):
         self_logprobs = torch.stack(self.self_logprobs, dim=1)
         other_logprobs = torch.stack(self.other_logprobs, dim=1)
-        values = torch.stack(self.values, dim=1)
+
         rewards = torch.stack(self.rewards, dim=1)
 
         # apply discount:
         cum_discount = torch.cumprod(args.gamma * torch.ones(*rewards.size()),
                                      dim=1).to(device) / args.gamma
         discounted_rewards = rewards * cum_discount
-        discounted_values = values * cum_discount
+
+        if args.use_baseline:
+            values = torch.stack(self.values, dim=1)
+            discounted_values = values * cum_discount
 
         # stochastics nodes involved in rewards dependencies:
         dependencies = torch.cumsum(self_logprobs + other_logprobs, dim=1)
@@ -539,7 +544,7 @@ class Memory():
         dice_objective = torch.mean(
             torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
 
-        if use_baseline:
+        if args.use_baseline:
             # variance_reduction:
             baseline_term = torch.mean(
                 torch.sum((1 - magic_box(stochastic_nodes)) * discounted_values,
@@ -551,7 +556,11 @@ class Memory():
     def value_loss(self):
         values = torch.stack(self.values, dim=1)
         rewards = torch.stack(self.rewards, dim=1)
-        return torch.mean((rewards - values) ** 2)
+        return torch.mean((rewards - values) ** 2) # TODO SZ NOTE: Isn't this wrong? Don't we need r + next state val - current state val? Pretty sure this is wrong
+        # Well between the whole baseline/DiCE/Loaded DiCE thing where the original baseline wasn't correct
+        # And this calculation which I'm almost certain is wrong, we are probably better off just not using the value function
+        # That makes OM a bunch easier too.
+        # Especially in coin game, where the rewards are close ish to 0 anyway, the value function shouldn't be that important.
 
 
 def apply(batch_states, theta, hidden):
@@ -589,11 +598,17 @@ def apply(batch_states, theta, hidden):
 def act(batch_states, theta_p, theta_v, h_p, h_v):
     h_p, out = apply(batch_states, theta_p, h_p)
     categorical_act_probs = torch.softmax(out, dim=-1)
-    h_v, values = apply(batch_states, theta_v, h_v)
+    if args.use_baseline:
+        h_v, values = apply(batch_states, theta_v, h_v)
+        ret_vals = values.squeeze(-1)
+    else:
+        h_v, values = None, None
+        ret_vals = None
     dist = Categorical(categorical_act_probs)
     actions = dist.sample()
     log_probs_actions = dist.log_prob(actions)
-    return actions, log_probs_actions, values.squeeze(-1), h_p, h_v, categorical_act_probs
+
+    return actions, log_probs_actions, ret_vals, h_p, h_v, categorical_act_probs
 
 
 def get_gradient(objective, theta):
@@ -832,8 +847,9 @@ class Agent():
             objective += -ent_calc * args.ent_reg # but we want to max entropy (min negative entropy)
         self.theta_update(objective)
         # update self value:
-        v_loss = memory.value_loss()
-        self.value_update(v_loss)
+        if args.use_baseline:
+            v_loss = memory.value_loss()
+            self.value_update(v_loss)
 
         if first_outer_step:
             self.ref_cat_act_probs = torch.stack(cat_act_probs_self, dim=1)
@@ -841,7 +857,7 @@ class Agent():
             # return torch.stack(cat_act_probs_self, dim=1), torch.stack(state_history, dim=1)
 
 
-    def rollout_collect_data_for_opp_model(self, other_theta, other_values):
+    def rollout_collect_data_for_opp_model(self, other_theta_p, other_theta_v):
         (s1, s2) = env.reset()
         memory = Memory()
         h_p1, h_v1, h_p2, h_v2 = (
@@ -860,8 +876,8 @@ class Agent():
             a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
                                                           self.theta_v, h_p1,
                                                           h_v1)
-            a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta,
-                                                          other_values, h_p2,
+            a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta_p,
+                                                          other_theta_v, h_p2,
                                                           h_v2)
             (s1, s2), (r1, r2), _, _ = env.step((a1, a2))
             memory.add(lp1, lp2, v1, r1)
@@ -890,7 +906,7 @@ class Agent():
         other_theta_v = agent_opp.theta_v
 
 
-        opp_model_data_batches = 1000
+        opp_model_data_batches = args.opp_model_data_batches
 
         for batch in range(opp_model_data_batches):
             # should only do 1 collect, but I guess we can do multiple "batches"
@@ -901,10 +917,12 @@ class Agent():
             opp_model_threshold = 1e-3
             c_e_loss = 100
             opp_model_iters = 0
-            opp_model_steps_per_data_batch = args.opp_model_steps
+            opp_model_steps_per_data_batch = args.opp_model_steps_per_batch
 
             other_act_history = torch.nn.functional.one_hot(other_act_history,
                                                             action_size)
+
+            print(f"Opp Model Data Batch: {batch + 1}")
 
             # while c_e_loss > opp_model_threshold:
             for opp_model_iter in range(opp_model_steps_per_data_batch):
@@ -922,8 +940,8 @@ class Agent():
 
                 c_e_loss = - (other_act_history * torch.log(curr_pol_probs)).sum(dim=-1).mean()
 
-                print(opp_model_iters)
-                print(c_e_loss)
+                # print(opp_model_iters)
+                print(c_e_loss.item())
                 # print(curr_pol_probs)
 
                 agent_opp.theta_update(c_e_loss)
@@ -1086,13 +1104,14 @@ if __name__ == "__main__":
     parser.add_argument("--grid_size", type=int, default=3)
     parser.add_argument("--og_coin_game", action="store_true", help="use the original coin game formulation")
     parser.add_argument("--optim", type=str, default="adam")
+    parser.add_argument("--use_baseline", action="store_true", help="Use Baseline (critic) for variance reduction)")
     parser.add_argument("--opp_model", action="store_true", help="Use Opponent Modeling")
-    parser.add_argument("--opp_model_steps", type=int, default=300, help="How many steps to train opp model on beginning of each POLA epoch")
-    parser.add_argument("--om_lr_p", type=float, default=0.01,
+    parser.add_argument("--opp_model_steps_per_batch", type=int, default=30, help="How many steps to train opp model on eatch batch at the beginning of each POLA epoch")
+    parser.add_argument("--opp_model_data_batches", type=int, default=50, help="How many batches of data (right now from rollouts) to train opp model on")
+    parser.add_argument("--om_lr_p", type=float, default=0.005,
                         help="learning rate for opponent modeling (imitation/supervised learning) for policy")
     parser.add_argument("--om_lr_v", type=float, default=0.001,
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
-    use_baseline = True
 
     args = parser.parse_args()
 
