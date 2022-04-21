@@ -595,9 +595,9 @@ def apply(batch_states, theta, hidden):
     return hy, out
 
 
-def act(batch_states, theta_p, theta_v, h_p, h_v):
-    h_p, out = apply(batch_states, theta_p, h_p)
-    categorical_act_probs = torch.softmax(out, dim=-1)
+def act(batch_states, theta_p, theta_v, h_p, h_v, ret_logits=False):
+    h_p, logits = apply(batch_states, theta_p, h_p)
+    categorical_act_probs = torch.softmax(logits, dim=-1)
     if args.use_baseline:
         h_v, values = apply(batch_states, theta_v, h_v)
         ret_vals = values.squeeze(-1)
@@ -608,6 +608,8 @@ def act(batch_states, theta_p, theta_v, h_p, h_v):
     actions = dist.sample()
     log_probs_actions = dist.log_prob(actions)
 
+    if ret_logits:
+        return actions, log_probs_actions, ret_vals, h_p, h_v, categorical_act_probs, logits
     return actions, log_probs_actions, ret_vals, h_p, h_v, categorical_act_probs
 
 
@@ -757,6 +759,23 @@ class Agent():
             cat_act_probs.append(cat_act_probs1)
 
         return torch.stack(cat_act_probs, dim=1)
+
+    def get_other_logits_for_states(self, other_theta, other_values, state_history):
+        # Perhaps really should not be named 1, but whatever.
+        h_p1, h_v1 = (
+            torch.zeros(args.batch_size, self.hidden_size).to(device),
+            torch.zeros(args.batch_size, self.hidden_size).to(device))
+
+        logits_hist = []
+
+        for t in range(args.len_rollout):
+            s1 = state_history[t]
+            a1, lp1, v1, h_p1, h_v1, cat_act_probs1, logits = act(s1, other_theta,
+                                                          other_values, h_p1,
+                                                          h_v1, ret_logits=True)
+            logits_hist.append(logits)
+
+        return torch.stack(logits_hist, dim=1)
 
     def in_lookahead(self, other_theta, other_values, first_inner_step=False):
         (s1, s2) = env.reset()
@@ -928,7 +947,7 @@ class Agent():
             for opp_model_iter in range(opp_model_steps_per_data_batch):
                 # THis may not work with large batches... you may need just x iters... something like that.
 
-                curr_pol_probs = self.get_other_policies_for_states(other_theta_p,
+                curr_pol_logits = self.get_other_logits_for_states(other_theta_p,
                                                                     other_theta_v,
                                                                     other_state_history)
                 # Maybe we don't need to model the values for now? It can be learned as the rollouts for POLA are happening
@@ -938,7 +957,7 @@ class Agent():
                 # Then p log p has no deriv so can drop it, with respect to model
                 # then -p log q
 
-                c_e_loss = - (other_act_history * torch.log(curr_pol_probs)).sum(dim=-1).mean()
+                c_e_loss = - (other_act_history * torch.log_softmax(curr_pol_logits, dim=-1)).sum(dim=-1).mean()
 
                 # print(opp_model_iters)
                 print(c_e_loss.item())
