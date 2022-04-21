@@ -964,6 +964,9 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
     same_colour_coins_record = []
     diff_colour_coins_record = []
     coins_collected_info = (same_colour_coins_record, diff_colour_coins_record)
+
+    agent2_theta_p_model, agent1_theta_p_model = None, None
+
     for update in range(args.n_update):
 
         start_theta1 = [tp.detach().clone().requires_grad_(True) for tp in
@@ -975,7 +978,6 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
         start_val2 = [tv.detach().clone().requires_grad_(True) for tv in
                         agent2.theta_v]
 
-        agent2_theta_p_model, agent1_theta_p_model = None, None
 
         if use_opp_model:
             agent2_theta_p_model = agent1.opp_model(args.om_lr_p, args.om_lr_v, agent2_theta_p_model)
