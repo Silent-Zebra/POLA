@@ -88,18 +88,19 @@ def print_policy_and_value_info(th, vals):
                                          [0, 1]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
 
-        print("Two Step Examples")
-        states = torch.FloatTensor([[[1, 0], [1, 0]],  # CC
-                                          [[1, 0], [0, 1]],  # CD
-                                          [[0, 1], [1, 0]],  # DC
-                                          [[0, 1], [0, 1]]])  # DD
+        if not args.hist_one:
+            print("Two Step Examples")
+            states = torch.FloatTensor([[[1, 0], [1, 0]],  # CC
+                                              [[1, 0], [0, 1]],  # CD
+                                              [[0, 1], [1, 0]],  # DC
+                                              [[0, 1], [0, 1]]])  # DD
 
-        for i in range(4):
-            for j in range(4):
-                sample_obs_1 = states[i]
-                sample_obs_2 = states[j]
-                sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
-                print_info_on_sample_obs(sample_obs, th, vals)
+            for i in range(4):
+                for j in range(4):
+                    sample_obs_1 = states[i]
+                    sample_obs_2 = states[j]
+                    sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+                    print_info_on_sample_obs(sample_obs, th, vals)
 
 
 
@@ -651,31 +652,42 @@ class Memory():
 def apply(batch_states, theta, hidden):
     #     import pdb; pdb.set_trace()
     batch_states = batch_states.flatten(start_dim=1)
-    x = batch_states.matmul(theta[0])
-    x = theta[1] + x
 
-    x = torch.relu(x)
+    if args.hist_one:
+        x = batch_states.matmul(theta[0])
+        x = theta[1] + x
+        x = torch.relu(x)
+        x = x.matmul(theta[2])
+        x = theta[3] + x
+        out = x
+        hy = None
 
-    gate_x = x.matmul(theta[2])
-    gate_x = gate_x + theta[3]
+    else:
+        x = batch_states.matmul(theta[0])
+        x = theta[1] + x
 
-    gate_h = hidden.matmul(theta[4])
-    gate_h = gate_h + theta[5]
+        x = torch.relu(x)
 
-    #     gate_x = gate_x.squeeze()
-    #     gate_h = gate_h.squeeze()
+        gate_x = x.matmul(theta[2])
+        gate_x = gate_x + theta[3]
 
-    i_r, i_i, i_n = gate_x.chunk(3, 1)
-    h_r, h_i, h_n = gate_h.chunk(3, 1)
+        gate_h = hidden.matmul(theta[4])
+        gate_h = gate_h + theta[5]
 
-    resetgate = torch.sigmoid(i_r + h_r)
-    inputgate = torch.sigmoid(i_i + h_i)
-    newgate = torch.tanh(i_n + (resetgate * h_n))
+        #     gate_x = gate_x.squeeze()
+        #     gate_h = gate_h.squeeze()
 
-    hy = newgate + inputgate * (hidden - newgate)
+        i_r, i_i, i_n = gate_x.chunk(3, 1)
+        h_r, h_i, h_n = gate_h.chunk(3, 1)
 
-    out = hy.matmul(theta[6])
-    out = out + theta[7]
+        resetgate = torch.sigmoid(i_r + h_r)
+        inputgate = torch.sigmoid(i_i + h_i)
+        newgate = torch.tanh(i_n + (resetgate * h_n))
+
+        hy = newgate + inputgate * (hidden - newgate)
+
+        out = hy.matmul(theta[6])
+        out = out + theta[7]
 
     return hy, out
 
@@ -740,48 +752,74 @@ def step(theta1, theta2, values1, values2):
 class Agent():
     def __init__(self, input_size, hidden_size, action_size, lr_p, lr_v, theta_p=None):
         self.hidden_size = hidden_size
-        self.theta_p = nn.ParameterList([
-            # Linear 1
-            nn.Parameter(
-                torch.zeros((input_size, hidden_size * 3), requires_grad=True)),
-            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+        if args.hist_one:
+            self.theta_p = nn.ParameterList([
+                # Linear 1
+                nn.Parameter(
+                    torch.zeros((input_size, hidden_size), requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size, requires_grad=True)),
 
-            # x2h GRU
-            nn.Parameter(torch.zeros((hidden_size * 3, hidden_size * 3),
-                                     requires_grad=True)),
-            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+                # Linear 2
+                nn.Parameter(
+                    torch.zeros((hidden_size, action_size), requires_grad=True)),
+                nn.Parameter(torch.zeros(action_size, requires_grad=True)),
+            ]).to(device)
 
-            # h2h GRU
-            nn.Parameter(torch.zeros((hidden_size, hidden_size * 3),
-                                     requires_grad=True)),
-            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+            self.theta_v = nn.ParameterList([
+                # Linear 1
+                nn.Parameter(
+                    torch.zeros((input_size, hidden_size), requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size, requires_grad=True)),
 
-            # Linear 2
-            nn.Parameter(
-                torch.zeros((hidden_size, action_size), requires_grad=True)),
-            nn.Parameter(torch.zeros(action_size, requires_grad=True)),
-        ]).to(device)
+                # Linear 2
+                nn.Parameter(
+                    torch.zeros((hidden_size, action_size),
+                                requires_grad=True)),
+                nn.Parameter(torch.zeros(action_size, requires_grad=True)),
+            ]).to(device)
+        else:
+            self.theta_p = nn.ParameterList([
+                # Linear 1
+                nn.Parameter(
+                    torch.zeros((input_size, hidden_size * 3), requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
 
-        self.theta_v = nn.ParameterList([
-            # Linear 1
-            nn.Parameter(
-                torch.zeros((input_size, hidden_size * 3), requires_grad=True)),
-            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+                # x2h GRU
+                nn.Parameter(torch.zeros((hidden_size * 3, hidden_size * 3),
+                                         requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
 
-            # x2h GRU
-            nn.Parameter(torch.zeros((hidden_size * 3, hidden_size * 3),
-                                     requires_grad=True)),
-            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+                # h2h GRU
+                nn.Parameter(torch.zeros((hidden_size, hidden_size * 3),
+                                         requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
 
-            # h2h GRU
-            nn.Parameter(torch.zeros((hidden_size, hidden_size * 3),
-                                     requires_grad=True)),
-            nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+                # Linear 2
+                nn.Parameter(
+                    torch.zeros((hidden_size, action_size), requires_grad=True)),
+                nn.Parameter(torch.zeros(action_size, requires_grad=True)),
+            ]).to(device)
 
-            # Linear 2
-            nn.Parameter(torch.zeros((hidden_size, 1), requires_grad=True)),
-            nn.Parameter(torch.zeros(1, requires_grad=True)),
-        ]).to(device)
+            self.theta_v = nn.ParameterList([
+                # Linear 1
+                nn.Parameter(
+                    torch.zeros((input_size, hidden_size * 3), requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+
+                # x2h GRU
+                nn.Parameter(torch.zeros((hidden_size * 3, hidden_size * 3),
+                                         requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+
+                # h2h GRU
+                nn.Parameter(torch.zeros((hidden_size, hidden_size * 3),
+                                         requires_grad=True)),
+                nn.Parameter(torch.zeros(hidden_size * 3, requires_grad=True)),
+
+                # Linear 2
+                nn.Parameter(torch.zeros((hidden_size, 1), requires_grad=True)),
+                nn.Parameter(torch.zeros(1, requires_grad=True)),
+            ]).to(device)
 
         self.reset_parameters()
 
@@ -1118,6 +1156,10 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
             else:
                 agent1.out_lookahead(theta2_, values2_, first_outer_step=False)
 
+            if args.print_info_each_outer_step:
+                print("Agent 1 Sample Obs Info:")
+                print_policy_and_value_info(agent1.theta_p, agent1.theta_v)
+
 
         for outer_step in range(outer_steps):
             th1_to_copy = start_theta1
@@ -1143,6 +1185,10 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
                 agent2.out_lookahead(theta1_, values1_, first_outer_step=True)
             else:
                 agent2.out_lookahead(theta1_, values1_, first_outer_step=False)
+
+            if args.print_info_each_outer_step:
+                print("Agent 2 Sample Obs Info:")
+                print_policy_and_value_info(agent2.theta_p, agent2.theta_v)
 
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
@@ -1226,6 +1272,8 @@ if __name__ == "__main__":
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
     parser.add_argument("--env", type=str, default="ogcoin",
                         choices=["ipd", "coin", "ogcoin"])
+    parser.add_argument("--hist_one", action="store_true", help="Use one step history (no gru or rnn, just one step history)")
+    parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
 
     args = parser.parse_args()
 
