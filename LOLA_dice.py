@@ -256,17 +256,17 @@ class IteratedPrisonersDilemma:
     def __init__(self, max_steps, batch_size=1):
         self.max_steps = max_steps
         self.batch_size = batch_size
-        self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]])
+        self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]]).to(device)
         self.states = torch.FloatTensor([[[[1, 0], [1, 0]], #CC
                                           [[1, 0], [0, 1]]], #CD
                                          [[[0, 1], [1, 0]], #DC
-                                          [[0, 1], [0, 1]]]]) #DD
+                                          [[0, 1], [0, 1]]]]).to(device) #DD
 
         self.step_count = None
 
     def reset(self):
         self.step_count = 0
-        init_state = torch.zeros((self.batch_size, self.NUM_AGENTS, self.NUM_ACTIONS))
+        init_state = torch.zeros((self.batch_size, self.NUM_AGENTS, self.NUM_ACTIONS)).to(device)
         observation = [init_state, init_state]
         return observation
 
