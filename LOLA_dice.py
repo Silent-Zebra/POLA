@@ -32,7 +32,7 @@ def load_from_checkpoint():
 
 def print_info_on_sample_obs(sample_obs, th, vals):
 
-    sample_obs = sample_obs.reshape(-1, 1, args.grid_size ** 2 * 4).to(device)
+    sample_obs = sample_obs.reshape(-1, 1, input_size).to(device)
 
     # ONLY SUPPORTS 2 AGENTS
     # sample_obs = torch.stack((sample_obs, sample_obs))
@@ -65,140 +65,225 @@ def print_info_on_sample_obs(sample_obs, th, vals):
 
 
 def print_policy_and_value_info(th, vals):
-
-    if args.grid_size == 2:
-        print("Simple One Step Example")
+    if args.env == "ipd":
+        print("Simple One Step Examples")
+        print("Start")
+        sample_obs = torch.FloatTensor([[[0, 0],
+                                         [0, 0]]]).reshape(1, input_size)
+        print_info_on_sample_obs(sample_obs, th, vals)
+        print("DD")
+        sample_obs = torch.FloatTensor([[[1, 0],
+                                         [1, 0]]]).reshape(1, input_size)
+        print_info_on_sample_obs(sample_obs, th, vals)
+        print("DC")
+        sample_obs = torch.FloatTensor([[[1, 0],
+                                         [0, 1]]]).reshape(1, input_size)
+        print_info_on_sample_obs(sample_obs, th, vals)
+        print("CD")
         sample_obs = torch.FloatTensor([[[0, 1],
-                                         [0, 0]
-                                         ],  # agent 1
-                                        [[0, 0],
-                                         [1, 0]
-                                         ],  # agent 2
-                                        [[1, 0],
-                                         [0, 0]
-                                         ],
-                                        # we want agent 1 moving left and agent 2 moving right
-                                        [[0, 0],
-                                         [0, 1],
-                                         ]]).reshape(1, args.grid_size ** 2 * 4)
-
+                                         [1, 0]]]).reshape(1, input_size)
+        print_info_on_sample_obs(sample_obs, th, vals)
+        print("CC")
+        sample_obs = torch.FloatTensor([[[0, 1],
+                                         [0, 1]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
 
-    elif args.grid_size == 3:
-        # Policy test
-        print("Simple One Step Example")
-        sample_obs = torch.FloatTensor([[[0, 1, 0],
-                                         [0, 0, 0],
-                                         [0, 0, 0]],  # agent 1
-                                        [[0, 0, 0],
-                                         [1, 0, 0],
-                                         [0, 0, 0]],  # agent 2
-                                        [[1, 0, 0],
-                                         [0, 0, 0],
-                                         [0, 0, 0]],
-                                        # we want agent 1 moving left and agent 2 moving right
-                                        [[0, 0, 0],
-                                         [0, 1, 0],
-                                         [0, 0, 0]]]).reshape(1, 36)
+        print("Two Step Examples")
+        states = torch.FloatTensor([[[1, 0], [1, 0]],  # CC
+                                          [[1, 0], [0, 1]],  # CD
+                                          [[0, 1], [1, 0]],  # DC
+                                          [[0, 1], [0, 1]]])  # DD
 
-        print_info_on_sample_obs(sample_obs, th, vals)
+        for i in range(4):
+            for j in range(4):
+                sample_obs_1 = states[i]
+                sample_obs_2 = states[j]
+                sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+                print_info_on_sample_obs(sample_obs, th, vals)
 
-        print("Simple One Step Example 2")
-        sample_obs = torch.FloatTensor([[[0, 0, 0],
-                                         [0, 0, 0],
-                                         [0, 0, 1]],  # agent 1
-                                        [[0, 0, 0],
-                                         [0, 1, 0],
-                                         [0, 0, 0]],  # agent 2
-                                        [[0, 0, 0],
-                                         [0, 0, 1],
-                                         [0, 0, 0]],
-                                        # we want agent 1 moving up and agent 2 moving down
-                                        [[0, 0, 0],
-                                         [0, 0, 0],
-                                         [0, 1, 0]]]).reshape(1, 36)
 
-        print_info_on_sample_obs(sample_obs, th, vals)
 
-        # This one meant to test the idea of p2 defects by taking p1 coin - will p1 retaliate?
-        print("P2 Defects")
-        sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 0, 0]],  # agent 1
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 1, 0]],  # agent 2
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [1, 0, 0]],
-                                          # red coin
-                                          [[0, 0, 0],
-                                           [0, 1, 0],
-                                           [0, 0, 0]]]).reshape(1, 36)
-        sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
-                                           [1, 0, 0],
-                                           [0, 0, 0]],  # agent 1
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [1, 0, 0]],  # agent 2
-                                          [[0, 1, 0],
-                                           [0, 0, 0],
-                                           [0, 0, 0]],
-                                          # red coin
-                                          [[0, 0, 0],
-                                           [0, 1, 0],
-                                           [0, 0, 0]]]).reshape(1, 36)
-        sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+    elif args.env == "coin":
+        if args.grid_size == 2:
+            print("Simple One Step Example")
+            sample_obs = torch.FloatTensor([[[0, 1],
+                                             [0, 0]
+                                             ],  # agent 1
+                                            [[0, 0],
+                                             [1, 0]
+                                             ],  # agent 2
+                                            [[1, 0],
+                                             [0, 0]
+                                             ],
+                                            # we want agent 1 moving left and agent 2 moving right
+                                            [[0, 0],
+                                             [0, 1],
+                                             ]]).reshape(1, input_size)
 
-        print_info_on_sample_obs(sample_obs, th, vals)
+            print_info_on_sample_obs(sample_obs, th, vals)
 
-        # This one meant similar to above except p2 cooperates by not taking coin.
-        # Then p1 collects p1 coin (red). Will it also collect the other agent coin?
-        print("P2 Cooperates")
-        sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 0, 0]],  # agent 1
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 1, 0]],  # agent 2
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [1, 0, 0]],
-                                          # red coin
-                                          [[0, 0, 0],
-                                           [0, 1, 0],
-                                           [0, 0, 0]]]).reshape(1, 36)
-        sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
-                                           [1, 0, 0],
-                                           [0, 0, 0]],  # agent 1
-                                          [[0, 0, 0],
-                                           [0, 1, 0],
-                                           [0, 0, 0]],  # agent 2
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [1, 0, 0]],
-                                          # red coin
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 1, 0]]]).reshape(1, 36)
-        sample_obs_3 = torch.FloatTensor([[[0, 0, 0],
-                                           [0, 0, 0],
-                                           [1, 0, 0]],  # agent 1
-                                          [[0, 1, 0],
-                                           [0, 0, 0],
-                                           [0, 0, 0]],  # agent 2
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 0, 0]],
-                                          # red coin
-                                          [[0, 0, 0],
-                                           [0, 0, 0],
-                                           [0, 1, 0]]]).reshape(1, 36)
-        # Want to see prob of going right going down.
-        sample_obs = torch.stack((sample_obs_1, sample_obs_2, sample_obs_3),
-                                 dim=1)
+        elif args.grid_size == 3:
+            # Policy test
+            print("Simple One Step Example")
+            sample_obs = torch.FloatTensor([[[0, 1, 0],
+                                             [0, 0, 0],
+                                             [0, 0, 0]],  # agent 1
+                                            [[0, 0, 0],
+                                             [1, 0, 0],
+                                             [0, 0, 0]],  # agent 2
+                                            [[1, 0, 0],
+                                             [0, 0, 0],
+                                             [0, 0, 0]],
+                                            # we want agent 1 moving left and agent 2 moving right
+                                            [[0, 0, 0],
+                                             [0, 1, 0],
+                                             [0, 0, 0]]]).reshape(1, input_size)
 
-        print_info_on_sample_obs(sample_obs, th, vals)
+            print_info_on_sample_obs(sample_obs, th, vals)
+
+            print("Simple One Step Example 2")
+            sample_obs = torch.FloatTensor([[[0, 0, 0],
+                                             [0, 0, 0],
+                                             [0, 0, 1]],  # agent 1
+                                            [[0, 0, 0],
+                                             [0, 1, 0],
+                                             [0, 0, 0]],  # agent 2
+                                            [[0, 0, 0],
+                                             [0, 0, 1],
+                                             [0, 0, 0]],
+                                            # we want agent 1 moving up and agent 2 moving down
+                                            [[0, 0, 0],
+                                             [0, 0, 0],
+                                             [0, 1, 0]]]).reshape(1, input_size)
+
+            print_info_on_sample_obs(sample_obs, th, vals)
+
+            # This one meant to test the idea of p2 defects by taking p1 coin - will p1 retaliate?
+            print("P2 Defects")
+            sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 0, 0]],  # agent 1
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 1, 0]],  # agent 2
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [1, 0, 0]],
+                                              # red coin
+                                              [[0, 0, 0],
+                                               [0, 1, 0],
+                                               [0, 0, 0]]]).reshape(1, input_size)
+            sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
+                                               [1, 0, 0],
+                                               [0, 0, 0]],  # agent 1
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [1, 0, 0]],  # agent 2
+                                              [[0, 1, 0],
+                                               [0, 0, 0],
+                                               [0, 0, 0]],
+                                              # red coin
+                                              [[0, 0, 0],
+                                               [0, 1, 0],
+                                               [0, 0, 0]]]).reshape(1, input_size)
+            sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+
+            print_info_on_sample_obs(sample_obs, th, vals)
+
+            # This one meant similar to above except p2 cooperates by not taking coin.
+            # Then p1 collects p1 coin (red). Will it also collect the other agent coin?
+            print("P2 Cooperates")
+            sample_obs_1 = torch.FloatTensor([[[1, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 0, 0]],  # agent 1
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 1, 0]],  # agent 2
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [1, 0, 0]],
+                                              # red coin
+                                              [[0, 0, 0],
+                                               [0, 1, 0],
+                                               [0, 0, 0]]]).reshape(1, input_size)
+            sample_obs_2 = torch.FloatTensor([[[0, 0, 0],
+                                               [1, 0, 0],
+                                               [0, 0, 0]],  # agent 1
+                                              [[0, 0, 0],
+                                               [0, 1, 0],
+                                               [0, 0, 0]],  # agent 2
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [1, 0, 0]],
+                                              # red coin
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 1, 0]]]).reshape(1, input_size)
+            sample_obs_3 = torch.FloatTensor([[[0, 0, 0],
+                                               [0, 0, 0],
+                                               [1, 0, 0]],  # agent 1
+                                              [[0, 1, 0],
+                                               [0, 0, 0],
+                                               [0, 0, 0]],  # agent 2
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 0, 0]],
+                                              # red coin
+                                              [[0, 0, 0],
+                                               [0, 0, 0],
+                                               [0, 1, 0]]]).reshape(1, input_size)
+            # Want to see prob of going right going down.
+            sample_obs = torch.stack((sample_obs_1, sample_obs_2, sample_obs_3),
+                                     dim=1)
+
+            print_info_on_sample_obs(sample_obs, th, vals)
+
+
+
+
+
+# Adapted from https://github.com/alexis-jacq/LOLA_DiCE/blob/master/envs/prisoners_dilemma.py
+class IteratedPrisonersDilemma:
+    """
+    A two-agent vectorized environment.
+    Possible actions for each agent are (C)ooperate and (D)efect.
+    """
+    # Possible actions
+    NUM_AGENTS = 2
+    NUM_ACTIONS = 2
+    NUM_STATES = 5
+
+    def __init__(self, max_steps, batch_size=1):
+        self.max_steps = max_steps
+        self.batch_size = batch_size
+        self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]])
+        self.states = torch.FloatTensor([[[[1, 0], [1, 0]], #CC
+                                          [[1, 0], [0, 1]]], #CD
+                                         [[[0, 1], [1, 0]], #DC
+                                          [[0, 1], [0, 1]]]]) #DD
+
+        self.step_count = None
+
+    def reset(self):
+        self.step_count = 0
+        init_state = torch.zeros((self.batch_size, self.NUM_AGENTS, self.NUM_ACTIONS))
+        observation = [init_state, init_state]
+        return observation
+
+    def step(self, action):
+        ac0, ac1 = action
+        self.step_count += 1
+
+        r0 = self.payout_mat[ac0, ac1]
+        r1 = self.payout_mat[ac1, ac0]
+        s0 = self.states[ac0, ac1]
+        s1 = self.states[ac1, ac0]
+        observation = [s0, s1]
+        reward = [r0, r1]
+        done = (self.step_count == self.max_steps)
+        return observation, reward, done, None
+
+
 
 """
 OG COIN GAME.
@@ -629,7 +714,8 @@ def step(theta1, theta2, values1, values2):
     torch.zeros(args.batch_size, args.hidden_size).to(device),
     torch.zeros(args.batch_size, args.hidden_size).to(device),
     torch.zeros(args.batch_size, args.hidden_size).to(device))
-    rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
+    if args.env == "coin" or args.env == "ogcoin":
+        rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
 
     for t in range(args.len_rollout):
         a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, theta1, values1, h_p1, h_v1)
@@ -639,14 +725,17 @@ def step(theta1, theta2, values1, values2):
         score1 += torch.mean(r1) / float(args.len_rollout)
         score2 += torch.mean(r2) / float(args.len_rollout)
         # print(info)
-        rr_matches, rb_matches, br_matches, bb_matches = info
-        rr_matches_record += rr_matches
-        rb_matches_record += rb_matches
-        br_matches_record += br_matches
-        bb_matches_record += bb_matches
+        if args.env == "coin" or args.env == "ogcoin":
+            rr_matches, rb_matches, br_matches, bb_matches = info
+            rr_matches_record += rr_matches
+            rb_matches_record += rb_matches
+            br_matches_record += br_matches
+            bb_matches_record += bb_matches
 
-    return (score1, score2), (rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record)
+    if args.env == "coin" or args.env == "ogcoin":
+        return (score1, score2), (rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record)
 
+    return (score1, score2), None
 
 class Agent():
     def __init__(self, input_size, hidden_size, action_size, lr_p, lr_v, theta_p=None):
@@ -1058,11 +1147,12 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
                            agent2.theta_v)
-        rr_matches, rb_matches, br_matches, bb_matches = info
-        same_colour_coins = (rr_matches + bb_matches).item()
-        diff_colour_coins = (rb_matches + br_matches).item()
-        same_colour_coins_record.append(same_colour_coins)
-        diff_colour_coins_record.append(diff_colour_coins)
+        if args.env == "coin" or args.env == "ogcoin":
+            rr_matches, rb_matches, br_matches, bb_matches = info
+            same_colour_coins = (rr_matches + bb_matches).item()
+            diff_colour_coins = (rb_matches + br_matches).item()
+            same_colour_coins_record.append(same_colour_coins)
+            diff_colour_coins_record.append(diff_colour_coins)
         joint_scores.append(0.5 * (score[0] + score[1]))
 
         # print
@@ -1074,12 +1164,13 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
             print("Epoch: {}".format(update + 1))
             print(f"Score 0: {score[0]}")
             print(f"Score 1: {score[1]}")
-            print("Same coins: {}".format(same_colour_coins))
-            print("Diff coins: {}".format(diff_colour_coins))
-            print("RR coins {}".format(rr_matches))
-            print("RB coins {}".format(rb_matches))
-            print("BR coins {}".format(br_matches))
-            print("BB coins {}".format(bb_matches))
+            if args.env == "coin" or args.env == "ogcoin":
+                print("Same coins: {}".format(same_colour_coins))
+                print("Diff coins: {}".format(diff_colour_coins))
+                print("RR coins {}".format(rr_matches))
+                print("RB coins {}".format(rb_matches))
+                print("BR coins {}".format(br_matches))
+                print("BB coins {}".format(bb_matches))
             print("Agent 1 Sample Obs Info:")
             print_policy_and_value_info(agent1.theta_p, agent1.theta_v)
             print("Agent 2 Sample Obs Info:")
@@ -1115,7 +1206,7 @@ if __name__ == "__main__":
     parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
     parser.add_argument("--inner_beta", type=float, default=0.0, help="for inner kl penalty with POLA")
-    parser.add_argument("--save_dir", type=str, default='./checkpoints')
+    parser.add_argument("--save_dir", type=str, default='.')
     parser.add_argument("--checkpoint_every", type=int, default=1000, help="Epochs between checkpoint save")
     parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
     parser.add_argument("--ent_reg", type=float, default=0.0, help="entropy regularizer")
@@ -1133,20 +1224,28 @@ if __name__ == "__main__":
                         help="learning rate for opponent modeling (imitation/supervised learning) for policy")
     parser.add_argument("--om_lr_v", type=float, default=0.001,
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
+    parser.add_argument("--env", type=str, default="ogcoin",
+                        choices=["ipd", "coin", "ogcoin"])
 
     args = parser.parse_args()
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    input_size = args.grid_size ** 2 * 4
-    action_size = 4
-
-    if args.og_coin_game:
+    if args.env == "ogcoin":
+        input_size = args.grid_size ** 2 * 4
+        action_size = 4
         env = OGCoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
-
-    else:
+    elif args.env == "coin":
+        input_size = args.grid_size ** 2 * 4
+        action_size = 4
         env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
+    elif args.env == "ipd":
+        input_size = 2 * 2 # n agents by n agents
+        action_size = 2
+        env = IteratedPrisonersDilemma(max_steps=args.len_rollout, batch_size=args.batch_size)
+    else:
+        raise NotImplementedError("Unknown Environment")
 
     if args.load_path is None:
         agent1 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
