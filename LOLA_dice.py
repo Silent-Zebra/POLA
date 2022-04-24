@@ -68,32 +68,33 @@ def print_policy_and_value_info(th, vals):
     if args.env == "ipd":
         print("Simple One Step Examples")
         print("Start")
-        sample_obs = torch.FloatTensor([[[0, 0],
-                                         [0, 0]]]).reshape(1, input_size)
+        sample_obs = torch.FloatTensor([[[0, 0, 1],
+                                         [0, 0, 1]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
-        print("DD")
-        sample_obs = torch.FloatTensor([[[1, 0],
-                                         [1, 0]]]).reshape(1, input_size)
+        print("DD") # NOTE these are from the perspective of: (my past action, opp past action)
+        # Not (p1 action, p2 action) as I did in my old file
+        sample_obs = torch.FloatTensor([[[1, 0, 0],
+                                         [1, 0, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
         print("DC")
-        sample_obs = torch.FloatTensor([[[1, 0],
-                                         [0, 1]]]).reshape(1, input_size)
+        sample_obs = torch.FloatTensor([[[1, 0, 0],
+                                         [0, 1, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
         print("CD")
-        sample_obs = torch.FloatTensor([[[0, 1],
-                                         [1, 0]]]).reshape(1, input_size)
+        sample_obs = torch.FloatTensor([[[0, 1, 0],
+                                         [1, 0, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
         print("CC")
-        sample_obs = torch.FloatTensor([[[0, 1],
-                                         [0, 1]]]).reshape(1, input_size)
+        sample_obs = torch.FloatTensor([[[0, 1, 0],
+                                         [0, 1, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
 
         if not args.hist_one:
             print("Two Step Examples")
-            states = torch.FloatTensor([[[1, 0], [1, 0]],  # CC
-                                              [[1, 0], [0, 1]],  # CD
-                                              [[0, 1], [1, 0]],  # DC
-                                              [[0, 1], [0, 1]]])  # DD
+            states = torch.FloatTensor([[[1, 0, 0], [1, 0, 0]],  # CC
+                                              [[1, 0, 0], [0, 1, 0]],  # CD
+                                              [[0, 1, 0], [1, 0, 0]],  # DC
+                                              [[0, 1, 0], [0, 1, 0]]])  # DD
 
             for i in range(4):
                 for j in range(4):
@@ -253,21 +254,24 @@ class IteratedPrisonersDilemma:
     NUM_AGENTS = 2
     NUM_ACTIONS = 2
     NUM_STATES = 5
+    ONE_HOT_REPR_DIM = 3
 
     def __init__(self, max_steps, batch_size=1):
         self.max_steps = max_steps
         self.batch_size = batch_size
         self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]]).to(device)
-        self.states = torch.FloatTensor([[[[1, 0], [1, 0]], #CC
-                                          [[1, 0], [0, 1]]], #CD
-                                         [[[0, 1], [1, 0]], #DC
-                                          [[0, 1], [0, 1]]]]).to(device) #DD
-
+        self.states = torch.FloatTensor([[[[1, 0, 0], [1, 0, 0]], #CC
+                                          [[1, 0, 0], [0, 1, 0]]], #CD
+                                         [[[0, 1, 0], [1, 0, 0]], #DC
+                                          [[0, 1, 0], [0, 1, 0]]]]).to(device) #DD
+        self.init_state = torch.FloatTensor([[0, 0, 1], [0, 0, 1]]).to(device)
         self.step_count = None
 
     def reset(self):
         self.step_count = 0
-        init_state = torch.zeros((self.batch_size, self.NUM_AGENTS, self.NUM_ACTIONS)).to(device)
+        # init_state = torch.zeros((self.batch_size, self.NUM_AGENTS, self.NUM_ACTIONS)).to(device)
+        init_state = self.init_state.repeat(self.batch_size, 1, 1)
+        # print(init_state.shape)
         observation = [init_state, init_state]
         return observation
 
@@ -1289,7 +1293,8 @@ if __name__ == "__main__":
         action_size = 4
         env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
     elif args.env == "ipd":
-        input_size = 2 * 2 # n agents by n agents
+        # input_size = 2 * 2 # n agents by n agents
+        input_size = 3 * 2 # one hot repr dim by n agents
         action_size = 2
         env = IteratedPrisonersDilemma(max_steps=args.len_rollout, batch_size=args.batch_size)
     else:
