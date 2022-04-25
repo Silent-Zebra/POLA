@@ -1163,7 +1163,10 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
             if args.print_info_each_outer_step:
                 print("Agent 1 Sample Obs Info:")
                 print_policy_and_value_info(agent1.theta_p, agent1.theta_v)
-
+                if use_opp_model:
+                    print("Agent 1 Opp Model of Agent 2:")
+                    print_policy_and_value_info(agent2_theta_p_model,
+                                                None) # TODO add OM for value later
 
         for outer_step in range(outer_steps):
             th1_to_copy = start_theta1
@@ -1193,6 +1196,10 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
             if args.print_info_each_outer_step:
                 print("Agent 2 Sample Obs Info:")
                 print_policy_and_value_info(agent2.theta_p, agent2.theta_v)
+                if use_opp_model:
+                    print("Agent 2 Opp Model of Agent 1:")
+                    print_policy_and_value_info(agent1_theta_p_model,
+                                                None) # TODO add OM for value later
 
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
@@ -1225,6 +1232,13 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
             print_policy_and_value_info(agent1.theta_p, agent1.theta_v)
             print("Agent 2 Sample Obs Info:")
             print_policy_and_value_info(agent2.theta_p, agent2.theta_v)
+            if use_opp_model:
+                print("Agent 1 Opp Model of Agent 2:")
+                print_policy_and_value_info(agent2_theta_p_model,
+                                            None)  # TODO add OM for value later
+                print("Agent 2 Opp Model of Agent 1:")
+                print_policy_and_value_info(agent1_theta_p_model,
+                                            None)  # TODO add OM for value later
 
         if update % args.checkpoint_every == 0:
             now = datetime.datetime.now()
