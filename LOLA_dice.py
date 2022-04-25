@@ -1049,12 +1049,14 @@ class Agent():
         # Then a simple supervised loss, softmax on policy, MSE vs the targeted probability, or no, KL div between the current policy and the desired one.
 
 
-    def opp_model(self, om_lr_p, om_lr_v, prev_model_theta_p=None):
+    def opp_model(self, om_lr_p, om_lr_v, true_other_theta_p, true_other_theta_v, prev_model_theta_p=None):
+        # true_other_theta_p and true_other_theta_v used only in the collection of data (rollouts in the environment)
+        # so then this is not cheating. We do not assume access to other agent policy parameters (at least not direct, white box access)
+        # We assume ability to collect trajectories through rollouts/play with the other agent in the environment
+        # Essentially when using OM, we are now no longer doing dice update on the trajectories collected directly (which requires parameter access)
+        # instead we collect the trajectories first, then build an OM, then rollout using OM and make DiCE/LOLA/POLA update based on that OM
+        # Instead of direct rollout using opponent true parameters and update based on that.
         agent_opp = Agent(input_size, args.hidden_size, action_size, om_lr_p, om_lr_v, prev_model_theta_p)
-
-        other_theta_p = agent_opp.theta_p
-        other_theta_v = agent_opp.theta_v
-
 
         opp_model_data_batches = args.opp_model_data_batches
 
@@ -1062,7 +1064,7 @@ class Agent():
             # should only do 1 collect, but I guess we can do multiple "batches"
             # where repeating the below would be the same as collecting one big batch of environment interaction
             state_history, other_state_history, act_history, other_act_history =\
-                self.rollout_collect_data_for_opp_model(other_theta_p, other_theta_v)
+                self.rollout_collect_data_for_opp_model(true_other_theta_p, true_other_theta_v)
 
             opp_model_threshold = 1e-3
             c_e_loss = 100
@@ -1078,9 +1080,9 @@ class Agent():
             for opp_model_iter in range(opp_model_steps_per_data_batch):
                 # THis may not work with large batches... you may need just x iters... something like that.
 
-                curr_pol_logits = self.get_other_logits_for_states(other_theta_p,
-                                                                    other_theta_v,
-                                                                    other_state_history)
+                curr_pol_logits = self.get_other_logits_for_states(agent_opp.theta_p,
+                                                                   agent_opp.theta_v,
+                                                                   other_state_history)
                 # Maybe we don't need to model the values for now? It can be learned as the rollouts for POLA are happening
 
                 # KL div: p log p - p log q
@@ -1089,6 +1091,8 @@ class Agent():
                 # then -p log q
 
                 c_e_loss = - (other_act_history * torch.log_softmax(curr_pol_logits, dim=-1)).sum(dim=-1).mean()
+                # print(other_act_history)
+                # print(torch.softmax(curr_pol_logits, dim=-1))
 
                 # print(opp_model_iters)
                 print(c_e_loss.item())
@@ -1130,8 +1134,14 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
 
 
         if use_opp_model:
-            agent2_theta_p_model = agent1.opp_model(args.om_lr_p, args.om_lr_v, agent2_theta_p_model)
-            agent1_theta_p_model = agent2.opp_model(args.om_lr_p, args.om_lr_v, agent1_theta_p_model)
+            agent2_theta_p_model = agent1.opp_model(args.om_lr_p, args.om_lr_v,
+                                                    true_other_theta_p=start_theta2,
+                                                    true_other_theta_v=start_val2,
+                                                    prev_model_theta_p=agent2_theta_p_model)
+            agent1_theta_p_model = agent2.opp_model(args.om_lr_p, args.om_lr_v,
+                                                    true_other_theta_p=start_theta1,
+                                                    true_other_theta_v=start_val1,
+                                                    prev_model_theta_p=agent1_theta_p_model)
 
         for outer_step in range(outer_steps):
             # copy other's parameters:
