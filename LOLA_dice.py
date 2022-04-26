@@ -12,11 +12,12 @@ import datetime
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-def checkpoint(agent1, agent2, info, tag, args):
+def checkpoint(agent1, agent2, info, scores, tag, args):
     ckpt_dict = {
         "agent1": agent1,
         "agent2": agent2,
-        "info": info
+        "info": info,
+        "scores": scores
     }
     torch.save(ckpt_dict, os.path.join(args.save_dir, tag))
 
@@ -27,7 +28,8 @@ def load_from_checkpoint():
     agent1 = ckpt_dict["agent1"]
     agent2 = ckpt_dict["agent2"]
     info = ckpt_dict["info"]
-    return agent1, agent2, info
+    scores = ckpt_dict["scores"]
+    return agent1, agent2, info, scores
 
 
 def print_info_on_sample_obs(sample_obs, th, vals):
@@ -1117,6 +1119,7 @@ class Agent():
 
 def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
     joint_scores = []
+    score_record = []
     print("start iterations with", n_lookaheads, "inner steps and", outer_steps, "outer steps:")
     same_colour_coins_record = []
     diff_colour_coins_record = []
@@ -1224,6 +1227,8 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
             same_colour_coins_record.append(same_colour_coins)
             diff_colour_coins_record.append(diff_colour_coins)
         joint_scores.append(0.5 * (score[0] + score[1]))
+        score = torch.stack(score)
+        score_record.append(score)
 
         # print
         if update % args.print_every == 0:
@@ -1253,9 +1258,9 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
                 print_policy_and_value_info(agent1_theta_p_model,
                                             None)  # TODO add OM for value later
 
-        if update % args.checkpoint_every == 0:
+        if (update + 1) % args.checkpoint_every == 0:
             now = datetime.datetime.now()
-            checkpoint(agent1, agent2, coins_collected_info,
+            checkpoint(agent1, agent2, coins_collected_info, score_record,
                        "checkpoint_{}_{}.pt".format(update + 1, now.strftime(
                            '%Y-%m-%d_%H-%M')), args)
 
@@ -1331,7 +1336,9 @@ if __name__ == "__main__":
         agent1 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
         agent2 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     else:
-        agent1, agent2, coins_collected_info = load_from_checkpoint()
+        agent1, agent2, coins_collected_info, prev_scores = load_from_checkpoint()
         print(coins_collected_info)
+        # print(prev_scores)
+        print(torch.stack(prev_scores))
 
-    scores = play(agent1, agent2, args.inner_steps, args.outer_steps, args.opp_model)
+    joint_scores = play(agent1, agent2, args.inner_steps, args.outer_steps, args.opp_model)
