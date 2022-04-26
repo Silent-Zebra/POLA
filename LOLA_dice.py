@@ -1288,7 +1288,6 @@ if __name__ == "__main__":
     parser.add_argument("--diff_coin_cost", type=float, default=-2.0, help="changes problem setting (the cost to the opponent when you pick up a coin of their colour)")
     parser.add_argument("--same_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of same colour)")
     parser.add_argument("--grid_size", type=int, default=3)
-    parser.add_argument("--og_coin_game", action="store_true", help="use the original coin game formulation")
     parser.add_argument("--optim", type=str, default="adam")
     parser.add_argument("--use_baseline", action="store_true", help="Use Baseline (critic) for variance reduction)")
     parser.add_argument("--opp_model", action="store_true", help="Use Opponent Modeling")
@@ -1299,7 +1298,7 @@ if __name__ == "__main__":
     parser.add_argument("--om_lr_v", type=float, default=0.001,
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
     parser.add_argument("--env", type=str, default="ogcoin",
-                        choices=["ipd", "coin", "ogcoin"])
+                        choices=["ipd", "twocoin", "ogcoin"])
     parser.add_argument("--hist_one", action="store_true", help="Use one step history (no gru or rnn, just one step history)")
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
 
@@ -1312,7 +1311,7 @@ if __name__ == "__main__":
         input_size = args.grid_size ** 2 * 4
         action_size = 4
         env = OGCoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
-    elif args.env == "coin":
+    elif args.env == "twocoin": # two coins at once (one for each agent)
         input_size = args.grid_size ** 2 * 4
         action_size = 4
         env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
