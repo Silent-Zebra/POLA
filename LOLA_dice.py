@@ -91,10 +91,10 @@ def print_policy_and_value_info(th, vals):
 
         if not args.hist_one:
             print("Two Step Examples")
-            states = torch.FloatTensor([[[1, 0, 0], [1, 0, 0]],  # CC
-                                              [[1, 0, 0], [0, 1, 0]],  # CD
-                                              [[0, 1, 0], [1, 0, 0]],  # DC
-                                              [[0, 1, 0], [0, 1, 0]]])  # DD
+            states = torch.FloatTensor([[[1, 0, 0], [1, 0, 0]],  # DD
+                                              [[1, 0, 0], [0, 1, 0]],  # DC
+                                              [[0, 1, 0], [1, 0, 0]],  # CD
+                                              [[0, 1, 0], [0, 1, 0]]])  # CC
 
             for i in range(4):
                 for j in range(4):
@@ -260,11 +260,14 @@ class IteratedPrisonersDilemma:
         self.max_steps = max_steps
         self.batch_size = batch_size
         self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]]).to(device)
-        self.states = torch.FloatTensor([[[[1, 0, 0], [1, 0, 0]], #CC
-                                          [[1, 0, 0], [0, 1, 0]]], #CD
-                                         [[[0, 1, 0], [1, 0, 0]], #DC
-                                          [[0, 1, 0], [0, 1, 0]]]]).to(device) #DD
-        self.init_state = torch.FloatTensor([[0, 0, 1], [0, 0, 1]]).to(device)
+        self.states = torch.FloatTensor([[[[1, 0, 0], [1, 0, 0]], #DD
+                                          [[1, 0, 0], [0, 1, 0]]], #DC
+                                         [[[0, 1, 0], [1, 0, 0]], #CD
+                                          [[0, 1, 0], [0, 1, 0]]]]).to(device) #CC
+        if args.init_state_coop:
+            self.init_state = torch.FloatTensor([[0, 1, 0], [0, 1, 0]]).to(device)
+        else:
+            self.init_state = torch.FloatTensor([[0, 0, 1], [0, 0, 1]]).to(device)
         self.step_count = None
 
     def reset(self):
@@ -1301,6 +1304,7 @@ if __name__ == "__main__":
                         choices=["ipd", "twocoin", "ogcoin"])
     parser.add_argument("--hist_one", action="store_true", help="Use one step history (no gru or rnn, just one step history)")
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
+    parser.add_argument("--init_state_coop", action="store_true", help="For IPD only: have the first state be CC instead of a separate start state")
 
     args = parser.parse_args()
 
