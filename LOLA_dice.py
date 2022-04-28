@@ -307,10 +307,10 @@ class OGCoinGameGPU:
     NUM_AGENTS = 2
     NUM_ACTIONS = 4
     MOVES = torch.stack([
-        torch.LongTensor([0, 1]),
-        torch.LongTensor([0, -1]),
-        torch.LongTensor([1, 0]),
-        torch.LongTensor([-1, 0]),
+        torch.LongTensor([0, 1]), # right
+        torch.LongTensor([0, -1]), # left
+        torch.LongTensor([1, 0]), # down
+        torch.LongTensor([-1, 0]), # up
     ], dim=0).to(device)
 
     def __init__(self, max_steps, batch_size, grid_size=3):
@@ -330,27 +330,41 @@ class OGCoinGameGPU:
         red_pos_flat = torch.randint(self.grid_size * self.grid_size, size=(self.batch_size,)).to(device)
         self.red_pos = torch.stack((red_pos_flat // self.grid_size, red_pos_flat % self.grid_size), dim=-1)
 
-        blue_pos_flat = (torch.randint(self.grid_size * self.grid_size - 1, size=(self.batch_size,)).to(device) + red_pos_flat) % (self.grid_size * self.grid_size)
+        blue_pos_flat = torch.randint(self.grid_size * self.grid_size, size=(self.batch_size,)).to(device)
+        # blue_pos_flat = (torch.randint(self.grid_size * self.grid_size - 1, size=(self.batch_size,)).to(device) + red_pos_flat) % (self.grid_size * self.grid_size)
         self.blue_pos = torch.stack((blue_pos_flat // self.grid_size, blue_pos_flat % self.grid_size), dim=-1)
+
+        # print((red_pos_flat == blue_pos_flat).sum())
 
         coin_pos_flat = torch.randint(self.grid_size * self.grid_size - 2, size=(self.batch_size,)).to(device)
         minpos = torch.min(red_pos_flat, blue_pos_flat)
         maxpos = torch.max(red_pos_flat, blue_pos_flat)
         coin_pos_flat[coin_pos_flat >= minpos] += 1
         coin_pos_flat[coin_pos_flat >= maxpos] += 1
-        x = torch.logical_and(minpos == maxpos,
-                          torch.randn_like(minpos.float()) < 1.0 / (
-                                      self.grid_size * self.grid_size - 1))
-        coin_pos_flat[x.long()] = minpos+1 # THIS IS TO FIX THE OFFSET BUG
-        # coin_pos_flat[torch.logical_and(minpos==maxpos, torch.randn_like(minpos.float()) < 1.0 / (self.grid_size*self.grid_size - 1))] = minpos+1 # THIS IS TO FIX THE OFFSET BUG
+
+        # Regenerate coins when both agents are on the same spot, regenerate uniform among the 8 other possible spots
+        same_agents_pos = (minpos == maxpos)
+        coin_pos_flat[same_agents_pos] = torch.randint(self.grid_size * self.grid_size - 1, size=(same_agents_pos.sum(),)) + 1 + minpos[same_agents_pos]
+
+        # x = torch.logical_and(minpos == maxpos,
+        #                   torch.rand_like(minpos.float()) < (1.0 / (
+        #                               self.grid_size * self.grid_size - 1)))
+
+        # coin_pos_flat[x] = minpos[x] +1 # THIS IS TO FIX THE OFFSET BUG
+
         coin_pos_flat = coin_pos_flat % (self.grid_size * self.grid_size)
+
+        # Test distribution of coins
+        # print((minpos == maxpos).sum())
+        # for i in range(self.grid_size * self.grid_size):
+        #     print(torch.logical_and(minpos == maxpos, (coin_pos_flat == (minpos + i) % (self.grid_size * self.grid_size)) ).sum())
+        assert (coin_pos_flat == red_pos_flat).sum() == 0
+        assert (coin_pos_flat == blue_pos_flat).sum() == 0
+
         self.coin_pos = torch.stack((coin_pos_flat // self.grid_size, coin_pos_flat % self.grid_size), dim=-1)
 
-        # state = self._generate_state()
-        # observations = [state, state]
         state = self._generate_state()
         state2 = state.clone()
-        # print(state2.shape)
         state2[:, 0] = state[:, 1]
         state2[:, 1] = state[:, 0]
         state2[:, 2] = state[:, 3]
@@ -370,7 +384,25 @@ class OGCoinGameGPU:
         maxpos = torch.max(red_pos_flat, blue_pos_flat)
         coin_pos_flat[coin_pos_flat >= minpos] += 1
         coin_pos_flat[coin_pos_flat >= maxpos] += 1
+
+        # print(minpos.shape)
+        # print(coin_pos_flat.shape)
+        same_agents_pos = (minpos == maxpos)
+        # print(same_agents_pos.shape)
+
+        # Regenerate coins when both agents are on the same spot, regenerate uniform among the 8 other possible spots
+        # print(same_agents_pos.sum())
+        coin_pos_flat[same_agents_pos] = torch.randint(
+            self.grid_size * self.grid_size - 1,
+            size=(same_agents_pos.sum(),)) + 1 + minpos[same_agents_pos]
+
         coin_pos_flat = coin_pos_flat % (self.grid_size * self.grid_size)
+
+        # Test distribution of coins
+        # print((minpos == maxpos).sum())
+        # for i in range(self.grid_size * self.grid_size):
+        #     print(torch.logical_and(minpos == maxpos, (coin_pos_flat == (minpos + i) % (self.grid_size * self.grid_size)) ).sum())
+
         self.coin_pos[mask] = torch.stack((coin_pos_flat // self.grid_size, coin_pos_flat % self.grid_size), dim=-1)
 
     def _same_pos(self, x, y):
@@ -381,7 +413,8 @@ class OGCoinGameGPU:
         blue_pos_flat = self.blue_pos[:, 0] * self.grid_size + self.blue_pos[:, 1]
 
         # coin_pos_flat = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1]
-        coin_pos_flatter = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1] + self.grid_size * self.grid_size * self.red_coin + 2 * self.grid_size * self.grid_size
+        # 1 - self.red_coin here in order to have the red coin show up as obs in the second to last, rather than last of the 4 dimensions
+        coin_pos_flatter = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1] + self.grid_size * self.grid_size * (1-self.red_coin) + 2 * self.grid_size * self.grid_size
 
         state = torch.zeros((self.batch_size, 4*self.grid_size*self.grid_size)).to(device)
 
@@ -391,7 +424,19 @@ class OGCoinGameGPU:
         state[:,0].scatter_(1, red_pos_flat[:,None], 1)
         state[:,1].scatter_(1, blue_pos_flat[:,None], 1)
 
-        return state.view(self.batch_size, 4, self.grid_size, self.grid_size)
+        state = state.view(self.batch_size, 4, self.grid_size, self.grid_size)
+
+        # for i in range(3):
+        #     print(state[i])
+        #     print(red_pos_flat[i])
+        #     print(blue_pos_flat[i])
+        #     coin_pos_flat = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1]
+        #     print(coin_pos_flat[i])
+        #     print(self.red_coin[i])
+        #
+        #     print(coin_pos_flatter[i])
+
+        return state
 
     def step(self, actions):
         ac0, ac1 = actions
@@ -410,15 +455,21 @@ class OGCoinGameGPU:
         blue_reward = torch.zeros_like(self.red_coin).float()
         # blue_reward[blue_matches] = 1
 
+
         red_reward[torch.logical_and(red_matches, self.red_coin)] = args.same_coin_reward
         blue_reward[torch.logical_and(blue_matches, 1 - self.red_coin)] = args.same_coin_reward
         red_reward[torch.logical_and(red_matches, 1 - self.red_coin)] = args.diff_coin_reward
         blue_reward[torch.logical_and(blue_matches, self.red_coin)] = args.diff_coin_reward
 
-        red_reward[torch.logical_and(blue_matches, self.red_coin)] += (args.diff_coin_cost)
-        blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] += (args.diff_coin_cost)
+        red_reward[torch.logical_and(blue_matches, self.red_coin)] += args.diff_coin_cost
+        blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] += args.diff_coin_cost
         # red_reward[torch.logical_and(blue_matches, self.red_coin)] -= 2
         # blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] -= 2
+
+        if args.split_coins:
+            both_matches = torch.logical_and(self._same_pos(self.red_pos, self.coin_pos), self._same_pos(self.blue_pos, self.coin_pos))
+            red_reward[both_matches] *= 0.5
+            blue_reward[both_matches] *= 0.5
 
         total_rb_matches = torch.logical_and(red_matches, 1 - self.red_coin).float().mean()
         total_br_matches = torch.logical_and(blue_matches, self.red_coin).float().mean()
@@ -430,6 +481,7 @@ class OGCoinGameGPU:
         reward = [red_reward.float(), blue_reward.float()]
         state = self._generate_state()
         state2 = state.clone()
+        # Because each agent sees the obs as if they are the "main" or "red" agent. This is to be consistent with the self-centric IPD formulation too.
         state2[:, 0] = state[:, 1]
         state2[:, 1] = state[:, 0]
         state2[:, 2] = state[:, 3]
@@ -928,6 +980,10 @@ class Agent():
             other_state_history.append(s2)
 
         for t in range(args.len_rollout):
+            # print("SAR")
+            # print(s1[0])
+            # print(s2[0])
+
             a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
             a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta, other_values, h_p2,
@@ -937,6 +993,17 @@ class Agent():
             if first_inner_step:
                 cat_act_probs_other.append(cat_act_probs2)
                 other_state_history.append(s2)
+
+        #     print(a1[0])
+        #     print(a2[0])
+        #     print(r1[0])
+        #     print(r2[0])
+        #     print("Next S")
+        #     print(s1[0])
+        #     print(s2[0])
+        # 1/0
+
+
 
         if not first_inner_step:
             curr_pol_probs = self.get_other_policies_for_states(other_theta, other_values, self.other_state_history)
@@ -1117,9 +1184,12 @@ class Agent():
         return agent_opp.theta_p
 
 
-def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False):
+def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev_scores=None, prev_coins_collected_info=None):
     joint_scores = []
     score_record = []
+    # if prev_scores is not None:
+    #     score_record = prev_scores
+
     print("start iterations with", n_lookaheads, "inner steps and", outer_steps, "outer steps:")
     same_colour_coins_record = []
     diff_colour_coins_record = []
@@ -1310,6 +1380,7 @@ if __name__ == "__main__":
     parser.add_argument("--hist_one", action="store_true", help="Use one step history (no gru or rnn, just one step history)")
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
     parser.add_argument("--init_state_coop", action="store_true", help="For IPD only: have the first state be CC instead of a separate start state")
+    parser.add_argument("--split_coins", action="store_true", help="If true, then when both agents step on same coin, each gets 50% of the reward as if they were the only agent collecting that coin. Only tested with OGCoin so far")
 
     args = parser.parse_args()
 
