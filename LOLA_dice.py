@@ -346,7 +346,7 @@ class OGCoinGameGPU:
 
         # Regenerate coins when both agents are on the same spot, regenerate uniform among the 8 other possible spots
         same_agents_pos = (minpos == maxpos)
-        coin_pos_flat[same_agents_pos] = torch.randint(self.grid_size * self.grid_size - 1, size=(same_agents_pos.sum(),)) + 1 + minpos[same_agents_pos]
+        coin_pos_flat[same_agents_pos] = torch.randint(self.grid_size * self.grid_size - 1, size=(same_agents_pos.sum(),)).to(device) + 1 + minpos[same_agents_pos]
 
         # x = torch.logical_and(minpos == maxpos,
         #                   torch.rand_like(minpos.float()) < (1.0 / (
@@ -396,7 +396,7 @@ class OGCoinGameGPU:
         # print(same_agents_pos.sum())
         coin_pos_flat[same_agents_pos] = torch.randint(
             self.grid_size * self.grid_size - 1,
-            size=(same_agents_pos.sum(),)) + 1 + minpos[same_agents_pos]
+            size=(same_agents_pos.sum(),)).to(device) + 1 + minpos[same_agents_pos]
 
         coin_pos_flat = coin_pos_flat % (self.grid_size * self.grid_size)
 
