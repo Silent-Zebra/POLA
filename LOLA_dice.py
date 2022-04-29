@@ -31,6 +31,8 @@ def load_from_checkpoint():
     scores = ckpt_dict["scores"]
     return agent1, agent2, info, scores
 
+def reverse_cumsum(x, dim):
+    return x + torch.sum(x, dim=dim, keepdims=True) - torch.cumsum(x, dim=dim)
 
 def print_info_on_sample_obs(sample_obs, th, vals):
 
@@ -666,6 +668,10 @@ class Memory():
         self.values.append(v)
         self.rewards.append(r)
 
+    def add_end_state_v(self, v):
+        self.end_state_v = v
+
+
     def dice_objective(self):
         self_logprobs = torch.stack(self.self_logprobs, dim=1)
         other_logprobs = torch.stack(self.other_logprobs, dim=1)
@@ -677,9 +683,9 @@ class Memory():
                                      dim=1).to(device) / args.gamma
         discounted_rewards = rewards * cum_discount
 
-        if args.use_baseline:
+        if use_baseline:
             values = torch.stack(self.values, dim=1)
-            discounted_values = values * cum_discount
+            # discounted_values = values * cum_discount
 
         # stochastics nodes involved in rewards dependencies:
         dependencies = torch.cumsum(self_logprobs + other_logprobs, dim=1)
@@ -687,28 +693,116 @@ class Memory():
         # logprob of each stochastic nodes:
         stochastic_nodes = self_logprobs + other_logprobs
 
-        # dice objective:
-        dice_objective = torch.mean(
-            torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
+        use_loaded_dice = False
+        if use_baseline:
+            use_loaded_dice = True
 
-        if args.use_baseline:
-            # variance_reduction:
-            baseline_term = torch.mean(
-                torch.sum((1 - magic_box(stochastic_nodes)) * discounted_values,
-                          dim=1))
-            dice_objective = dice_objective + baseline_term
+        if use_loaded_dice:
+            next_val_history = torch.zeros(
+                (args.batch_size, args.len_rollout),
+                device=device)
+            next_val_history[:, :args.len_rollout - 1] = values[:, 1:args.len_rollout]
+            next_val_history[:, -1] = self.end_state_v
+
+            advantages = torch.zeros_like(values)
+            lambd = 0  # 0.95 # 1 here is essentially what I was doing before with monte carlo
+            deltas = rewards + args.gamma * next_val_history.detach() - values.detach()
+            gae = torch.zeros_like(deltas[0, :]).float()
+            for i in range(deltas.size(0) - 1, -1, -1):
+                gae = gae * args.gamma * lambd + deltas[i, :]
+                advantages[i, :] = gae
+            # print(gae)
+
+            # print(stochastic_nodes.shape)
+            deps_up_to_t = (torch.cumsum(stochastic_nodes, dim=1))
+            # print(deps_up_to_t.shape)
+
+            deps_less_than_t = deps_up_to_t - stochastic_nodes  # take out the dependency in the given time step
+
+            # advantages = discounted_rewards
+
+            # Look at Loaded DiCE paper to see where this formulation comes from
+            # Right now since I am using GAE, the advantages already have the discounts in them, no need to multiply again
+            loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(
+                deps_less_than_t)) * advantages).sum(dim=1).mean(dim=0)
+
+            dice_objective = loaded_dice_rewards
+
+            # print(dice_objective)
+        else:
+            # dice objective:
+            dice_objective = torch.mean(
+                torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
+
+        # if args.use_baseline:
+        #     # variance_reduction:
+        #     baseline_term = torch.mean(
+        #         torch.sum((1 - magic_box(stochastic_nodes)) * discounted_values,
+        #                   dim=1))
+        #     dice_objective = dice_objective + baseline_term
 
         return -dice_objective  # want to minimize -objective
 
     def value_loss(self):
         values = torch.stack(self.values, dim=1)
         rewards = torch.stack(self.rewards, dim=1)
-        return torch.mean((rewards - values) ** 2) # TODO SZ NOTE: Isn't this wrong? Don't we need r + next state val - current state val? Pretty sure this is wrong
+        discounts = torch.cumprod(
+            args.gamma * torch.ones((args.len_rollout), device=device),
+            dim=0) / args.gamma
+        final_state_vals = self.end_state_v.detach()
+        # print(final_state_vals.shape)
+
+        # print(rewards.shape)
+        # print(discounts.shape)
+        # print(discounts)
+        # print(rewards)
+        gamma_t_r_ts = rewards * discounts
+        # print(gamma_t_r_ts.shape)
+        # print(gamma_t_r_ts)
+
+
+        # print(gamma_t_r_ts)
+        G_ts = reverse_cumsum(gamma_t_r_ts, dim=1)
+        # print(G_ts)
+        # print(G_ts.shape)
+
+        R_ts = G_ts / discounts
+        # print(R_ts)
+
+
+        # print((args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])))
+        # print((args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])).shape)
+        # print(final_state_vals.shape)
+        # print(final_state_vals)
+        # print(final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t())
+        # print(final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t().shape)
+
+        final_val_discounted_to_curr = (args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])) \
+                                       * final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t()
+
+        # print(final_val_discounted_to_curr)
+        # print(R_ts.shape)
+
+        # You DO need a detach on these. Because it's the target - it should be detached. It's a target value.
+        # Essentially a Monte Carlo style type return for R_t, except for the final state we also use the estimated final state value.
+        # This becomes our target for the value function loss. So it's kind of a mix of Monte Carlo and bootstrap, but anyway you need the final value
+        # because otherwise your value calculations will be inconsistent
+        # print((R_ts ) )
+        # print((R_ts + final_val_discounted_to_curr - values) )
+        values_loss = (R_ts + final_val_discounted_to_curr - values) ** 2
+        # print(values_loss[0][0])
+        # print(values_loss)
+        # print(values_loss.shape)
+        values_loss = values_loss.sum(dim=1).mean(dim=0)
+
+        # return torch.mean((rewards - values) ** 2) # TODO SZ NOTE: Isn't this wrong? Don't we need r + next state val - current state val? Pretty sure this is wrong
         # Well between the whole baseline/DiCE/Loaded DiCE thing where the original baseline wasn't correct
         # And this calculation which I'm almost certain is wrong, we are probably better off just not using the value function
         # That makes OM a bunch easier too.
         # Especially in coin game, where the rewards are close ish to 0 anyway, the value function shouldn't be that important.
-
+        print("Values loss")
+        print(values_loss)
+        return values_loss
 
 def apply(batch_states, theta, hidden):
     #     import pdb; pdb.set_trace()
@@ -756,7 +850,7 @@ def apply(batch_states, theta, hidden):
 def act(batch_states, theta_p, theta_v, h_p, h_v, ret_logits=False):
     h_p, logits = apply(batch_states, theta_p, h_p)
     categorical_act_probs = torch.softmax(logits, dim=-1)
-    if args.use_baseline:
+    if use_baseline:
         h_v, values = apply(batch_states, theta_v, h_v)
         ret_vals = values.squeeze(-1)
     else:
@@ -834,9 +928,9 @@ class Agent():
 
                 # Linear 2
                 nn.Parameter(
-                    torch.zeros((hidden_size, action_size),
+                    torch.zeros((hidden_size, 1),
                                 requires_grad=True)),
-                nn.Parameter(torch.zeros(action_size, requires_grad=True)),
+                nn.Parameter(torch.zeros(1, requires_grad=True)),
             ]).to(device)
         else:
             self.theta_p = nn.ParameterList([
@@ -1003,7 +1097,14 @@ class Agent():
         #     print(s2[0])
         # 1/0
 
-
+        # act just to get the final state values
+        # a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
+        #                                               self.theta_v,
+        #                                               h_p1, h_v1)
+        a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta,
+                                                      other_values,
+                                                      h_p2, h_v2)
+        other_memory.add_end_state_v(v2)
 
         if not first_inner_step:
             curr_pol_probs = self.get_other_policies_for_states(other_theta, other_values, self.other_state_history)
@@ -1050,6 +1151,15 @@ class Agent():
             if args.ent_reg > 0:
                 ent_vals.append(cat_act_probs1)
 
+        # act just to get the final state values
+        a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
+                                                      self.theta_v,
+                                                      h_p1, h_v1)
+        # a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta,
+        #                                               other_values,
+        #                                               h_p2, h_v2)
+        memory.add_end_state_v(v1)
+
         if not first_outer_step:
             curr_pol_probs = self.get_policies_for_states()
             kl_div = torch.nn.functional.kl_div(torch.log(curr_pol_probs), self.ref_cat_act_probs.detach(), log_target=False, reduction='batchmean')
@@ -1069,7 +1179,7 @@ class Agent():
             objective += -ent_calc * args.ent_reg # but we want to max entropy (min negative entropy)
         self.theta_update(objective)
         # update self value:
-        if args.use_baseline:
+        if use_baseline:
             v_loss = memory.value_loss()
             self.value_update(v_loss)
 
@@ -1367,7 +1477,8 @@ if __name__ == "__main__":
     parser.add_argument("--same_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of same colour)")
     parser.add_argument("--grid_size", type=int, default=3)
     parser.add_argument("--optim", type=str, default="adam")
-    parser.add_argument("--use_baseline", action="store_true", help="Use Baseline (critic) for variance reduction)")
+    # parser.add_argument("--use_baseline", action="store_true", help="Use Baseline (critic) for variance reduction")
+    parser.add_argument("--no_baseline", action="store_true", help="Use NO Baseline (critic) for variance reduction. Default is baseline using Loaded DiCE with GAE")
     parser.add_argument("--opp_model", action="store_true", help="Use Opponent Modeling")
     parser.add_argument("--opp_model_steps_per_batch", type=int, default=30, help="How many steps to train opp model on eatch batch at the beginning of each POLA epoch")
     parser.add_argument("--opp_model_data_batches", type=int, default=50, help="How many batches of data (right now from rollouts) to train opp model on")
@@ -1411,5 +1522,9 @@ if __name__ == "__main__":
         print(coins_collected_info)
         # print(prev_scores)
         print(torch.stack(prev_scores))
+
+    use_baseline = True
+    if args.no_baseline:
+        use_baseline = False
 
     joint_scores = play(agent1, agent2, args.inner_steps, args.outer_steps, args.opp_model)
