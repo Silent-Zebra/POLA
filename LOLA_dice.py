@@ -746,63 +746,39 @@ class Memory():
     def value_loss(self):
         values = torch.stack(self.values, dim=1)
         rewards = torch.stack(self.rewards, dim=1)
-        discounts = torch.cumprod(
-            args.gamma * torch.ones((args.len_rollout), device=device),
-            dim=0) / args.gamma
         final_state_vals = self.end_state_v.detach()
-        # print(final_state_vals.shape)
-
-        # print(rewards.shape)
-        # print(discounts.shape)
-        # print(discounts)
-        # print(rewards)
-        gamma_t_r_ts = rewards * discounts
-        # print(gamma_t_r_ts.shape)
-        # print(gamma_t_r_ts)
+        return value_loss(values, rewards, final_state_vals)
 
 
-        # print(gamma_t_r_ts)
-        G_ts = reverse_cumsum(gamma_t_r_ts, dim=1)
-        # print(G_ts)
-        # print(G_ts.shape)
+def value_loss(values, rewards, final_state_vals):
 
-        R_ts = G_ts / discounts
-        # print(R_ts)
+    discounts = torch.cumprod(
+        args.gamma * torch.ones((args.len_rollout), device=device),
+        dim=0) / args.gamma
 
+    gamma_t_r_ts = rewards * discounts
+    G_ts = reverse_cumsum(gamma_t_r_ts, dim=1)
+    R_ts = G_ts / discounts
 
-        # print((args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])))
-        # print((args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])).shape)
-        # print(final_state_vals.shape)
-        # print(final_state_vals)
-        # print(final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t())
-        # print(final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t().shape)
+    final_val_discounted_to_curr = (args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])) \
+                                   * final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t()
 
-        final_val_discounted_to_curr = (args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])) \
-                                       * final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t()
+    # You DO need a detach on these. Because it's the target - it should be detached. It's a target value.
+    # Essentially a Monte Carlo style type return for R_t, except for the final state we also use the estimated final state value.
+    # This becomes our target for the value function loss. So it's kind of a mix of Monte Carlo and bootstrap, but anyway you need the final value
+    # because otherwise your value calculations will be inconsistent
+    values_loss = (R_ts + final_val_discounted_to_curr - values) ** 2
+    values_loss = values_loss.sum(dim=1).mean(dim=0)
 
-        # print(final_val_discounted_to_curr)
-        # print(R_ts.shape)
+    # return torch.mean((rewards - values) ** 2) # TODO SZ NOTE: Isn't this wrong? Don't we need r + next state val - current state val? Pretty sure this is wrong
+    # Well between the whole baseline/DiCE/Loaded DiCE thing where the original baseline wasn't correct
+    # And this calculation which I'm almost certain is wrong, we are probably better off just not using the value function
+    # That makes OM a bunch easier too.
+    # Especially in coin game, where the rewards are close ish to 0 anyway, the value function shouldn't be that important.
+    print("Values loss")
+    print(values_loss)
+    return values_loss
 
-        # You DO need a detach on these. Because it's the target - it should be detached. It's a target value.
-        # Essentially a Monte Carlo style type return for R_t, except for the final state we also use the estimated final state value.
-        # This becomes our target for the value function loss. So it's kind of a mix of Monte Carlo and bootstrap, but anyway you need the final value
-        # because otherwise your value calculations will be inconsistent
-        # print((R_ts ) )
-        # print((R_ts + final_val_discounted_to_curr - values) )
-        values_loss = (R_ts + final_val_discounted_to_curr - values) ** 2
-        # print(values_loss[0][0])
-        # print(values_loss)
-        # print(values_loss.shape)
-        values_loss = values_loss.sum(dim=1).mean(dim=0)
-
-        # return torch.mean((rewards - values) ** 2) # TODO SZ NOTE: Isn't this wrong? Don't we need r + next state val - current state val? Pretty sure this is wrong
-        # Well between the whole baseline/DiCE/Loaded DiCE thing where the original baseline wasn't correct
-        # And this calculation which I'm almost certain is wrong, we are probably better off just not using the value function
-        # That makes OM a bunch easier too.
-        # Especially in coin game, where the rewards are close ish to 0 anyway, the value function shouldn't be that important.
-        print("Values loss")
-        print(values_loss)
-        return values_loss
 
 def apply(batch_states, theta, hidden):
     #     import pdb; pdb.set_trace()
@@ -905,7 +881,7 @@ def step(theta1, theta2, values1, values2):
     return (score1, score2), None
 
 class Agent():
-    def __init__(self, input_size, hidden_size, action_size, lr_p, lr_v, theta_p=None):
+    def __init__(self, input_size, hidden_size, action_size, lr_p, lr_v, theta_p=None, theta_v=None):
         self.hidden_size = hidden_size
         if args.hist_one:
             self.theta_p = nn.ParameterList([
@@ -980,6 +956,8 @@ class Agent():
 
         if theta_p is not None:
             self.theta_p = theta_p
+        if theta_v is not None:
+            self.theta_v = theta_v
 
         if args.optim.lower() == 'adam':
             self.theta_optimizer = torch.optim.Adam(self.theta_p, lr=lr_p)
@@ -1042,13 +1020,15 @@ class Agent():
 
         return torch.stack(cat_act_probs, dim=1)
 
-    def get_other_logits_for_states(self, other_theta, other_values, state_history):
+    def get_other_logits_values_for_states(self, other_theta, other_values, state_history):
         # Perhaps really should not be named 1, but whatever.
         h_p1, h_v1 = (
             torch.zeros(args.batch_size, self.hidden_size).to(device),
             torch.zeros(args.batch_size, self.hidden_size).to(device))
 
         logits_hist = []
+        vals_hist = []
+
 
         for t in range(args.len_rollout):
             s1 = state_history[t]
@@ -1056,8 +1036,16 @@ class Agent():
                                                           other_values, h_p1,
                                                           h_v1, ret_logits=True)
             logits_hist.append(logits)
+            vals_hist.append(v1)
 
-        return torch.stack(logits_hist, dim=1)
+        final_state = state_history[-1]
+        # act just to get the final state values
+        a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(final_state, other_theta,
+                                                      other_values,
+                                                      h_p1, h_v1)
+        final_state_vals = v1
+
+        return torch.stack(logits_hist, dim=1), torch.stack(vals_hist, dim=1), final_state_vals
 
     def in_lookahead(self, other_theta, other_values, first_inner_step=False):
         (s1, s2) = env.reset()
@@ -1202,6 +1190,7 @@ class Agent():
         state_history.append(s1)
         other_state_history.append(s2)
         act_history, other_act_history = [], []
+        other_rew_history = []
 
 
         for t in range(args.len_rollout):
@@ -1218,38 +1207,55 @@ class Agent():
             other_state_history.append(s2)
             act_history.append(a1)
             other_act_history.append(a2)
+            other_rew_history.append(r2)
 
+        # # act just to get the final state values
+        # a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
+        #                                               self.theta_v,
+        #                                               h_p1, h_v1)
+        # a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta_p,
+        #                                               other_theta_v,
+        #                                               h_p2, h_v2)
+        # other_memory.add_end_state_v(v2)
+
+        # Stacking dim = 0 gives (len_rollout, batch)
+        # Stacking dim = 1 gives (batch, len_rollout)
         state_history = torch.stack(state_history, dim=0)
         other_state_history = torch.stack(other_state_history, dim=0)
         act_history = torch.stack(act_history, dim=1)
         other_act_history = torch.stack(other_act_history, dim=1)
+        # print(state_history.shape)
 
-        return state_history, other_state_history, act_history, other_act_history
+        # print(other_rew_history)
+        other_rew_history = torch.stack(other_rew_history, dim=1)
+        # print(other_rew_history.shape)
+        return state_history, other_state_history, act_history, other_act_history, other_rew_history
 
         # Use this - pass in the state history into the same func that gets policies for kl ddiv
         # and compute the actual prob values over the batch given the actions a2 or a1
         # Then a simple supervised loss, softmax on policy, MSE vs the targeted probability, or no, KL div between the current policy and the desired one.
 
 
-    def opp_model(self, om_lr_p, om_lr_v, true_other_theta_p, true_other_theta_v, prev_model_theta_p=None):
+    def opp_model(self, om_lr_p, om_lr_v, true_other_theta_p, true_other_theta_v,
+                  prev_model_theta_p=None, prev_model_theta_v=None):
         # true_other_theta_p and true_other_theta_v used only in the collection of data (rollouts in the environment)
         # so then this is not cheating. We do not assume access to other agent policy parameters (at least not direct, white box access)
         # We assume ability to collect trajectories through rollouts/play with the other agent in the environment
         # Essentially when using OM, we are now no longer doing dice update on the trajectories collected directly (which requires parameter access)
         # instead we collect the trajectories first, then build an OM, then rollout using OM and make DiCE/LOLA/POLA update based on that OM
         # Instead of direct rollout using opponent true parameters and update based on that.
-        agent_opp = Agent(input_size, args.hidden_size, action_size, om_lr_p, om_lr_v, prev_model_theta_p)
+        agent_opp = Agent(input_size, args.hidden_size, action_size, om_lr_p, om_lr_v, prev_model_theta_p, prev_model_theta_v)
 
         opp_model_data_batches = args.opp_model_data_batches
 
         for batch in range(opp_model_data_batches):
             # should only do 1 collect, but I guess we can do multiple "batches"
             # where repeating the below would be the same as collecting one big batch of environment interaction
-            state_history, other_state_history, act_history, other_act_history =\
+            state_history, other_state_history, act_history, other_act_history, other_rew_history =\
                 self.rollout_collect_data_for_opp_model(true_other_theta_p, true_other_theta_v)
 
-            opp_model_threshold = 1e-3
-            c_e_loss = 100
+            # opp_model_threshold = 1e-3
+            # c_e_loss = 100
             opp_model_iters = 0
             opp_model_steps_per_data_batch = args.opp_model_steps_per_batch
 
@@ -1260,17 +1266,19 @@ class Agent():
 
             # while c_e_loss > opp_model_threshold:
             for opp_model_iter in range(opp_model_steps_per_data_batch):
-                # THis may not work with large batches... you may need just x iters... something like that.
-
-                curr_pol_logits = self.get_other_logits_for_states(agent_opp.theta_p,
+                # POLICY UPDATE
+                curr_pol_logits, curr_vals, final_state_vals = self.get_other_logits_values_for_states(agent_opp.theta_p,
                                                                    agent_opp.theta_v,
                                                                    other_state_history)
-                # Maybe we don't need to model the values for now? It can be learned as the rollouts for POLA are happening
+
 
                 # KL div: p log p - p log q
                 # use p for target, since it has 0 and 1
                 # Then p log p has no deriv so can drop it, with respect to model
                 # then -p log q
+
+                # Calculate targets based on the action history (other act history)
+                # Essentially treat the one hot vector of actions as a class label, and then run supervised learning
 
                 c_e_loss = - (other_act_history * torch.log_softmax(curr_pol_logits, dim=-1)).sum(dim=-1).mean()
                 # print(other_act_history)
@@ -1281,17 +1289,19 @@ class Agent():
                 # print(curr_pol_probs)
 
                 agent_opp.theta_update(c_e_loss)
+
+                # VALUE UPDATE
+                v_loss = value_loss(values=curr_vals, rewards=other_rew_history, final_state_vals=final_state_vals)
+                agent_opp.value_update(v_loss)
+
                 opp_model_iters += 1
 
                 # TODO VALUE UPDATE TOO? LEARN THE VAL FUNCTION TOO?
 
-                # Calculate targets based on the action history (other act history)
-
-                # Then KL div to train the opp model. Do for x gradient steps? Or until KL div reaches below some threshold
 
             # print(f"Finished opp model in {opp_model_iters} iters")
 
-        return agent_opp.theta_p
+        return agent_opp.theta_p, agent_opp.theta_v
 
 
 def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev_scores=None, prev_coins_collected_info=None):
@@ -1306,6 +1316,7 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
     coins_collected_info = (same_colour_coins_record, diff_colour_coins_record)
 
     agent2_theta_p_model, agent1_theta_p_model = None, None
+    agent2_theta_v_model, agent1_theta_v_model = None, None
 
     for update in range(args.n_update):
 
@@ -1320,11 +1331,11 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
 
 
         if use_opp_model:
-            agent2_theta_p_model = agent1.opp_model(args.om_lr_p, args.om_lr_v,
+            agent2_theta_p_model, agent2_theta_v_model = agent1.opp_model(args.om_lr_p, args.om_lr_v,
                                                     true_other_theta_p=start_theta2,
                                                     true_other_theta_v=start_val2,
                                                     prev_model_theta_p=agent2_theta_p_model)
-            agent1_theta_p_model = agent2.opp_model(args.om_lr_p, args.om_lr_v,
+            agent1_theta_p_model, agent1_theta_v_model = agent2.opp_model(args.om_lr_p, args.om_lr_v,
                                                     true_other_theta_p=start_theta1,
                                                     true_other_theta_v=start_val1,
                                                     prev_model_theta_p=agent1_theta_p_model)
@@ -1332,13 +1343,15 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
         for outer_step in range(outer_steps):
             # copy other's parameters:
             th2_to_copy = start_theta2
+            val2_to_copy = start_val2
             if use_opp_model:
                 th2_to_copy = agent2_theta_p_model
+                val2_to_copy = agent2_theta_v_model
 
             theta2_ = [tp.detach().clone().requires_grad_(True) for tp in
                        th2_to_copy]
             values2_ = [tv.detach().clone().requires_grad_(True) for tv in
-                        start_val2]
+                        val2_to_copy]
 
             for inner_step in range(n_lookaheads):
                 if inner_step == 0:
@@ -1360,19 +1373,20 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                 print("Agent 1 Sample Obs Info:")
                 print_policy_and_value_info(agent1.theta_p, agent1.theta_v)
                 if use_opp_model:
-                    print("Agent 1 Opp Model of Agent 2:")
-                    print_policy_and_value_info(agent2_theta_p_model,
-                                                None) # TODO add OM for value later
+                    print("Agent 1 Updated Opp Model of Agent 2:")
+                    print_policy_and_value_info(theta2_, values2_)
 
         for outer_step in range(outer_steps):
             th1_to_copy = start_theta1
+            val1_to_copy = start_val1
             if use_opp_model:
                 th1_to_copy = agent1_theta_p_model
+                val1_to_copy = agent1_theta_v_model
 
             theta1_ = [tp.detach().clone().requires_grad_(True) for tp in
                        th1_to_copy]
             values1_ = [tv.detach().clone().requires_grad_(True) for tv in
-                        start_val1]
+                        val1_to_copy]
 
             for inner_step in range(n_lookaheads):
                 # estimate other's gradients from in_lookahead:
@@ -1393,9 +1407,9 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                 print("Agent 2 Sample Obs Info:")
                 print_policy_and_value_info(agent2.theta_p, agent2.theta_v)
                 if use_opp_model:
-                    print("Agent 2 Opp Model of Agent 1:")
-                    print_policy_and_value_info(agent1_theta_p_model,
-                                                None) # TODO add OM for value later
+                    print("Agent 2 Updated Opp Model of Agent 1:")
+                    print_policy_and_value_info(theta1_,
+                                                values1_)
 
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
@@ -1433,10 +1447,10 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
             if use_opp_model:
                 print("Agent 1 Opp Model of Agent 2:")
                 print_policy_and_value_info(agent2_theta_p_model,
-                                            None)  # TODO add OM for value later
+                                            agent2_theta_v_model)
                 print("Agent 2 Opp Model of Agent 1:")
                 print_policy_and_value_info(agent1_theta_p_model,
-                                            None)  # TODO add OM for value later
+                                            agent1_theta_v_model)
 
         if (update + 1) % args.checkpoint_every == 0:
             now = datetime.datetime.now()
@@ -1480,8 +1494,8 @@ if __name__ == "__main__":
     # parser.add_argument("--use_baseline", action="store_true", help="Use Baseline (critic) for variance reduction")
     parser.add_argument("--no_baseline", action="store_true", help="Use NO Baseline (critic) for variance reduction. Default is baseline using Loaded DiCE with GAE")
     parser.add_argument("--opp_model", action="store_true", help="Use Opponent Modeling")
-    parser.add_argument("--opp_model_steps_per_batch", type=int, default=30, help="How many steps to train opp model on eatch batch at the beginning of each POLA epoch")
-    parser.add_argument("--opp_model_data_batches", type=int, default=50, help="How many batches of data (right now from rollouts) to train opp model on")
+    parser.add_argument("--opp_model_steps_per_batch", type=int, default=1, help="How many steps to train opp model on eatch batch at the beginning of each POLA epoch")
+    parser.add_argument("--opp_model_data_batches", type=int, default=100, help="How many batches of data (right now from rollouts) to train opp model on")
     parser.add_argument("--om_lr_p", type=float, default=0.005,
                         help="learning rate for opponent modeling (imitation/supervised learning) for policy")
     parser.add_argument("--om_lr_v", type=float, default=0.001,
