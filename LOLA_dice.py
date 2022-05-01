@@ -707,11 +707,16 @@ class Memory():
             advantages = torch.zeros_like(values)
             lambd = 0  # 0.95 # 1 here is essentially what I was doing before with monte carlo
             deltas = rewards + args.gamma * next_val_history.detach() - values.detach()
-            gae = torch.zeros_like(deltas[0, :]).float()
-            for i in range(deltas.size(0) - 1, -1, -1):
-                gae = gae * args.gamma * lambd + deltas[i, :]
-                advantages[i, :] = gae
-            # print(gae)
+            # print(deltas.shape)
+            gae = torch.zeros_like(deltas[:, 0]).float()
+            # print(gae.shape)
+            for i in range(deltas.size(1) - 1, -1, -1):
+                # print(i)
+                gae = gae * args.gamma * lambd + deltas[:, i]
+                advantages[:, i] = gae
+            # print(rewards)
+            # print(advantages)
+            # 1/0
 
             # print(stochastic_nodes.shape)
             deps_up_to_t = (torch.cumsum(stochastic_nodes, dim=1))
@@ -1045,7 +1050,11 @@ class Agent():
                                                       h_p1, h_v1)
         final_state_vals = v1
 
-        return torch.stack(logits_hist, dim=1), torch.stack(vals_hist, dim=1), final_state_vals
+        if use_baseline:
+            return torch.stack(logits_hist, dim=1), torch.stack(vals_hist, dim=1), final_state_vals
+        else:
+            return torch.stack(logits_hist, dim=1), None, None
+
 
     def in_lookahead(self, other_theta, other_values, first_inner_step=False):
         (s1, s2) = env.reset()
@@ -1290,9 +1299,10 @@ class Agent():
 
                 agent_opp.theta_update(c_e_loss)
 
-                # VALUE UPDATE
-                v_loss = value_loss(values=curr_vals, rewards=other_rew_history, final_state_vals=final_state_vals)
-                agent_opp.value_update(v_loss)
+                if use_baseline:
+                    # VALUE UPDATE
+                    v_loss = value_loss(values=curr_vals, rewards=other_rew_history, final_state_vals=final_state_vals)
+                    agent_opp.value_update(v_loss)
 
                 opp_model_iters += 1
 
