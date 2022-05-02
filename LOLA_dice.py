@@ -704,8 +704,12 @@ class Memory():
             next_val_history[:, :args.len_rollout - 1] = values[:, 1:args.len_rollout]
             next_val_history[:, -1] = self.end_state_v
 
+            if args.zero_vals:
+                next_val_history = torch.zeros_like(next_val_history)
+                values = torch.zeros_like(values)
+
             advantages = torch.zeros_like(values)
-            lambd = 0  # 0.95 # 1 here is essentially what I was doing before with monte carlo
+            lambd = args.gae_lambda # 0  # 0.95 # 1 here is essentially what I was doing before with monte carlo
             deltas = rewards + args.gamma * next_val_history.detach() - values.detach()
             # print(deltas.shape)
             gae = torch.zeros_like(deltas[:, 0]).float()
@@ -714,6 +718,8 @@ class Memory():
                 # print(i)
                 gae = gae * args.gamma * lambd + deltas[:, i]
                 advantages[:, i] = gae
+                # print(gae)
+
             # print(rewards)
             # print(advantages)
             # 1/0
@@ -1516,7 +1522,9 @@ if __name__ == "__main__":
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
     parser.add_argument("--init_state_coop", action="store_true", help="For IPD only: have the first state be CC instead of a separate start state")
     parser.add_argument("--split_coins", action="store_true", help="If true, then when both agents step on same coin, each gets 50% of the reward as if they were the only agent collecting that coin. Only tested with OGCoin so far")
-
+    parser.add_argument("--zero_vals", action="store_true", help="For testing/debug only. Set all values to be 0 in Loaded Dice Calculation")
+    parser.add_argument("--gae_lambda", type=float, default=1,
+                        help="lambda for GAE (1 = monte carlo style, 0 = TD style)")
     args = parser.parse_args()
 
     np.random.seed(args.seed)
