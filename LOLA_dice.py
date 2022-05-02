@@ -722,6 +722,28 @@ class Memory():
 
             # print(rewards)
             # print(advantages)
+            #
+            # print(discounted_rewards)
+            #
+            # print(advantages - discounted_rewards)
+            # print((advantages - discounted_rewards).sum())
+
+            discounts = torch.cumprod(
+                args.gamma * torch.ones((args.len_rollout), device=device),
+                dim=0) / args.gamma
+
+            # gamma_t_r_ts = rewards * discounts
+            # G_ts = reverse_cumsum(gamma_t_r_ts, dim=1)
+            # R_ts = G_ts / discounts
+            #
+            # print(R_ts)
+            #
+            # print(advantages * discounts)
+            # print(G_ts)
+            # print(G_ts - advantages * discounts)
+            # print((G_ts - advantages * discounts).sum())
+
+            discounted_advantages = advantages * discounts
             # 1/0
 
             # print(stochastic_nodes.shape)
@@ -735,9 +757,32 @@ class Memory():
             # Look at Loaded DiCE paper to see where this formulation comes from
             # Right now since I am using GAE, the advantages already have the discounts in them, no need to multiply again
             loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(
-                deps_less_than_t)) * advantages).sum(dim=1).mean(dim=0)
+                deps_less_than_t)) * discounted_advantages).sum(dim=1).mean(dim=0)
+
+            # loaded_dice_rewards = loaded_dice_rewards + advantages[:, 0].mean()
 
             dice_objective = loaded_dice_rewards
+
+            # print(loaded_dice_rewards)
+            # dice_objective = torch.mean(
+            #     torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
+            # print(dice_objective)
+            # print(dice_objective - loaded_dice_rewards)
+            # print((dice_objective - loaded_dice_rewards).sum())
+            #
+            # grad1l = get_gradient(loaded_dice_rewards, agent1.theta_p)
+            # grad1d = get_gradient(dice_objective, agent1.theta_p)
+            #
+            # for i in range(len(grad1l)):
+            #     print(f"-----------{i}------------")
+            #     print(grad1l[i])
+            #     print(grad1d[i])
+            #     grad_diff = grad1l[i] - grad1d[i]
+            #     print(grad_diff)
+            #
+            # # grad2l = get_gradient(loaded_dice_rewards, agent2.theta_p)
+            #
+            # 1/0
 
             # print(dice_objective)
         else:
