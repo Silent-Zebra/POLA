@@ -12,12 +12,13 @@ import datetime
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-def checkpoint(agent1, agent2, info, scores, tag, args):
+def checkpoint(agent1, agent2, info, scores, vs_fixed_scores, tag, args):
     ckpt_dict = {
         "agent1": agent1,
         "agent2": agent2,
         "info": info,
-        "scores": scores
+        "scores": scores,
+        "vs_fixed_scores": vs_fixed_scores
     }
     torch.save(ckpt_dict, os.path.join(args.save_dir, tag))
 
@@ -29,7 +30,8 @@ def load_from_checkpoint():
     agent2 = ckpt_dict["agent2"]
     info = ckpt_dict["info"]
     scores = ckpt_dict["scores"]
-    return agent1, agent2, info, scores
+    vs_fixed_scores = ckpt_dict["vs_fixed_scores"]
+    return agent1, agent2, info, scores, vs_fixed_scores
 
 def reverse_cumsum(x, dim):
     return x + torch.sum(x, dim=dim, keepdims=True) - torch.cumsum(x, dim=dim)
@@ -903,6 +905,48 @@ def get_gradient(objective, theta):
     return grad_objective
 
 
+def eval_vs_fixed_strategy(theta1, values1, strat="alld"):
+    # just to evaluate progress:
+    (s1, s2) = env.reset()
+    score1 = 0
+    score2 = 0
+    h_p1, h_v1 = (
+        torch.zeros(args.batch_size, args.hidden_size).to(device),
+        torch.zeros(args.batch_size, args.hidden_size).to(device))
+    if args.env != "ipd":
+        raise NotImplementedError
+        # rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
+
+    for t in range(args.len_rollout):
+        if t > 0:
+            prev_a1 = a1
+        a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, theta1, values1, h_p1,
+                                                      h_v1)
+        if strat == "alld":
+            # Always defect
+            a2 = torch.zeros_like(a1)
+        elif strat == "allc":
+            # Always cooperate
+            a2 = torch.ones_like(a1)
+        elif strat == "tft":
+            if t == 0:
+                # start with coop
+                a2 = torch.ones_like(a1)
+            else:
+                # otherwise copy the last move of the other agent
+                a2 = prev_a1
+            pass
+        else:
+            raise NotImplementedError
+        (s1, s2), (r1, r2), _, info = env.step((a1, a2))
+        # cumulate scores
+        # print(f"---{t}---")
+        score1 += torch.mean(r1) / float(args.len_rollout)
+        score2 += torch.mean(r2) / float(args.len_rollout)
+
+    return (score1, score2), None
+
+
 def step(theta1, theta2, values1, values2):
     # just to evaluate progress:
     (s1, s2) = env.reset()
@@ -921,8 +965,18 @@ def step(theta1, theta2, values1, values2):
         a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, theta2, values2, h_p2, h_v2)
         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
         # cumulate scores
+        # print(f"---{t}---")
         score1 += torch.mean(r1) / float(args.len_rollout)
         score2 += torch.mean(r2) / float(args.len_rollout)
+        # print(a1.float().mean())
+        # print(a2.float().mean())
+        # print(r1.mean())
+        # print(r2.mean())
+        # print(score1)
+        # print(score2)
+        # print(score1 * float(args.len_rollout)/(t+1))
+        # print(score2 * float(args.len_rollout)/(t+1))
+
         # print(info)
         if args.env == "coin" or args.env == "ogcoin":
             rr_matches, rb_matches, br_matches, bb_matches = info
@@ -1370,6 +1424,7 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
     score_record = []
     # if prev_scores is not None:
     #     score_record = prev_scores
+    vs_fixed_strats_score_record = [[], []]
 
     print("start iterations with", n_lookaheads, "inner steps and", outer_steps, "outer steps:")
     same_colour_coins_record = []
@@ -1475,6 +1530,24 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
                            agent2.theta_v)
+
+        if args.env == "ipd":
+            print("Eval vs Fixed Strategies:")
+            score1rec = []
+            score2rec = []
+            for strat in ["alld", "allc", "tft"]:
+                print(f"Playing against strategy: {strat.upper()}")
+                score1, _ = eval_vs_fixed_strategy(agent1.theta_p, agent1.theta_v, strat)
+                score1rec.append(score1[0])
+                print(f"Agent 1 score: {score1[0]}")
+                score2, _ = eval_vs_fixed_strategy(agent2.theta_p, agent2.theta_v, strat)
+                score2rec.append(score2[0])
+                print(f"Agent 2 score: {score2[0]}")
+            score1rec = torch.stack(score1rec)
+            score2rec = torch.stack(score2rec)
+            vs_fixed_strats_score_record[0].append(score1rec)
+            vs_fixed_strats_score_record[1].append(score2rec)
+
         if args.env == "coin" or args.env == "ogcoin":
             rr_matches, rb_matches, br_matches, bb_matches = info
             same_colour_coins = (rr_matches + bb_matches).item()
@@ -1515,7 +1588,7 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
 
         if (update + 1) % args.checkpoint_every == 0:
             now = datetime.datetime.now()
-            checkpoint(agent1, agent2, coins_collected_info, score_record,
+            checkpoint(agent1, agent2, coins_collected_info, score_record, vs_fixed_strats_score_record,
                        "checkpoint_{}_{}.pt".format(update + 1, now.strftime(
                            '%Y-%m-%d_%H-%M')), args)
 
@@ -1595,9 +1668,10 @@ if __name__ == "__main__":
         agent1 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
         agent2 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     else:
-        agent1, agent2, coins_collected_info, prev_scores = load_from_checkpoint()
-        print(coins_collected_info)
+        agent1, agent2, coins_collected_info, prev_scores, vs_fixed_strat_scores = load_from_checkpoint()
+        # print(coins_collected_info)
         # print(prev_scores)
+        # print(vs_fixed_strat_scores)
         print(torch.stack(prev_scores))
 
     use_baseline = True
