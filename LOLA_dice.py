@@ -95,19 +95,19 @@ def print_policy_and_value_info(th, vals):
                                          [0, 1, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
 
-        if not args.hist_one:
-            print("Two Step Examples")
-            states = torch.FloatTensor([[[1, 0, 0], [1, 0, 0]],  # DD
-                                              [[1, 0, 0], [0, 1, 0]],  # DC
-                                              [[0, 1, 0], [1, 0, 0]],  # CD
-                                              [[0, 1, 0], [0, 1, 0]]])  # CC
-
-            for i in range(4):
-                for j in range(4):
-                    sample_obs_1 = states[i]
-                    sample_obs_2 = states[j]
-                    sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
-                    print_info_on_sample_obs(sample_obs, th, vals)
+        # if not args.hist_one:
+        #     print("Two Step Examples")
+        #     states = torch.FloatTensor([[[1, 0, 0], [1, 0, 0]],  # DD
+        #                                       [[1, 0, 0], [0, 1, 0]],  # DC
+        #                                       [[0, 1, 0], [1, 0, 0]],  # CD
+        #                                       [[0, 1, 0], [0, 1, 0]]])  # CC
+        #
+        #     for i in range(4):
+        #         for j in range(4):
+        #             sample_obs_1 = states[i]
+        #             sample_obs_2 = states[j]
+        #             sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
+        #             print_info_on_sample_obs(sample_obs, th, vals)
 
 
 
@@ -501,155 +501,206 @@ class OGCoinGameGPU:
         total_rr_matches, total_rb_matches,
         total_br_matches, total_bb_matches)
 
-
-class CoinGameGPU:
-    """
-    Vectorized Coin Game environment.
-    Note: slightly deviates from the Gym API.
-    """
-    NUM_AGENTS = 2
-    NUM_ACTIONS = 4
-    MOVES = torch.stack([
-        torch.LongTensor([0, 1]), # right
-        torch.LongTensor([0, -1]), # left
-        torch.LongTensor([1, 0]), # down
-        torch.LongTensor([-1, 0]), # up
-    ], dim=0).to(device)
-
-    def __init__(self, max_steps, batch_size, grid_size=3):
-        self.max_steps = max_steps
-        self.grid_size = grid_size
-        self.batch_size = batch_size
-        # The 4 channels stand for 2 players and 2 coin positions
-        self.ob_space_shape = [4, grid_size, grid_size]
-        self.NUM_STATES = np.prod(self.ob_space_shape)
-        self.available_actions = 4
-        self.step_count = None
-
-    def reset(self):
-        self.step_count = 0
-
-        red_pos_flat = torch.randint(self.grid_size * self.grid_size,
-                                     size=(self.batch_size,)).to(device)
-        self.red_pos = torch.stack(
-            (torch.div(red_pos_flat, self.grid_size, rounding_mode='floor') , red_pos_flat % self.grid_size),
-            dim=-1)
-
-        blue_pos_flat = torch.randint(self.grid_size * self.grid_size,
-                                      size=(self.batch_size,)).to(device)
-        self.blue_pos = torch.stack(
-            (torch.div(blue_pos_flat, self.grid_size, rounding_mode='floor'), blue_pos_flat % self.grid_size),
-            dim=-1)
-
-        red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-                                          size=(self.batch_size,)).to(device)
-        blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-                                           size=(self.batch_size,)).to(device)
-
-        self.red_coin_pos = torch.stack((torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-                                         red_coin_pos_flat % self.grid_size),
-                                        dim=-1)
-        self.blue_coin_pos = torch.stack((torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-                                          blue_coin_pos_flat % self.grid_size),
-                                         dim=-1)
-
-        state = self._generate_state()
-        state2 = state.clone()
-        # print(state2.shape)
-        state2[:,0] = state[:,1]
-        state2[:,1] = state[:,0]
-        state2[:,2] = state[:,3]
-        state2[:,3] = state[:,2]
-        observations = [state, state2]
-        return observations
-
-    def _generate_coins(self):
-        mask_red = torch.logical_or(
-            self._same_pos(self.red_coin_pos, self.blue_pos),
-            self._same_pos(self.red_coin_pos, self.red_pos))
-        red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-                                          size=(self.batch_size,)).to(device)[
-            mask_red]
-        self.red_coin_pos[mask_red] = torch.stack((
-                                                  torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-                                                  red_coin_pos_flat % self.grid_size),
-                                                  dim=-1)
-
-        mask_blue = torch.logical_or(
-            self._same_pos(self.blue_coin_pos, self.blue_pos),
-            self._same_pos(self.blue_coin_pos, self.red_pos))
-        blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-                                           size=(self.batch_size,)).to(device)[
-            mask_blue]
-        self.blue_coin_pos[mask_blue] = torch.stack((
-                                                    torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-                                                    blue_coin_pos_flat % self.grid_size),
-                                                    dim=-1)
-
-    def _same_pos(self, x, y):
-        return torch.all(x == y, dim=-1)
-
-    def _generate_state(self):
-        red_pos_flat = self.red_pos[:, 0] * self.grid_size + self.red_pos[:, 1]
-        blue_pos_flat = self.blue_pos[:, 0] * self.grid_size + self.blue_pos[:,
-                                                               1]
-
-        red_coin_pos_flat = self.red_coin_pos[:,
-                            0] * self.grid_size + self.red_coin_pos[:, 1]
-        blue_coin_pos_flat = self.blue_coin_pos[:,
-                             0] * self.grid_size + self.blue_coin_pos[:, 1]
-
-        state = torch.zeros(
-            (self.batch_size, 4, self.grid_size * self.grid_size)).to(device)
-
-        state[:, 0].scatter_(1, red_pos_flat[:, None], 1)
-        state[:, 1].scatter_(1, blue_pos_flat[:, None], 1)
-        state[:, 2].scatter_(1, red_coin_pos_flat[:, None], 1)
-        state[:, 3].scatter_(1, blue_coin_pos_flat[:, None], 1)
-
-        return state.view(self.batch_size, 4, self.grid_size, self.grid_size)
-
-    def step(self, actions):
-        ac0, ac1 = actions
-
-        self.step_count += 1
-
-        self.red_pos = (self.red_pos + self.MOVES[ac0]) % self.grid_size
-        self.blue_pos = (self.blue_pos + self.MOVES[ac1]) % self.grid_size
-
-        # Compute rewards
-        red_reward = torch.zeros(self.batch_size).to(device)
-        red_red_matches = self._same_pos(self.red_pos, self.red_coin_pos)
-        red_reward[red_red_matches] += args.same_coin_reward
-        red_blue_matches = self._same_pos(self.red_pos, self.blue_coin_pos)
-        red_reward[red_blue_matches] += args.diff_coin_reward
-
-        blue_reward = torch.zeros(self.batch_size).to(device)
-        blue_red_matches = self._same_pos(self.blue_pos, self.red_coin_pos)
-        blue_reward[blue_red_matches] += args.diff_coin_reward
-        blue_blue_matches = self._same_pos(self.blue_pos, self.blue_coin_pos)
-        blue_reward[blue_blue_matches] += args.same_coin_reward
-
-        red_reward[blue_red_matches] += args.diff_coin_cost # -= 2
-        blue_reward[red_blue_matches] += args.diff_coin_cost # -= 2
-
-        self._generate_coins()
-        reward = [red_reward.float(), blue_reward.float()]
-        state = self._generate_state()
-        state2 = state.clone()
-        state2[:, 0] = state[:, 1]
-        state2[:, 1] = state[:, 0]
-        state2[:, 2] = state[:, 3]
-        state2[:, 3] = state[:, 2]
-        observations = [state, state2]
-        if self.step_count >= self.max_steps:
-            done = torch.ones(self.batch_size).to(device)
+    def get_moves_shortest_path_to_coin(self, red_agent_perspective=True):
+        # Ties broken arbitrarily, in this case, since I check the vertical distance later
+        # priority is given to closing vertical distance (making up or down moves)
+        # before horizontal moves
+        if red_agent_perspective:
+            agent_pos = self.red_pos
         else:
-            done = torch.zeros(self.batch_size).to(device)
+            agent_pos = self.blue_pos
+        actions = torch.zeros(self.batch_size) - 1
+        # assumes red agent perspective
+        horiz_dist_right = (self.coin_pos[:, 1] - agent_pos[:, 1]) % self.grid_size
+        horiz_dist_left = (agent_pos[:, 1] - self.coin_pos[:, 1]) % self.grid_size
 
-        return observations, reward, done, (
-        red_red_matches.float().mean(), red_blue_matches.float().mean(),
-        blue_red_matches.float().mean(), blue_blue_matches.float().mean())
+        vert_dist_down = (self.coin_pos[:, 0] - agent_pos[:,
+                                                0]) % self.grid_size
+        vert_dist_up = (agent_pos[:, 0] - self.coin_pos[:,
+                                             0]) % self.grid_size
+        actions[horiz_dist_right < horiz_dist_left] = 0
+        actions[horiz_dist_left < horiz_dist_right] = 1
+        actions[vert_dist_down < vert_dist_up] = 2
+        actions[vert_dist_up < vert_dist_down] = 3
+        # Assumes no coin spawns under agent
+        assert torch.logical_and(horiz_dist_right == horiz_dist_left, vert_dist_down == vert_dist_up).sum() == 0
+
+        return actions.long()
+
+    def get_moves_away_from_coin(self, moves_towards_coin, red_agent_perspective=True):
+        opposite_moves = torch.zeros_like(moves_towards_coin)
+        opposite_moves[moves_towards_coin == 0] = 1
+        opposite_moves[moves_towards_coin == 1] = 0
+        opposite_moves[moves_towards_coin == 2] = 3
+        opposite_moves[moves_towards_coin == 3] = 2
+        return opposite_moves
+
+    def get_coop_action(self, red_agent_perspective=True):
+        # move toward coin if same colour, away if opposite colour
+        moves_towards_coin = self.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent_perspective)
+        moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin, red_agent_perspective=red_agent_perspective)
+        coop_moves = torch.zeros_like(moves_towards_coin) - 1
+        if red_agent_perspective:
+            is_my_coin = self.red_coin
+        else:
+            is_my_coin = 1 - self.red_coin
+
+        # print(is_my_coin)
+        # print(1 - is_my_coin)
+
+        coop_moves[is_my_coin == 1] = moves_towards_coin[is_my_coin == 1]
+        coop_moves[is_my_coin == 0] = moves_away_from_coin[is_my_coin == 0]
+        return coop_moves
+
+
+# class CoinGameGPU:
+#     """
+#     Vectorized Coin Game environment.
+#     Note: slightly deviates from the Gym API.
+#     """
+#     NUM_AGENTS = 2
+#     NUM_ACTIONS = 4
+#     MOVES = torch.stack([
+#         torch.LongTensor([0, 1]), # right
+#         torch.LongTensor([0, -1]), # left
+#         torch.LongTensor([1, 0]), # down
+#         torch.LongTensor([-1, 0]), # up
+#     ], dim=0).to(device)
+#
+#     def __init__(self, max_steps, batch_size, grid_size=3):
+#         self.max_steps = max_steps
+#         self.grid_size = grid_size
+#         self.batch_size = batch_size
+#         # The 4 channels stand for 2 players and 2 coin positions
+#         self.ob_space_shape = [4, grid_size, grid_size]
+#         self.NUM_STATES = np.prod(self.ob_space_shape)
+#         self.available_actions = 4
+#         self.step_count = None
+#
+#     def reset(self):
+#         self.step_count = 0
+#
+#         red_pos_flat = torch.randint(self.grid_size * self.grid_size,
+#                                      size=(self.batch_size,)).to(device)
+#         self.red_pos = torch.stack(
+#             (torch.div(red_pos_flat, self.grid_size, rounding_mode='floor') , red_pos_flat % self.grid_size),
+#             dim=-1)
+#
+#         blue_pos_flat = torch.randint(self.grid_size * self.grid_size,
+#                                       size=(self.batch_size,)).to(device)
+#         self.blue_pos = torch.stack(
+#             (torch.div(blue_pos_flat, self.grid_size, rounding_mode='floor'), blue_pos_flat % self.grid_size),
+#             dim=-1)
+#
+#         red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
+#                                           size=(self.batch_size,)).to(device)
+#         blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
+#                                            size=(self.batch_size,)).to(device)
+#
+#         self.red_coin_pos = torch.stack((torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
+#                                          red_coin_pos_flat % self.grid_size),
+#                                         dim=-1)
+#         self.blue_coin_pos = torch.stack((torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
+#                                           blue_coin_pos_flat % self.grid_size),
+#                                          dim=-1)
+#
+#         state = self._generate_state()
+#         state2 = state.clone()
+#         # print(state2.shape)
+#         state2[:,0] = state[:,1]
+#         state2[:,1] = state[:,0]
+#         state2[:,2] = state[:,3]
+#         state2[:,3] = state[:,2]
+#         observations = [state, state2]
+#         return observations
+#
+#     def _generate_coins(self):
+#         mask_red = torch.logical_or(
+#             self._same_pos(self.red_coin_pos, self.blue_pos),
+#             self._same_pos(self.red_coin_pos, self.red_pos))
+#         red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
+#                                           size=(self.batch_size,)).to(device)[
+#             mask_red]
+#         self.red_coin_pos[mask_red] = torch.stack((
+#                                                   torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
+#                                                   red_coin_pos_flat % self.grid_size),
+#                                                   dim=-1)
+#
+#         mask_blue = torch.logical_or(
+#             self._same_pos(self.blue_coin_pos, self.blue_pos),
+#             self._same_pos(self.blue_coin_pos, self.red_pos))
+#         blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
+#                                            size=(self.batch_size,)).to(device)[
+#             mask_blue]
+#         self.blue_coin_pos[mask_blue] = torch.stack((
+#                                                     torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
+#                                                     blue_coin_pos_flat % self.grid_size),
+#                                                     dim=-1)
+#
+#     def _same_pos(self, x, y):
+#         return torch.all(x == y, dim=-1)
+#
+#     def _generate_state(self):
+#         red_pos_flat = self.red_pos[:, 0] * self.grid_size + self.red_pos[:, 1]
+#         blue_pos_flat = self.blue_pos[:, 0] * self.grid_size + self.blue_pos[:,
+#                                                                1]
+#
+#         red_coin_pos_flat = self.red_coin_pos[:,
+#                             0] * self.grid_size + self.red_coin_pos[:, 1]
+#         blue_coin_pos_flat = self.blue_coin_pos[:,
+#                              0] * self.grid_size + self.blue_coin_pos[:, 1]
+#
+#         state = torch.zeros(
+#             (self.batch_size, 4, self.grid_size * self.grid_size)).to(device)
+#
+#         state[:, 0].scatter_(1, red_pos_flat[:, None], 1)
+#         state[:, 1].scatter_(1, blue_pos_flat[:, None], 1)
+#         state[:, 2].scatter_(1, red_coin_pos_flat[:, None], 1)
+#         state[:, 3].scatter_(1, blue_coin_pos_flat[:, None], 1)
+#
+#         return state.view(self.batch_size, 4, self.grid_size, self.grid_size)
+#
+#     def step(self, actions):
+#         ac0, ac1 = actions
+#
+#         self.step_count += 1
+#
+#         self.red_pos = (self.red_pos + self.MOVES[ac0]) % self.grid_size
+#         self.blue_pos = (self.blue_pos + self.MOVES[ac1]) % self.grid_size
+#
+#         # Compute rewards
+#         red_reward = torch.zeros(self.batch_size).to(device)
+#         red_red_matches = self._same_pos(self.red_pos, self.red_coin_pos)
+#         red_reward[red_red_matches] += args.same_coin_reward
+#         red_blue_matches = self._same_pos(self.red_pos, self.blue_coin_pos)
+#         red_reward[red_blue_matches] += args.diff_coin_reward
+#
+#         blue_reward = torch.zeros(self.batch_size).to(device)
+#         blue_red_matches = self._same_pos(self.blue_pos, self.red_coin_pos)
+#         blue_reward[blue_red_matches] += args.diff_coin_reward
+#         blue_blue_matches = self._same_pos(self.blue_pos, self.blue_coin_pos)
+#         blue_reward[blue_blue_matches] += args.same_coin_reward
+#
+#         red_reward[blue_red_matches] += args.diff_coin_cost # -= 2
+#         blue_reward[red_blue_matches] += args.diff_coin_cost # -= 2
+#
+#         self._generate_coins()
+#         reward = [red_reward.float(), blue_reward.float()]
+#         state = self._generate_state()
+#         state2 = state.clone()
+#         state2[:, 0] = state[:, 1]
+#         state2[:, 1] = state[:, 0]
+#         state2[:, 2] = state[:, 3]
+#         state2[:, 3] = state[:, 2]
+#         observations = [state, state2]
+#         if self.step_count >= self.max_steps:
+#             done = torch.ones(self.batch_size).to(device)
+#         else:
+#             done = torch.zeros(self.batch_size).to(device)
+#
+#         return observations, reward, done, (
+#         red_red_matches.float().mean(), red_blue_matches.float().mean(),
+#         blue_red_matches.float().mean(), blue_blue_matches.float().mean())
 
 
 
@@ -905,39 +956,89 @@ def get_gradient(objective, theta):
     return grad_objective
 
 
-def eval_vs_fixed_strategy(theta1, values1, strat="alld"):
+
+
+
+
+def eval_vs_fixed_strategy(theta, values, strat="alld", i_am_red_agent=True):
     # just to evaluate progress:
     (s1, s2) = env.reset()
     score1 = 0
     score2 = 0
-    h_p1, h_v1 = (
+    h_p, h_v = (
         torch.zeros(args.batch_size, args.hidden_size).to(device),
         torch.zeros(args.batch_size, args.hidden_size).to(device))
-    if args.env != "ipd":
-        raise NotImplementedError
+
         # rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
+    # if args.env == "ipd":
 
     for t in range(args.len_rollout):
         if t > 0:
-            prev_a1 = a1
-        a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, theta1, values1, h_p1,
-                                                      h_v1)
+            prev_a = a
+
+
+        if i_am_red_agent:
+            s = s1
+        else:
+            s = s2
+
+        a, lp, v1, h_p, h_v, cat_act_probs = act(s, theta, values, h_p,
+                                                      h_v)
         if strat == "alld":
-            # Always defect
-            a2 = torch.zeros_like(a1)
-        elif strat == "allc":
-            # Always cooperate
-            a2 = torch.ones_like(a1)
-        elif strat == "tft":
-            if t == 0:
-                # start with coop
-                a2 = torch.ones_like(a1)
+            if args.env == "ipd":
+                # Always defect
+                a_opp = torch.zeros_like(a)
             else:
-                # otherwise copy the last move of the other agent
-                a2 = prev_a1
-            pass
+                # Coin game
+                # if I am red agent, I want to evaluate the other agent from the blue agent perspective
+                a_opp = env.get_moves_shortest_path_to_coin(red_agent_perspective=(not i_am_red_agent))
+
+        elif strat == "allc":
+            if args.env == "ipd":
+                # Always cooperate
+                a_opp = torch.ones_like(a)
+            else:
+                # print(s)
+                a_opp = env.get_coop_action(red_agent_perspective=(not i_am_red_agent))
+                # print(a_opp)
+        elif strat == "tft":
+            if args.env == "ipd":
+                if t == 0:
+                    # start with coop
+                    a_opp = torch.ones_like(a)
+                else:
+                    # otherwise copy the last move of the other agent
+                    a_opp = prev_a
+            else:
+                if t == 0:
+                    a_opp = env.get_coop_action(
+                        red_agent_perspective=(not i_am_red_agent))
+                    prev_agent_coin_collected_same_col = torch.ones_like(a) # 0 = defect, collect other agent coin
+                else:
+                    if i_am_red_agent:
+                        r_opp = r2
+                    else:
+                        r_opp = r1
+                    # Agent here means me, the agent we are testing
+                    prev_agent_coin_collected_same_col[r_opp < 0] = 0 # opp got negative reward from other agent collecting opp's coin
+                    prev_agent_coin_collected_same_col[r_opp > 0] = 1 # opp is allowed to get positive reward from collecting own coin
+
+                    a_opp_defect = env.get_moves_shortest_path_to_coin(red_agent_perspective=(not i_am_red_agent))
+                    a_opp_coop = env.get_coop_action(red_agent_perspective=(not i_am_red_agent))
+
+                    a_opp = torch.clone(a_opp_coop.detach())
+                    a_opp[prev_agent_coin_collected_same_col == 0] = a_opp_defect[prev_agent_coin_collected_same_col == 0]
+
         else:
             raise NotImplementedError
+
+        if i_am_red_agent:
+            a1 = a
+            a2 = a_opp
+        else:
+            a1 = a_opp
+            a2 = a
+
         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
         # cumulate scores
         # print(f"---{t}---")
@@ -945,6 +1046,45 @@ def eval_vs_fixed_strategy(theta1, values1, strat="alld"):
         score2 += torch.mean(r2) / float(args.len_rollout)
 
     return (score1, score2), None
+
+    # else:
+    #     # if I am red agent, I want to evaluate the other agent from the blue agent perspective
+    #     red_agent = not i_am_red_agent
+    #
+    #     for t in range(args.len_rollout):
+    #         if t > 0:
+    #             prev_a1 = a1
+    #         a, lp, v1, h_p, h_v, cat_act_probs = act(s1, theta, values,
+    #                                                       h_p, h_v)
+    #         if strat == "alld":
+    #             # Always pick up coin
+    #             a2 = env.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent)
+    #
+    #         elif strat == "allc":
+    #             raise NotImplementedError
+    #             # either move towards or away from coin depending on coin colour
+    #             a2 = env.get_moves_away_from_coin(red_agent_perspective=red_agent)
+    #             # Always cooperate
+    #             a2 = torch.ones_like(a1)
+    #         elif strat == "tft":
+    #             raise NotImplementedError
+    #             if t == 0:
+    #                 # start with coop
+    #                 a2 = torch.ones_like(a1)
+    #             else:
+    #                 # otherwise copy the last move of the other agent
+    #                 a2 = prev_a1
+    #         else:
+    #             raise NotImplementedError
+    #         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
+    #         # cumulate scores
+    #         # print(f"---{t}---")
+    #         score1 += torch.mean(r1) / float(args.len_rollout)
+    #         score2 += torch.mean(r2) / float(args.len_rollout)
+    #
+    #     return (score1, score2), None
+
+
 
 
 def step(theta1, theta2, values1, values2):
@@ -1531,22 +1671,25 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
                            agent2.theta_v)
 
-        if args.env == "ipd":
-            print("Eval vs Fixed Strategies:")
-            score1rec = []
-            score2rec = []
-            for strat in ["alld", "allc", "tft"]:
-                print(f"Playing against strategy: {strat.upper()}")
-                score1, _ = eval_vs_fixed_strategy(agent1.theta_p, agent1.theta_v, strat)
-                score1rec.append(score1[0])
-                print(f"Agent 1 score: {score1[0]}")
-                score2, _ = eval_vs_fixed_strategy(agent2.theta_p, agent2.theta_v, strat)
-                score2rec.append(score2[0])
-                print(f"Agent 2 score: {score2[0]}")
-            score1rec = torch.stack(score1rec)
-            score2rec = torch.stack(score2rec)
-            vs_fixed_strats_score_record[0].append(score1rec)
-            vs_fixed_strats_score_record[1].append(score2rec)
+        print("Eval vs Fixed Strategies:")
+        score1rec = []
+        score2rec = []
+        for strat in ["alld", "allc", "tft"]:
+            print(f"Playing against strategy: {strat.upper()}")
+            score1, _ = eval_vs_fixed_strategy(agent1.theta_p, agent1.theta_v, strat, i_am_red_agent=True)
+            score1rec.append(score1[0])
+            print(f"Agent 1 score: {score1[0]}")
+            score2, _ = eval_vs_fixed_strategy(agent2.theta_p, agent2.theta_v, strat, i_am_red_agent=False)
+            score2rec.append(score2[1])
+            print(f"Agent 2 score: {score2[1]}")
+
+            print(score1)
+            print(score2)
+
+        score1rec = torch.stack(score1rec)
+        score2rec = torch.stack(score2rec)
+        vs_fixed_strats_score_record[0].append(score1rec)
+        vs_fixed_strats_score_record[1].append(score2rec)
 
         if args.env == "coin" or args.env == "ogcoin":
             rr_matches, rb_matches, br_matches, bb_matches = info
@@ -1635,7 +1778,7 @@ if __name__ == "__main__":
     parser.add_argument("--om_lr_v", type=float, default=0.001,
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
     parser.add_argument("--env", type=str, default="ogcoin",
-                        choices=["ipd", "twocoin", "ogcoin"])
+                        choices=["ipd", "ogcoin"])
     parser.add_argument("--hist_one", action="store_true", help="Use one step history (no gru or rnn, just one step history)")
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
     parser.add_argument("--init_state_coop", action="store_true", help="For IPD only: have the first state be CC instead of a separate start state")
@@ -1652,10 +1795,10 @@ if __name__ == "__main__":
         input_size = args.grid_size ** 2 * 4
         action_size = 4
         env = OGCoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
-    elif args.env == "twocoin": # two coins at once (one for each agent)
-        input_size = args.grid_size ** 2 * 4
-        action_size = 4
-        env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
+    # elif args.env == "twocoin": # two coins at once (one for each agent)
+    #     input_size = args.grid_size ** 2 * 4
+    #     action_size = 4
+    #     env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
     elif args.env == "ipd":
         # input_size = 2 * 2 # n agents by n agents
         input_size = 3 * 2 # one hot repr dim by n agents
