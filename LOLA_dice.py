@@ -266,7 +266,7 @@ class IteratedPrisonersDilemma:
         self.max_steps = max_steps
         self.batch_size = batch_size
         self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]]).to(device)
-        self.states = torch.FloatTensor([[[[1, 0, 0], [1, 0, 0]], #DD
+        self.states = torch.FloatTensor([[[[1, 0, 0], [1, 0, 0]], #DD (first state is what I last did, second state is what opp last did)
                                           [[1, 0, 0], [0, 1, 0]]], #DC
                                          [[[0, 1, 0], [1, 0, 0]], #CD
                                           [[0, 1, 0], [0, 1, 0]]]]).to(device) #CC
@@ -1255,6 +1255,7 @@ class Agent():
 
     def get_other_policies_for_states(self, other_theta, other_values, state_history):
         # Perhaps really should not be named 1, but whatever.
+        # WEll this also doesn't even have to be other, this works fine for any theta and vals as long as teh state history is correct
         h_p1, h_v1 = (
             torch.zeros(args.batch_size, self.hidden_size).to(device),
             torch.zeros(args.batch_size, self.hidden_size).to(device))
@@ -1366,7 +1367,11 @@ class Agent():
 
         return grad
 
-    def out_lookahead(self, other_theta, other_values, first_outer_step=False):
+    def out_lookahead(self, other_theta, other_values, first_outer_step=False, agent_copy_for_val_update=None):
+        # AGENT COPY IS A COPY OF SELF, NOT OF OTHER. USED so that you can update the value function
+        # while POLA is running in the outer loop, but the outer loop steps still calculate the loss
+        # for the policy based on the old, static value function.
+        # This should hopefully help with issues that might arise if value function is changing during the POLA update
         (s1, s2) = env.reset()
         memory = Memory()
         h_p1, h_v1, h_p2, h_v2 = (
@@ -1374,10 +1379,15 @@ class Agent():
         torch.zeros(args.batch_size, self.hidden_size).to(device),
         torch.zeros(args.batch_size, self.hidden_size).to(device),
         torch.zeros(args.batch_size, self.hidden_size).to(device))
+
+        state_history_for_vals = []
+        state_history_for_vals.append(s1)
+        rew_history_for_vals = []
+
         if first_outer_step:
             cat_act_probs_self = []
-            state_history = []
-            state_history.append(s1)
+            state_history_for_kl_div = []
+            state_history_for_kl_div.append(s1)
         if args.ent_reg > 0:
             ent_vals = []
         for t in range(args.len_rollout):
@@ -1389,9 +1399,11 @@ class Agent():
             memory.add(lp1, lp2, v1, r1)
             if first_outer_step:
                 cat_act_probs_self.append(cat_act_probs1)
-                state_history.append(s1)
+                state_history_for_kl_div.append(s1)
             if args.ent_reg > 0:
                 ent_vals.append(cat_act_probs1)
+            state_history_for_vals.append(s1)
+            rew_history_for_vals.append(r1)
 
         # act just to get the final state values
         a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
@@ -1421,14 +1433,24 @@ class Agent():
             objective += -ent_calc * args.ent_reg # but we want to max entropy (min negative entropy)
         self.theta_update(objective)
         # update self value:
-        if use_baseline:
+        if use_baseline and not args.val_update_after_loop:
             v_loss = memory.value_loss()
             self.value_update(v_loss)
 
         if first_outer_step:
             self.ref_cat_act_probs = torch.stack(cat_act_probs_self, dim=1)
-            self.state_history = torch.stack(state_history, dim=0)
+            self.state_history = torch.stack(state_history_for_kl_div, dim=0)
             # return torch.stack(cat_act_probs_self, dim=1), torch.stack(state_history, dim=1)
+
+        if args.val_update_after_loop:
+            assert agent_copy_for_val_update is not None
+            state_history_for_vals = torch.stack(state_history_for_vals, dim=0)
+            rew_history_for_vals = torch.stack(rew_history_for_vals, dim=1)
+            curr_pol_logits, curr_vals, final_state_vals = self.get_other_logits_values_for_states(
+                agent_copy_for_val_update.theta_p, agent_copy_for_val_update.theta_v, state_history_for_vals)
+            v_loss = value_loss(values=curr_vals, rewards=rew_history_for_vals,
+                                final_state_vals=final_state_vals)
+            agent_copy_for_val_update.value_update(v_loss)
 
 
     def rollout_collect_data_for_opp_model(self, other_theta_p, other_theta_v):
@@ -1596,6 +1618,26 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                                                     true_other_theta_v=start_val1,
                                                     prev_model_theta_p=agent1_theta_p_model)
 
+        agent1_copy_for_val_update = None
+        agent2_copy_for_val_update = None
+        if args.val_update_after_loop:
+            theta_p_1_copy_for_vals = [tp.detach().clone().requires_grad_(True) for tp in
+                            agent1.theta_p]
+            theta_v_1_copy_for_vals = [tv.detach().clone().requires_grad_(True) for tv in
+                          agent1.theta_v]
+            theta_p_2_copy_for_vals = [tp.detach().clone().requires_grad_(True) for tp in
+                            agent2.theta_p]
+            theta_v_2_copy_for_vals = [tv.detach().clone().requires_grad_(True) for tv in
+                          agent2.theta_v]
+            agent1_copy_for_val_update = Agent(input_size, args.hidden_size,
+                                              action_size, args.lr_out,
+                                              args.lr_v, theta_p_1_copy_for_vals,
+                                              theta_v_1_copy_for_vals)
+            agent2_copy_for_val_update = Agent(input_size, args.hidden_size,
+                                              action_size, args.lr_out,
+                                              args.lr_v, theta_p_2_copy_for_vals,
+                                              theta_v_2_copy_for_vals)
+
         for outer_step in range(outer_steps):
             # copy other's parameters:
             th2_to_copy = start_theta2
@@ -1619,11 +1661,13 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                 theta2_ = [theta2_[i] - args.lr_in * grad2[i] for i in
                            range(len(theta2_))]
 
+
+
             # update own parameters from out_lookahead:
             if outer_step == 0:
-                agent1.out_lookahead(theta2_, values2_, first_outer_step=True)
+                agent1.out_lookahead(theta2_, values2_, first_outer_step=True, agent_copy_for_val_update=agent1_copy_for_val_update)
             else:
-                agent1.out_lookahead(theta2_, values2_, first_outer_step=False)
+                agent1.out_lookahead(theta2_, values2_, first_outer_step=False, agent_copy_for_val_update=agent1_copy_for_val_update)
 
             if args.print_info_each_outer_step:
                 print("Agent 1 Sample Obs Info:")
@@ -1655,9 +1699,9 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                            range(len(theta1_))]
 
             if outer_step == 0:
-                agent2.out_lookahead(theta1_, values1_, first_outer_step=True)
+                agent2.out_lookahead(theta1_, values1_, first_outer_step=True, agent_copy_for_val_update=agent2_copy_for_val_update)
             else:
-                agent2.out_lookahead(theta1_, values1_, first_outer_step=False)
+                agent2.out_lookahead(theta1_, values1_, first_outer_step=False, agent_copy_for_val_update=agent2_copy_for_val_update)
 
             if args.print_info_each_outer_step:
                 print("Agent 2 Sample Obs Info:")
@@ -1666,6 +1710,16 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                     print("Agent 2 Updated Opp Model of Agent 1:")
                     print_policy_and_value_info(theta1_,
                                                 values1_)
+
+        if args.val_update_after_loop:
+            updated_theta_v_1 = [tv.detach().clone().requires_grad_(True)
+                                       for tv in
+                                       agent1_copy_for_val_update.theta_v]
+            updated_theta_v_2 = [tv.detach().clone().requires_grad_(True)
+                                       for tv in
+                                       agent2_copy_for_val_update.theta_v]
+            agent1.theta_v = updated_theta_v_1
+            agent2.theta_v = updated_theta_v_2
 
         # evaluate progress:
         score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
@@ -1786,6 +1840,8 @@ if __name__ == "__main__":
     parser.add_argument("--zero_vals", action="store_true", help="For testing/debug only. Set all values to be 0 in Loaded Dice Calculation")
     parser.add_argument("--gae_lambda", type=float, default=1,
                         help="lambda for GAE (1 = monte carlo style, 0 = TD style)")
+    parser.add_argument("--val_update_after_loop", action="store_true", help="Update values only after outer POLA loop finishes, not during the POLA loop")
+
     args = parser.parse_args()
 
     np.random.seed(args.seed)
