@@ -111,7 +111,7 @@ def print_policy_and_value_info(th, vals):
 
 
 
-    elif args.env == "coin":
+    elif args.env == "ogcoin":
         if args.grid_size == 2:
             print("Simple One Step Example")
             sample_obs = torch.FloatTensor([[[0, 1],
