@@ -1786,8 +1786,8 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
         if (update + 1) % args.checkpoint_every == 0:
             now = datetime.datetime.now()
             checkpoint(agent1, agent2, coins_collected_info, score_record, vs_fixed_strats_score_record,
-                       "checkpoint_{}_{}.pt".format(update + 1, now.strftime(
-                           '%Y-%m-%d_%H-%M')), args)
+                       "checkpoint_{}_{}_seed{}.pt".format(update + 1, now.strftime(
+                           '%Y-%m-%d_%H-%M'), args.seed), args)
 
     return joint_scores
 
