@@ -1761,7 +1761,7 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
             #             p2 = [p.item() for p in torch.sigmoid(agent2.theta)]
             #             print('update', update, 'score (%.3f,%.3f)' % (score[0], score[1]) , 'policy (agent1) = {%.3f, %.3f, %.3f, %.3f, %.3f}' % (p1[0], p1[1], p1[2], p1[3], p1[4]),' (agent2) = {%.3f, %.3f, %.3f, %.3f, %.3f}' % (p2[0], p2[1], p2[2], p2[3], p2[4]))
             print("*" * 10)
-            print("Epoch: {}".format(update + 1))
+            print("Epoch: {}".format(update + 1), flush=True)
             print(f"Score 0: {score[0]}")
             print(f"Score 1: {score[1]}")
             if args.env == "coin" or args.env == "ogcoin":
