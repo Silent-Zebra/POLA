@@ -4,6 +4,12 @@
 
 I give a few examples here. There are a LOT for the plot, so here are just a few that tackle harder problem settings (the easier problem settings can use similar settings, otherwise it's not too hard to tune them). Init state representation 2 means the start state is different from the other states (0 = defect, 1 = cooperate)
 
+### LOLA Tabular
+
+CF=1.1
+
+python LOLA_exact.py --n_agents 2 --print_every 10 --repeats 20 --num_epochs 30 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 3 --lr_policies_outer 50 --actual_update --base_cf_no_scale 1.1
+
 ### LOLA Func Approx
 
 CF=1.33
