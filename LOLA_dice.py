@@ -1,4 +1,4 @@
-# Adapted from https://github.com/alexis-jacq/LOLA_DiCE/blob/master/ipd_DiCE.py. GRU from Chris.
+# Adapted from https://github.com/alexis-jacq/LOLA_DiCE/blob/master/ipd_DiCE.py
 
 import torch
 import math
