@@ -63,9 +63,11 @@ Change the --seed parameter for different seeds.
 
 ### LOLA-DiCE
 
-
+python LOLA_dice.py  --env ipd  --val_update_after_loop --init_state_coop  --n_update 15000 --gae_lambda 1.0  --inner_steps 2 --outer_steps 1 --lr_in 0.03 --lr_out 0.005 --lr_v 0.002 --batch_size 4000 --len_rollout 50  --print_every 50 --checkpoint_every 3000 --seed 3
 
 ### POLA-DiCE
+
+python LOLA_dice.py  --env ipd  --val_update_after_loop --init_state_coop  --n_update 200 --gae_lambda 1.0  --inner_steps 1 --outer_steps 100 --lr_in 0.03 --lr_out 0.005 --lr_v 0.002 --batch_size 4000 --len_rollout 50  --print_every 1 --outer_beta 4 --checkpoint_every 50 --seed 3
 
 ### POLA-OM
 
