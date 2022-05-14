@@ -53,23 +53,16 @@ Neural Net 2:
 
 python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 2 --custom_param 4 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.2 --lr_policies_outer .05 --actual_update --base_cf_no_scale 1.33
 
-Tabular:
-
-python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2  --std 0  --lr_policies_inner 1 --lr_policies_outer .2 --set_seed --seed 1 --actual_update --base_cf_no_scale 1.33
 
 ### POLA:
 
 Neural Net 1:
 
-python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 2 --custom_param 1 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.003 --lr_policies_outer .003 --actual_update --base_cf_no_scale 1.33 --inner_exact_prox --inner_beta 2 --outer_exact_prox --outer_beta 5 --print_prox_loops_info
+python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 2 --custom_param 1 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.1 --lr_policies_outer .005 --actual_update --base_cf_no_scale 1.33 --outer_exact_prox --outer_beta 5 --print_prox_loops_info
 
 Neural Net 2:
 
-python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 2 --custom_param 4 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.003 --lr_policies_outer .003 --actual_update --base_cf_no_scale 1.33 --inner_exact_prox --inner_beta 2 --outer_exact_prox --outer_beta 5 --print_prox_loops_info
-
-Tabular:
-
-python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2  --std 0  --lr_policies_inner 0.1 --lr_policies_outer .1 --set_seed --seed 1 --actual_update --base_cf_no_scale 1.33 --inner_exact_prox --inner_beta 2 --outer_exact_prox --outer_beta 5 --print_prox_loops_info
+python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 2 --custom_param 4 --print_every 1 --repeats 1 --num_epochs 1 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.1 --lr_policies_outer .005 --actual_update --base_cf_no_scale 1.33 --outer_exact_prox --outer_beta 5 --print_prox_loops_info
 
 ## Commands used for Figure 3
 
