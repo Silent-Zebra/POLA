@@ -37,17 +37,7 @@ def reverse_cumsum(x, dim):
     return x + torch.sum(x, dim=dim, keepdims=True) - torch.cumsum(x, dim=dim)
 
 def print_info_on_sample_obs(sample_obs, th, vals):
-
     sample_obs = sample_obs.reshape(-1, 1, input_size).to(device)
-
-    # ONLY SUPPORTS 2 AGENTS
-    # sample_obs = torch.stack((sample_obs, sample_obs))
-
-
-    # print(sample_obs.shape)
-    n_agents = 2
-
-    # print(sample_obs.shape)
 
     h_p = torch.zeros(sample_obs.shape[-2],
                        args.hidden_size).to(device)
@@ -59,15 +49,8 @@ def print_info_on_sample_obs(sample_obs, th, vals):
         a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(sample_obs[t], th, vals, h_p,
                                                       h_v)
 
-        # policies, values, h_p, h_v = self.get_policy_vals_indices_for_iter(th, vals,
-        #                                                       sample_obs[:,-1,:,:], h_p, h_v)
-        # for i in range(n_agents):
-            # print("Agent {}:".format(i + 1))
         print(cat_act_probs1)
         print(v1)
-
-
-
 
 
 def print_policy_and_value_info(th, vals):
@@ -78,7 +61,7 @@ def print_policy_and_value_info(th, vals):
                                          [0, 0, 1]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
         print("DD") # NOTE these are from the perspective of: (my past action, opp past action)
-        # Not (p1 action, p2 action) as I did in my old file
+        # Not (p1 action, p2 action) as I did in my old file (or in the LOLA_exact file)
         sample_obs = torch.FloatTensor([[[1, 0, 0],
                                          [1, 0, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
@@ -94,22 +77,6 @@ def print_policy_and_value_info(th, vals):
         sample_obs = torch.FloatTensor([[[0, 1, 0],
                                          [0, 1, 0]]]).reshape(1, input_size)
         print_info_on_sample_obs(sample_obs, th, vals)
-
-        # if not args.hist_one:
-        #     print("Two Step Examples")
-        #     states = torch.FloatTensor([[[1, 0, 0], [1, 0, 0]],  # DD
-        #                                       [[1, 0, 0], [0, 1, 0]],  # DC
-        #                                       [[0, 1, 0], [1, 0, 0]],  # CD
-        #                                       [[0, 1, 0], [0, 1, 0]]])  # CC
-        #
-        #     for i in range(4):
-        #         for j in range(4):
-        #             sample_obs_1 = states[i]
-        #             sample_obs_2 = states[j]
-        #             sample_obs = torch.stack((sample_obs_1, sample_obs_2), dim=1)
-        #             print_info_on_sample_obs(sample_obs, th, vals)
-
-
 
     elif args.env == "ogcoin":
         if args.grid_size == 2:
@@ -248,8 +215,6 @@ def print_policy_and_value_info(th, vals):
 
 
 
-
-
 # Adapted from https://github.com/alexis-jacq/LOLA_DiCE/blob/master/envs/prisoners_dilemma.py
 class IteratedPrisonersDilemma:
     """
@@ -266,6 +231,7 @@ class IteratedPrisonersDilemma:
         self.max_steps = max_steps
         self.batch_size = batch_size
         self.payout_mat = torch.FloatTensor([[-2,0],[-3,-1]]).to(device)
+        # One hot state representation because this would scale to n agents
         self.states = torch.FloatTensor([[[[1, 0, 0], [1, 0, 0]], #DD (first state is what I last did, second state is what opp last did)
                                           [[1, 0, 0], [0, 1, 0]]], #DC
                                          [[[0, 1, 0], [1, 0, 0]], #CD
@@ -278,9 +244,7 @@ class IteratedPrisonersDilemma:
 
     def reset(self):
         self.step_count = 0
-        # init_state = torch.zeros((self.batch_size, self.NUM_AGENTS, self.NUM_ACTIONS)).to(device)
         init_state = self.init_state.repeat(self.batch_size, 1, 1)
-        # print(init_state.shape)
         observation = [init_state, init_state]
         return observation
 
@@ -300,8 +264,12 @@ class IteratedPrisonersDilemma:
 
 
 """
-OG COIN GAME.
-COIN CANNOT SPAWN UNDER EITHER AGENT.
+OG COIN GAME (But with bugs fixed, also vectorized).
+Coin cannot spawn under any agent
+Note that both agents can occupy the same spot on the grid
+If both agents collect a coin at the same time, they both get the rewards associated
+with the collection. To split the rewards (as if taking an expectation where the 
+coin is randomly allocated to one of the agents), use --split_coins
 """
 class OGCoinGameGPU:
     """
@@ -335,10 +303,7 @@ class OGCoinGameGPU:
         self.red_pos = torch.stack((red_pos_flat // self.grid_size, red_pos_flat % self.grid_size), dim=-1)
 
         blue_pos_flat = torch.randint(self.grid_size * self.grid_size, size=(self.batch_size,)).to(device)
-        # blue_pos_flat = (torch.randint(self.grid_size * self.grid_size - 1, size=(self.batch_size,)).to(device) + red_pos_flat) % (self.grid_size * self.grid_size)
         self.blue_pos = torch.stack((blue_pos_flat // self.grid_size, blue_pos_flat % self.grid_size), dim=-1)
-
-        # print((red_pos_flat == blue_pos_flat).sum())
 
         coin_pos_flat = torch.randint(self.grid_size * self.grid_size - 2, size=(self.batch_size,)).to(device)
         minpos = torch.min(red_pos_flat, blue_pos_flat)
@@ -346,15 +311,10 @@ class OGCoinGameGPU:
         coin_pos_flat[coin_pos_flat >= minpos] += 1
         coin_pos_flat[coin_pos_flat >= maxpos] += 1
 
-        # Regenerate coins when both agents are on the same spot, regenerate uniform among the 8 other possible spots
+        # Regenerate coins when both agents are on the same spot, use a uniform
+        # distribution among the 8 other possible spots
         same_agents_pos = (minpos == maxpos)
         coin_pos_flat[same_agents_pos] = torch.randint(self.grid_size * self.grid_size - 1, size=(same_agents_pos.sum(),)).to(device) + 1 + minpos[same_agents_pos]
-
-        # x = torch.logical_and(minpos == maxpos,
-        #                   torch.rand_like(minpos.float()) < (1.0 / (
-        #                               self.grid_size * self.grid_size - 1)))
-
-        # coin_pos_flat[x] = minpos[x] +1 # THIS IS TO FIX THE OFFSET BUG
 
         coin_pos_flat = coin_pos_flat % (self.grid_size * self.grid_size)
 
@@ -389,13 +349,9 @@ class OGCoinGameGPU:
         coin_pos_flat[coin_pos_flat >= minpos] += 1
         coin_pos_flat[coin_pos_flat >= maxpos] += 1
 
-        # print(minpos.shape)
-        # print(coin_pos_flat.shape)
         same_agents_pos = (minpos == maxpos)
-        # print(same_agents_pos.shape)
 
         # Regenerate coins when both agents are on the same spot, regenerate uniform among the 8 other possible spots
-        # print(same_agents_pos.sum())
         coin_pos_flat[same_agents_pos] = torch.randint(
             self.grid_size * self.grid_size - 1,
             size=(same_agents_pos.sum(),)).to(device) + 1 + minpos[same_agents_pos]
@@ -416,7 +372,6 @@ class OGCoinGameGPU:
         red_pos_flat = self.red_pos[:,0] * self.grid_size + self.red_pos[:, 1]
         blue_pos_flat = self.blue_pos[:, 0] * self.grid_size + self.blue_pos[:, 1]
 
-        # coin_pos_flat = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1]
         # 1 - self.red_coin here in order to have the red coin show up as obs in the second to last, rather than last of the 4 dimensions
         coin_pos_flatter = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1] + self.grid_size * self.grid_size * (1-self.red_coin) + 2 * self.grid_size * self.grid_size
 
@@ -429,16 +384,6 @@ class OGCoinGameGPU:
         state[:,1].scatter_(1, blue_pos_flat[:,None], 1)
 
         state = state.view(self.batch_size, 4, self.grid_size, self.grid_size)
-
-        # for i in range(3):
-        #     print(state[i])
-        #     print(red_pos_flat[i])
-        #     print(blue_pos_flat[i])
-        #     coin_pos_flat = self.coin_pos[:,0] * self.grid_size + self.coin_pos[:,1]
-        #     print(coin_pos_flat[i])
-        #     print(self.red_coin[i])
-        #
-        #     print(coin_pos_flatter[i])
 
         return state
 
@@ -453,12 +398,9 @@ class OGCoinGameGPU:
         # Compute rewards
         red_matches = self._same_pos(self.red_pos, self.coin_pos)
         red_reward = torch.zeros_like(self.red_coin).float()
-        # red_reward[red_matches] = 1
 
         blue_matches = self._same_pos(self.blue_pos, self.coin_pos)
         blue_reward = torch.zeros_like(self.red_coin).float()
-        # blue_reward[blue_matches] = 1
-
 
         red_reward[torch.logical_and(red_matches, self.red_coin)] = args.same_coin_reward
         blue_reward[torch.logical_and(blue_matches, 1 - self.red_coin)] = args.same_coin_reward
@@ -467,8 +409,6 @@ class OGCoinGameGPU:
 
         red_reward[torch.logical_and(blue_matches, self.red_coin)] += args.diff_coin_cost
         blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] += args.diff_coin_cost
-        # red_reward[torch.logical_and(blue_matches, self.red_coin)] -= 2
-        # blue_reward[torch.logical_and(red_matches, 1 - self.red_coin)] -= 2
 
         if args.split_coins:
             both_matches = torch.logical_and(self._same_pos(self.red_pos, self.coin_pos), self._same_pos(self.blue_pos, self.coin_pos))
@@ -485,13 +425,13 @@ class OGCoinGameGPU:
         reward = [red_reward.float(), blue_reward.float()]
         state = self._generate_state()
         state2 = state.clone()
-        # Because each agent sees the obs as if they are the "main" or "red" agent. This is to be consistent with the self-centric IPD formulation too.
+        # Because each agent sees the obs as if they are the "main" or "red" agent.
+        # This is to be consistent with the self-centric IPD formulation too.
         state2[:, 0] = state[:, 1]
         state2[:, 1] = state[:, 0]
         state2[:, 2] = state[:, 3]
         state2[:, 3] = state[:, 2]
         observations = [state, state2]
-        # observations = [state, state]
         if self.step_count >= self.max_steps:
             done = torch.ones_like(self.red_coin)
         else:
@@ -527,7 +467,7 @@ class OGCoinGameGPU:
 
         return actions.long()
 
-    def get_moves_away_from_coin(self, moves_towards_coin, red_agent_perspective=True):
+    def get_moves_away_from_coin(self, moves_towards_coin):
         opposite_moves = torch.zeros_like(moves_towards_coin)
         opposite_moves[moves_towards_coin == 0] = 1
         opposite_moves[moves_towards_coin == 1] = 0
@@ -537,173 +477,21 @@ class OGCoinGameGPU:
 
     def get_coop_action(self, red_agent_perspective=True):
         # move toward coin if same colour, away if opposite colour
+        # An agent that always does this is considered to 'always cooperate'
         moves_towards_coin = self.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent_perspective)
-        moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin, red_agent_perspective=red_agent_perspective)
+        moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin)
         coop_moves = torch.zeros_like(moves_towards_coin) - 1
         if red_agent_perspective:
             is_my_coin = self.red_coin
         else:
             is_my_coin = 1 - self.red_coin
 
-        # print(is_my_coin)
-        # print(1 - is_my_coin)
-
         coop_moves[is_my_coin == 1] = moves_towards_coin[is_my_coin == 1]
         coop_moves[is_my_coin == 0] = moves_away_from_coin[is_my_coin == 0]
         return coop_moves
 
 
-# class CoinGameGPU:
-#     """
-#     Vectorized Coin Game environment.
-#     Note: slightly deviates from the Gym API.
-#     """
-#     NUM_AGENTS = 2
-#     NUM_ACTIONS = 4
-#     MOVES = torch.stack([
-#         torch.LongTensor([0, 1]), # right
-#         torch.LongTensor([0, -1]), # left
-#         torch.LongTensor([1, 0]), # down
-#         torch.LongTensor([-1, 0]), # up
-#     ], dim=0).to(device)
-#
-#     def __init__(self, max_steps, batch_size, grid_size=3):
-#         self.max_steps = max_steps
-#         self.grid_size = grid_size
-#         self.batch_size = batch_size
-#         # The 4 channels stand for 2 players and 2 coin positions
-#         self.ob_space_shape = [4, grid_size, grid_size]
-#         self.NUM_STATES = np.prod(self.ob_space_shape)
-#         self.available_actions = 4
-#         self.step_count = None
-#
-#     def reset(self):
-#         self.step_count = 0
-#
-#         red_pos_flat = torch.randint(self.grid_size * self.grid_size,
-#                                      size=(self.batch_size,)).to(device)
-#         self.red_pos = torch.stack(
-#             (torch.div(red_pos_flat, self.grid_size, rounding_mode='floor') , red_pos_flat % self.grid_size),
-#             dim=-1)
-#
-#         blue_pos_flat = torch.randint(self.grid_size * self.grid_size,
-#                                       size=(self.batch_size,)).to(device)
-#         self.blue_pos = torch.stack(
-#             (torch.div(blue_pos_flat, self.grid_size, rounding_mode='floor'), blue_pos_flat % self.grid_size),
-#             dim=-1)
-#
-#         red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-#                                           size=(self.batch_size,)).to(device)
-#         blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-#                                            size=(self.batch_size,)).to(device)
-#
-#         self.red_coin_pos = torch.stack((torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-#                                          red_coin_pos_flat % self.grid_size),
-#                                         dim=-1)
-#         self.blue_coin_pos = torch.stack((torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-#                                           blue_coin_pos_flat % self.grid_size),
-#                                          dim=-1)
-#
-#         state = self._generate_state()
-#         state2 = state.clone()
-#         # print(state2.shape)
-#         state2[:,0] = state[:,1]
-#         state2[:,1] = state[:,0]
-#         state2[:,2] = state[:,3]
-#         state2[:,3] = state[:,2]
-#         observations = [state, state2]
-#         return observations
-#
-#     def _generate_coins(self):
-#         mask_red = torch.logical_or(
-#             self._same_pos(self.red_coin_pos, self.blue_pos),
-#             self._same_pos(self.red_coin_pos, self.red_pos))
-#         red_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-#                                           size=(self.batch_size,)).to(device)[
-#             mask_red]
-#         self.red_coin_pos[mask_red] = torch.stack((
-#                                                   torch.div(red_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-#                                                   red_coin_pos_flat % self.grid_size),
-#                                                   dim=-1)
-#
-#         mask_blue = torch.logical_or(
-#             self._same_pos(self.blue_coin_pos, self.blue_pos),
-#             self._same_pos(self.blue_coin_pos, self.red_pos))
-#         blue_coin_pos_flat = torch.randint(self.grid_size * self.grid_size,
-#                                            size=(self.batch_size,)).to(device)[
-#             mask_blue]
-#         self.blue_coin_pos[mask_blue] = torch.stack((
-#                                                     torch.div(blue_coin_pos_flat, self.grid_size, rounding_mode='floor'),
-#                                                     blue_coin_pos_flat % self.grid_size),
-#                                                     dim=-1)
-#
-#     def _same_pos(self, x, y):
-#         return torch.all(x == y, dim=-1)
-#
-#     def _generate_state(self):
-#         red_pos_flat = self.red_pos[:, 0] * self.grid_size + self.red_pos[:, 1]
-#         blue_pos_flat = self.blue_pos[:, 0] * self.grid_size + self.blue_pos[:,
-#                                                                1]
-#
-#         red_coin_pos_flat = self.red_coin_pos[:,
-#                             0] * self.grid_size + self.red_coin_pos[:, 1]
-#         blue_coin_pos_flat = self.blue_coin_pos[:,
-#                              0] * self.grid_size + self.blue_coin_pos[:, 1]
-#
-#         state = torch.zeros(
-#             (self.batch_size, 4, self.grid_size * self.grid_size)).to(device)
-#
-#         state[:, 0].scatter_(1, red_pos_flat[:, None], 1)
-#         state[:, 1].scatter_(1, blue_pos_flat[:, None], 1)
-#         state[:, 2].scatter_(1, red_coin_pos_flat[:, None], 1)
-#         state[:, 3].scatter_(1, blue_coin_pos_flat[:, None], 1)
-#
-#         return state.view(self.batch_size, 4, self.grid_size, self.grid_size)
-#
-#     def step(self, actions):
-#         ac0, ac1 = actions
-#
-#         self.step_count += 1
-#
-#         self.red_pos = (self.red_pos + self.MOVES[ac0]) % self.grid_size
-#         self.blue_pos = (self.blue_pos + self.MOVES[ac1]) % self.grid_size
-#
-#         # Compute rewards
-#         red_reward = torch.zeros(self.batch_size).to(device)
-#         red_red_matches = self._same_pos(self.red_pos, self.red_coin_pos)
-#         red_reward[red_red_matches] += args.same_coin_reward
-#         red_blue_matches = self._same_pos(self.red_pos, self.blue_coin_pos)
-#         red_reward[red_blue_matches] += args.diff_coin_reward
-#
-#         blue_reward = torch.zeros(self.batch_size).to(device)
-#         blue_red_matches = self._same_pos(self.blue_pos, self.red_coin_pos)
-#         blue_reward[blue_red_matches] += args.diff_coin_reward
-#         blue_blue_matches = self._same_pos(self.blue_pos, self.blue_coin_pos)
-#         blue_reward[blue_blue_matches] += args.same_coin_reward
-#
-#         red_reward[blue_red_matches] += args.diff_coin_cost # -= 2
-#         blue_reward[red_blue_matches] += args.diff_coin_cost # -= 2
-#
-#         self._generate_coins()
-#         reward = [red_reward.float(), blue_reward.float()]
-#         state = self._generate_state()
-#         state2 = state.clone()
-#         state2[:, 0] = state[:, 1]
-#         state2[:, 1] = state[:, 0]
-#         state2[:, 2] = state[:, 3]
-#         state2[:, 3] = state[:, 2]
-#         observations = [state, state2]
-#         if self.step_count >= self.max_steps:
-#             done = torch.ones(self.batch_size).to(device)
-#         else:
-#             done = torch.zeros(self.batch_size).to(device)
-#
-#         return observations, reward, done, (
-#         red_red_matches.float().mean(), red_blue_matches.float().mean(),
-#         blue_red_matches.float().mean(), blue_blue_matches.float().mean())
-
-
-
+# DiCE operator
 def magic_box(x):
     return torch.exp(x - x.detach())
 
@@ -743,7 +531,7 @@ class Memory():
         # stochastics nodes involved in rewards dependencies:
         dependencies = torch.cumsum(self_logprobs + other_logprobs, dim=1)
 
-        # logprob of each stochastic nodes:
+        # logprob of all stochastic nodes:
         stochastic_nodes = self_logprobs + other_logprobs
 
         use_loaded_dice = False
@@ -762,93 +550,33 @@ class Memory():
                 values = torch.zeros_like(values)
 
             advantages = torch.zeros_like(values)
-            lambd = args.gae_lambda # 0  # 0.95 # 1 here is essentially what I was doing before with monte carlo
+            lambd = args.gae_lambda # 1 here is essentially monte carlo (but with extrapolation of value in the end state)
             deltas = rewards + args.gamma * next_val_history.detach() - values.detach()
-            # print(deltas.shape)
             gae = torch.zeros_like(deltas[:, 0]).float()
-            # print(gae.shape)
             for i in range(deltas.size(1) - 1, -1, -1):
-                # print(i)
                 gae = gae * args.gamma * lambd + deltas[:, i]
                 advantages[:, i] = gae
-                # print(gae)
-
-            # print(rewards)
-            # print(advantages)
-            #
-            # print(discounted_rewards)
-            #
-            # print(advantages - discounted_rewards)
-            # print((advantages - discounted_rewards).sum())
 
             discounts = torch.cumprod(
                 args.gamma * torch.ones((args.len_rollout), device=device),
                 dim=0) / args.gamma
 
-            # gamma_t_r_ts = rewards * discounts
-            # G_ts = reverse_cumsum(gamma_t_r_ts, dim=1)
-            # R_ts = G_ts / discounts
-            #
-            # print(R_ts)
-            #
-            # print(advantages * discounts)
-            # print(G_ts)
-            # print(G_ts - advantages * discounts)
-            # print((G_ts - advantages * discounts).sum())
-
             discounted_advantages = advantages * discounts
-            # 1/0
 
-            # print(stochastic_nodes.shape)
             deps_up_to_t = (torch.cumsum(stochastic_nodes, dim=1))
-            # print(deps_up_to_t.shape)
 
             deps_less_than_t = deps_up_to_t - stochastic_nodes  # take out the dependency in the given time step
 
-            # advantages = discounted_rewards
-
-            # Look at Loaded DiCE paper to see where this formulation comes from
-            # Right now since I am using GAE, the advantages already have the discounts in them, no need to multiply again
+            # Look at Loaded DiCE and GAE papers to see where this formulation comes from
             loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(
                 deps_less_than_t)) * discounted_advantages).sum(dim=1).mean(dim=0)
 
-            # loaded_dice_rewards = loaded_dice_rewards + advantages[:, 0].mean()
-
             dice_objective = loaded_dice_rewards
 
-            # print(loaded_dice_rewards)
-            # dice_objective = torch.mean(
-            #     torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
-            # print(dice_objective)
-            # print(dice_objective - loaded_dice_rewards)
-            # print((dice_objective - loaded_dice_rewards).sum())
-            #
-            # grad1l = get_gradient(loaded_dice_rewards, agent1.theta_p)
-            # grad1d = get_gradient(dice_objective, agent1.theta_p)
-            #
-            # for i in range(len(grad1l)):
-            #     print(f"-----------{i}------------")
-            #     print(grad1l[i])
-            #     print(grad1d[i])
-            #     grad_diff = grad1l[i] - grad1d[i]
-            #     print(grad_diff)
-            #
-            # # grad2l = get_gradient(loaded_dice_rewards, agent2.theta_p)
-            #
-            # 1/0
-
-            # print(dice_objective)
         else:
             # dice objective:
             dice_objective = torch.mean(
                 torch.sum(magic_box(dependencies) * discounted_rewards, dim=1))
-
-        # if args.use_baseline:
-        #     # variance_reduction:
-        #     baseline_term = torch.mean(
-        #         torch.sum((1 - magic_box(stochastic_nodes)) * discounted_values,
-        #                   dim=1))
-        #     dice_objective = dice_objective + baseline_term
 
         return -dice_objective  # want to minimize -objective
 
@@ -860,6 +588,7 @@ class Memory():
 
 
 def value_loss(values, rewards, final_state_vals):
+    # Fixed original value update which I'm almost certain is wrong
 
     discounts = torch.cumprod(
         args.gamma * torch.ones((args.len_rollout), device=device),
@@ -879,18 +608,13 @@ def value_loss(values, rewards, final_state_vals):
     values_loss = (R_ts + final_val_discounted_to_curr - values) ** 2
     values_loss = values_loss.sum(dim=1).mean(dim=0)
 
-    # return torch.mean((rewards - values) ** 2) # TODO SZ NOTE: Isn't this wrong? Don't we need r + next state val - current state val? Pretty sure this is wrong
-    # Well between the whole baseline/DiCE/Loaded DiCE thing where the original baseline wasn't correct
-    # And this calculation which I'm almost certain is wrong, we are probably better off just not using the value function
-    # That makes OM a bunch easier too.
-    # Especially in coin game, where the rewards are close ish to 0 anyway, the value function shouldn't be that important.
     print("Values loss")
     print(values_loss)
     return values_loss
 
 
+# Pass stuff through GRU
 def apply(batch_states, theta, hidden):
-    #     import pdb; pdb.set_trace()
     batch_states = batch_states.flatten(start_dim=1)
 
     if args.hist_one:
@@ -913,9 +637,6 @@ def apply(batch_states, theta, hidden):
 
         gate_h = hidden.matmul(theta[4])
         gate_h = gate_h + theta[5]
-
-        #     gate_x = gate_x.squeeze()
-        #     gate_h = gate_h.squeeze()
 
         i_r, i_i, i_n = gate_x.chunk(3, 1)
         h_r, h_i, h_n = gate_h.chunk(3, 1)
@@ -956,10 +677,6 @@ def get_gradient(objective, theta):
     return grad_objective
 
 
-
-
-
-
 def eval_vs_fixed_strategy(theta, values, strat="alld", i_am_red_agent=True):
     # just to evaluate progress:
     (s1, s2) = env.reset()
@@ -969,13 +686,10 @@ def eval_vs_fixed_strategy(theta, values, strat="alld", i_am_red_agent=True):
         torch.zeros(args.batch_size, args.hidden_size).to(device),
         torch.zeros(args.batch_size, args.hidden_size).to(device))
 
-        # rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
-    # if args.env == "ipd":
 
     for t in range(args.len_rollout):
         if t > 0:
             prev_a = a
-
 
         if i_am_red_agent:
             s = s1
@@ -998,9 +712,7 @@ def eval_vs_fixed_strategy(theta, values, strat="alld", i_am_red_agent=True):
                 # Always cooperate
                 a_opp = torch.ones_like(a)
             else:
-                # print(s)
                 a_opp = env.get_coop_action(red_agent_perspective=(not i_am_red_agent))
-                # print(a_opp)
         elif strat == "tft":
             if args.env == "ipd":
                 if t == 0:
@@ -1040,51 +752,11 @@ def eval_vs_fixed_strategy(theta, values, strat="alld", i_am_red_agent=True):
             a2 = a
 
         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
-        # cumulate scores
-        # print(f"---{t}---")
+
         score1 += torch.mean(r1) / float(args.len_rollout)
         score2 += torch.mean(r2) / float(args.len_rollout)
 
     return (score1, score2), None
-
-    # else:
-    #     # if I am red agent, I want to evaluate the other agent from the blue agent perspective
-    #     red_agent = not i_am_red_agent
-    #
-    #     for t in range(args.len_rollout):
-    #         if t > 0:
-    #             prev_a1 = a1
-    #         a, lp, v1, h_p, h_v, cat_act_probs = act(s1, theta, values,
-    #                                                       h_p, h_v)
-    #         if strat == "alld":
-    #             # Always pick up coin
-    #             a2 = env.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent)
-    #
-    #         elif strat == "allc":
-    #             raise NotImplementedError
-    #             # either move towards or away from coin depending on coin colour
-    #             a2 = env.get_moves_away_from_coin(red_agent_perspective=red_agent)
-    #             # Always cooperate
-    #             a2 = torch.ones_like(a1)
-    #         elif strat == "tft":
-    #             raise NotImplementedError
-    #             if t == 0:
-    #                 # start with coop
-    #                 a2 = torch.ones_like(a1)
-    #             else:
-    #                 # otherwise copy the last move of the other agent
-    #                 a2 = prev_a1
-    #         else:
-    #             raise NotImplementedError
-    #         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
-    #         # cumulate scores
-    #         # print(f"---{t}---")
-    #         score1 += torch.mean(r1) / float(args.len_rollout)
-    #         score2 += torch.mean(r2) / float(args.len_rollout)
-    #
-    #     return (score1, score2), None
-
-
 
 
 def step(theta1, theta2, values1, values2):
@@ -1105,19 +777,9 @@ def step(theta1, theta2, values1, values2):
         a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, theta2, values2, h_p2, h_v2)
         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
         # cumulate scores
-        # print(f"---{t}---")
         score1 += torch.mean(r1) / float(args.len_rollout)
         score2 += torch.mean(r2) / float(args.len_rollout)
-        # print(a1.float().mean())
-        # print(a2.float().mean())
-        # print(r1.mean())
-        # print(r2.mean())
-        # print(score1)
-        # print(score2)
-        # print(score1 * float(args.len_rollout)/(t+1))
-        # print(score2 * float(args.len_rollout)/(t+1))
 
-        # print(info)
         if args.env == "coin" or args.env == "ogcoin":
             rr_matches, rb_matches, br_matches, bb_matches = info
             rr_matches_record += rr_matches
@@ -1254,8 +916,8 @@ class Agent():
         return torch.stack(cat_act_probs, dim=1)
 
     def get_other_policies_for_states(self, other_theta, other_values, state_history):
-        # Perhaps really should not be named 1, but whatever.
-        # WEll this also doesn't even have to be other, this works fine for any theta and vals as long as teh state history is correct
+        # Perhaps really should not be named 1
+        # Well this also doesn't even have to be other, this works fine for any theta and vals as long as the state history is correct (corresponds to the theta and values you are using)
         h_p1, h_v1 = (
             torch.zeros(args.batch_size, self.hidden_size).to(device),
             torch.zeros(args.batch_size, self.hidden_size).to(device))
@@ -1272,7 +934,7 @@ class Agent():
         return torch.stack(cat_act_probs, dim=1)
 
     def get_other_logits_values_for_states(self, other_theta, other_values, state_history):
-        # Perhaps really should not be named 1, but whatever.
+        # Same comments as above. Questionable variable naming here
         h_p1, h_v1 = (
             torch.zeros(args.batch_size, self.hidden_size).to(device),
             torch.zeros(args.batch_size, self.hidden_size).to(device))
@@ -1317,9 +979,6 @@ class Agent():
             other_state_history.append(s2)
 
         for t in range(args.len_rollout):
-            # print("SAR")
-            # print(s1[0])
-            # print(s2[0])
 
             a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p, self.theta_v, h_p1,
                                           h_v1)
@@ -1331,19 +990,7 @@ class Agent():
                 cat_act_probs_other.append(cat_act_probs2)
                 other_state_history.append(s2)
 
-        #     print(a1[0])
-        #     print(a2[0])
-        #     print(r1[0])
-        #     print(r2[0])
-        #     print("Next S")
-        #     print(s1[0])
-        #     print(s2[0])
-        # 1/0
-
         # act just to get the final state values
-        # a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
-        #                                               self.theta_v,
-        #                                               h_p1, h_v1)
         a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta,
                                                       other_values,
                                                       h_p2, h_v2)
@@ -1352,7 +999,6 @@ class Agent():
         if not first_inner_step:
             curr_pol_probs = self.get_other_policies_for_states(other_theta, other_values, self.other_state_history)
             kl_div = torch.nn.functional.kl_div(torch.log(curr_pol_probs), self.ref_cat_act_probs_other.detach(), log_target=False, reduction='batchmean')
-            # print(curr_pol_probs.shape)
             print(kl_div)
 
         other_objective = other_memory.dice_objective()
@@ -1362,15 +1008,16 @@ class Agent():
         grad = get_gradient(other_objective, other_theta)
 
         if first_inner_step:
+            # use as ref for KL div calc
             self.ref_cat_act_probs_other = torch.stack(cat_act_probs_other, dim=1)
             self.other_state_history = torch.stack(other_state_history, dim=0)
 
         return grad
 
     def out_lookahead(self, other_theta, other_values, first_outer_step=False, agent_copy_for_val_update=None):
-        # AGENT COPY IS A COPY OF SELF, NOT OF OTHER. USED so that you can update the value function
+        # AGENT COPY IS A COPY OF SELF, NOT OF OTHER. Used so that you can update the value function
         # while POLA is running in the outer loop, but the outer loop steps still calculate the loss
-        # for the policy based on the old, static value function.
+        # for the policy based on the old, static value function (this is for the val_update_after_loop stuff).
         # This should hopefully help with issues that might arise if value function is changing during the POLA update
         (s1, s2) = env.reset()
         memory = Memory()
@@ -1409,18 +1056,12 @@ class Agent():
         a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
                                                       self.theta_v,
                                                       h_p1, h_v1)
-        # a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta,
-        #                                               other_values,
-        #                                               h_p2, h_v2)
         memory.add_end_state_v(v1)
 
         if not first_outer_step:
             curr_pol_probs = self.get_policies_for_states()
             kl_div = torch.nn.functional.kl_div(torch.log(curr_pol_probs), self.ref_cat_act_probs.detach(), log_target=False, reduction='batchmean')
-            # print(curr_pol_probs.shape)
             print(kl_div)
-            # kl_div2 = (curr_pol_probs * torch.log(curr_pol_probs / self.ref_cat_act_probs.detach())).sum() / self.batch_size
-            # print(kl_div2)
 
         # update self theta
         objective = memory.dice_objective()
@@ -1429,7 +1070,6 @@ class Agent():
         if args.ent_reg > 0:
             ent_vals = torch.stack(ent_vals, dim=0)
             ent_calc = - (ent_vals * torch.log(ent_vals)).sum(dim=-1).mean()
-            # print(ent_calc)
             objective += -ent_calc * args.ent_reg # but we want to max entropy (min negative entropy)
         self.theta_update(objective)
         # update self value:
@@ -1440,7 +1080,6 @@ class Agent():
         if first_outer_step:
             self.ref_cat_act_probs = torch.stack(cat_act_probs_self, dim=1)
             self.state_history = torch.stack(state_history_for_kl_div, dim=0)
-            # return torch.stack(cat_act_probs_self, dim=1), torch.stack(state_history, dim=1)
 
         if args.val_update_after_loop:
             assert agent_copy_for_val_update is not None
@@ -1485,31 +1124,15 @@ class Agent():
             other_act_history.append(a2)
             other_rew_history.append(r2)
 
-        # # act just to get the final state values
-        # a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, self.theta_p,
-        #                                               self.theta_v,
-        #                                               h_p1, h_v1)
-        # a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, other_theta_p,
-        #                                               other_theta_v,
-        #                                               h_p2, h_v2)
-        # other_memory.add_end_state_v(v2)
-
         # Stacking dim = 0 gives (len_rollout, batch)
         # Stacking dim = 1 gives (batch, len_rollout)
         state_history = torch.stack(state_history, dim=0)
         other_state_history = torch.stack(other_state_history, dim=0)
         act_history = torch.stack(act_history, dim=1)
         other_act_history = torch.stack(other_act_history, dim=1)
-        # print(state_history.shape)
 
-        # print(other_rew_history)
         other_rew_history = torch.stack(other_rew_history, dim=1)
-        # print(other_rew_history.shape)
         return state_history, other_state_history, act_history, other_act_history, other_rew_history
-
-        # Use this - pass in the state history into the same func that gets policies for kl ddiv
-        # and compute the actual prob values over the batch given the actions a2 or a1
-        # Then a simple supervised loss, softmax on policy, MSE vs the targeted probability, or no, KL div between the current policy and the desired one.
 
 
     def opp_model(self, om_lr_p, om_lr_v, true_other_theta_p, true_other_theta_v,
@@ -1525,13 +1148,11 @@ class Agent():
         opp_model_data_batches = args.opp_model_data_batches
 
         for batch in range(opp_model_data_batches):
-            # should only do 1 collect, but I guess we can do multiple "batches"
+            # should in principle only do 1 collect, but I can do multiple "batches"
             # where repeating the below would be the same as collecting one big batch of environment interaction
             state_history, other_state_history, act_history, other_act_history, other_rew_history =\
                 self.rollout_collect_data_for_opp_model(true_other_theta_p, true_other_theta_v)
 
-            # opp_model_threshold = 1e-3
-            # c_e_loss = 100
             opp_model_iters = 0
             opp_model_steps_per_data_batch = args.opp_model_steps_per_batch
 
@@ -1540,7 +1161,6 @@ class Agent():
 
             print(f"Opp Model Data Batch: {batch + 1}")
 
-            # while c_e_loss > opp_model_threshold:
             for opp_model_iter in range(opp_model_steps_per_data_batch):
                 # POLICY UPDATE
                 curr_pol_logits, curr_vals, final_state_vals = self.get_other_logits_values_for_states(agent_opp.theta_p,
@@ -1557,12 +1177,8 @@ class Agent():
                 # Essentially treat the one hot vector of actions as a class label, and then run supervised learning
 
                 c_e_loss = - (other_act_history * torch.log_softmax(curr_pol_logits, dim=-1)).sum(dim=-1).mean()
-                # print(other_act_history)
-                # print(torch.softmax(curr_pol_logits, dim=-1))
 
-                # print(opp_model_iters)
                 print(c_e_loss.item())
-                # print(curr_pol_probs)
 
                 agent_opp.theta_update(c_e_loss)
 
@@ -1573,19 +1189,16 @@ class Agent():
 
                 opp_model_iters += 1
 
-                # TODO VALUE UPDATE TOO? LEARN THE VAL FUNCTION TOO?
-
-
-            # print(f"Finished opp model in {opp_model_iters} iters")
-
         return agent_opp.theta_p, agent_opp.theta_v
 
 
 def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev_scores=None, prev_coins_collected_info=None):
     joint_scores = []
     score_record = []
+    # You could do something like the below and then modify the code to just be one continuous record that includes past values when loading from checkpoint
     # if prev_scores is not None:
     #     score_record = prev_scores
+    # I'm tired though.
     vs_fixed_strats_score_record = [[], []]
 
     print("start iterations with", n_lookaheads, "inner steps and", outer_steps, "outer steps:")
@@ -1657,7 +1270,7 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
                     grad2 = agent1.in_lookahead(theta2_, values2_, first_inner_step=True)
                 else:
                     grad2 = agent1.in_lookahead(theta2_, values2_, first_inner_step=False)
-                # update other's theta
+                # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
                 theta2_ = [theta2_[i] - args.lr_in * grad2[i] for i in
                            range(len(theta2_))]
 
@@ -1757,9 +1370,6 @@ def play(agent1, agent2, n_lookaheads, outer_steps, use_opp_model=False): #,prev
 
         # print
         if update % args.print_every == 0:
-            #             p1 = [p.item() for p in torch.sigmoid(agent1.theta)]
-            #             p2 = [p.item() for p in torch.sigmoid(agent2.theta)]
-            #             print('update', update, 'score (%.3f,%.3f)' % (score[0], score[1]) , 'policy (agent1) = {%.3f, %.3f, %.3f, %.3f, %.3f}' % (p1[0], p1[1], p1[2], p1[3], p1[4]),' (agent2) = {%.3f, %.3f, %.3f, %.3f, %.3f}' % (p2[0], p2[1], p2[2], p2[3], p2[4]))
             print("*" * 10)
             print("Epoch: {}".format(update + 1), flush=True)
             print(f"Score 0: {score[0]}")
@@ -1800,32 +1410,31 @@ if __name__ == "__main__":
     parser.add_argument("--outer_steps", type=int, default=1, help="outer loop steps for POLA")
     parser.add_argument("--lr_out", type=float, default=0.005,
                         help="outer loop learning rate: same learning rate across all policies for now")
-    parser.add_argument("--lr_in", type=float, default=0.05,
+    parser.add_argument("--lr_in", type=float, default=0.03,
                         help="inner loop learning rate (eta): this has no use in the naive learning case. Used for the gradient step done for the lookahead for other agents during LOLA (therefore, often scaled to be higher than the outer learning rate in non-proximal LOLA). Note that this has a different meaning for the Taylor approx vs. actual update versions. A value of eta=1 is perfectly reasonable for the Taylor approx version as this balances the scale of the gradient with the naive learning term (and will be multiplied by the outer learning rate after), whereas for the actual update version with neural net, 1 is way too big an inner learning rate. For prox, this is the learning rate on the inner prox loop so is not that important - you want big enough to be fast-ish, but small enough to converge.")
     parser.add_argument("--lr_v", type=float, default=0.001,
                         help="same learning rate across all policies for now. Should be around maybe 0.001 or less for neural nets to avoid instability")
     parser.add_argument("--gamma", type=float, default=0.96, help="discount rate")
     parser.add_argument("--n_update", type=int, default=5000, help="number of epochs to run")
     parser.add_argument("--len_rollout", type=int, default=50, help="How long we want the time horizon of the game to be (number of steps before termination/number of iterations of the IPD)")
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=4000)
     parser.add_argument("--seed", type=int, default=1, help="for seed")
     parser.add_argument("--hidden_size", type=int, default=32)
     parser.add_argument("--print_every", type=int, default=1, help="Print every x number of epochs")
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
     parser.add_argument("--inner_beta", type=float, default=0.0, help="for inner kl penalty with POLA")
-    parser.add_argument("--save_dir", type=str, default='.')
+    parser.add_argument("--save_dir", type=str, default='.', help="Where to save checkpoints")
     parser.add_argument("--checkpoint_every", type=int, default=1000, help="Epochs between checkpoint save")
     parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
     parser.add_argument("--ent_reg", type=float, default=0.0, help="entropy regularizer")
     parser.add_argument("--diff_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of different colour)")
     parser.add_argument("--diff_coin_cost", type=float, default=-2.0, help="changes problem setting (the cost to the opponent when you pick up a coin of their colour)")
     parser.add_argument("--same_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of same colour)")
-    parser.add_argument("--grid_size", type=int, default=3)
-    parser.add_argument("--optim", type=str, default="adam")
-    # parser.add_argument("--use_baseline", action="store_true", help="Use Baseline (critic) for variance reduction")
+    parser.add_argument("--grid_size", type=int, default=3, help="Grid size for Coin Game")
+    parser.add_argument("--optim", type=str, default="adam", help="Used only for the outer agent (in the out_lookahead)")
     parser.add_argument("--no_baseline", action="store_true", help="Use NO Baseline (critic) for variance reduction. Default is baseline using Loaded DiCE with GAE")
     parser.add_argument("--opp_model", action="store_true", help="Use Opponent Modeling")
-    parser.add_argument("--opp_model_steps_per_batch", type=int, default=1, help="How many steps to train opp model on eatch batch at the beginning of each POLA epoch")
+    parser.add_argument("--opp_model_steps_per_batch", type=int, default=1, help="How many steps to train opp model on each batch at the beginning of each POLA epoch")
     parser.add_argument("--opp_model_data_batches", type=int, default=100, help="How many batches of data (right now from rollouts) to train opp model on")
     parser.add_argument("--om_lr_p", type=float, default=0.005,
                         help="learning rate for opponent modeling (imitation/supervised learning) for policy")
@@ -1837,7 +1446,7 @@ if __name__ == "__main__":
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
     parser.add_argument("--init_state_coop", action="store_true", help="For IPD only: have the first state be CC instead of a separate start state")
     parser.add_argument("--split_coins", action="store_true", help="If true, then when both agents step on same coin, each gets 50% of the reward as if they were the only agent collecting that coin. Only tested with OGCoin so far")
-    parser.add_argument("--zero_vals", action="store_true", help="For testing/debug only. Set all values to be 0 in Loaded Dice Calculation")
+    parser.add_argument("--zero_vals", action="store_true", help="For testing/debug. Can also serve as another way to do no_baseline. Set all values to be 0 in Loaded Dice Calculation")
     parser.add_argument("--gae_lambda", type=float, default=1,
                         help="lambda for GAE (1 = monte carlo style, 0 = TD style)")
     parser.add_argument("--val_update_after_loop", action="store_true", help="Update values only after outer POLA loop finishes, not during the POLA loop")
@@ -1851,10 +1460,6 @@ if __name__ == "__main__":
         input_size = args.grid_size ** 2 * 4
         action_size = 4
         env = OGCoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
-    # elif args.env == "twocoin": # two coins at once (one for each agent)
-    #     input_size = args.grid_size ** 2 * 4
-    #     action_size = 4
-    #     env = CoinGameGPU(max_steps=args.len_rollout, batch_size=args.batch_size, grid_size=args.grid_size)
     elif args.env == "ipd":
         # input_size = 2 * 2 # n agents by n agents
         input_size = 3 * 2 # one hot repr dim by n agents
@@ -1868,9 +1473,6 @@ if __name__ == "__main__":
         agent2 = Agent(input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     else:
         agent1, agent2, coins_collected_info, prev_scores, vs_fixed_strat_scores = load_from_checkpoint()
-        # print(coins_collected_info)
-        # print(prev_scores)
-        # print(vs_fixed_strat_scores)
         print(torch.stack(prev_scores))
 
     use_baseline = True
