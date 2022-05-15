@@ -631,7 +631,7 @@ def get_jacobian(terms, param):
 
 def get_th_copy(th):
     if isinstance(th[0], NeuralNet):
-        new_th = init_custom(dims, args.using_nn, args.env,
+        new_th = init_custom(dims, args.using_nn,
                              args.nn_hidden_size, args.nn_extra_hidden_layers)
         for i in range(len(th)):
             copyNN(new_th[i], th[i])
@@ -1602,7 +1602,7 @@ if __name__ == "__main__":
             else:
                 raise NotImplementedError
 
-            th = init_custom(dims, args.using_nn, args.env,
+            th = init_custom(dims, args.using_nn,
                              args.nn_hidden_size, args.nn_extra_hidden_layers)
 
             # Run
