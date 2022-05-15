@@ -1,15 +1,11 @@
 # Some parts are loosely based on https://github.com/aletcher/stable-opponent-shaping/blob/master/stable_opponent_shaping.ipynb
 
 # NOTE: there is a lot of stuff that is unused in this file. Sorry for the loss in
-# readability due to that. That's what happens when you try a bajillion things
-# and it ends up that most of them don't work well (either in performance or runtime),
+# readability due to that. I tried a bunch of thing and it turned out that
+# most of them don't work well (either in performance or runtime),
 # or are too confusing or off-topic to be helpful.
 # Outer POLA is actually not that complicated. A lot of this is for the IFT version of
 # POLA which ended up not making it into the final version of the paper.
-# Yes, this is the cleaned up version of the file. You should have seen the version
-# before I cleaned it up.
-# Hopefully at least the naming convention (using verbose names for everything)
-# helps make up a bit for the lack of comments in some areas.
 
 import numpy as np
 import torch
