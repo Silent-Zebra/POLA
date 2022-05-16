@@ -14,11 +14,16 @@ I give a few examples here. There are a LOT for the plot, so here are just a few
 
 ### LOLA Tabular
 
-CF=1.1
+CF=1.1-1.6
 
 python LOLA_exact.py --n_agents 2 --print_every 10 --repeats 20 --num_epochs 30 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 3 --lr_policies_outer 50 --actual_update --base_cf_no_scale 1.1
 
+The above set of commands works with only changing --base_cf_no_scale. Of course you can use smaller learning rates for higher CF and that will work fine too.
+
+
 ### LOLA Func Approx
+
+Could not get CF 1.25 or below finding TFT with probability > 0.
 
 CF=1.33
 
@@ -51,6 +56,8 @@ CF=1.1
 python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.3 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.1
 
 ### (Outer) POLA Pre-Conditioned Tabular
+
+Could not get CF 1.1 finding TFT with probability > 0.
 
 CF=1.25
 
