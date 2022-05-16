@@ -34,9 +34,11 @@ python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 2
 
 ### (Outer) POLA Tabular
 
-CF=1.1
+CF=1.1-1.4
 
 python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 5 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.1
+
+The above set of commands works up to CF=1.4, with only changing --base_cf_no_scale
 
 ### (Outer) POLA Func Approx
 
