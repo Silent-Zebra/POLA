@@ -27,7 +27,7 @@ Could not get CF 1.25 or below finding TFT with probability > 0.
 
 CF=1.33
 
-python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.3 --lr_policies_outer 0.05 --actual_update --base_cf_no_scale 1.33
+python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.4 --lr_policies_outer 0.05 --actual_update --base_cf_no_scale 1.33
 
 CF=1.4
 
