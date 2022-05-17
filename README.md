@@ -37,51 +37,70 @@ CF=1.6
 
 python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.1 --lr_policies_outer 0.05 --actual_update --base_cf_no_scale 1.6
 
+### LOLA Pre-Conditioned Tabular
+
+Could not get anything finding TFT at all.
+
 ### (Outer) POLA Tabular
 
-CF=1.1-1.4
+CF=1.1-1.33
 
 python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 5 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.1
 
-The above set of commands works up to CF=1.4, with only changing --base_cf_no_scale
+python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 5 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.25
+
+python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 5 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.33
+
+CF=1.4
+
+python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 4 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.4
 
 CF=1.6
 
-python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 2 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.6
+python LOLA_exact.py --n_agents 2 --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 2.5 --lr_policies_outer 0.3 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.6
 
 ### (Outer) POLA Func Approx
 
 CF=1.1
 
-python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.3 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.1
+python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.3 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.1
 
 CF=1.25
 
-python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.25 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.25
+python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.25 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.13 --actual_update --base_cf_no_scale 1.25
 
 CF=1.33
 
-python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.2 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.33
+python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.25 --lr_policies_outer 0.02 --outer_exact_prox --outer_beta 0.13 --actual_update --base_cf_no_scale 1.33
 
 CF=1.4
 
-python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.17 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.4
+python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.2 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.4
 
 CF=1.6
 
-python LOLA_exact.py --n_agents 2 --using_nn --print_every 1 --repeats 20 --num_epochs 2 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.08 --lr_policies_outer 0.03 --outer_exact_prox --outer_beta 0.1 --actual_update --base_cf_no_scale 1.6
 
 ### (Outer) POLA Pre-Conditioned Tabular
 
-Could not get CF 1.1 finding TFT with probability > 0.
+CF=1.1
+
+python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2 --set_seed --seed 2 --lr_policies_inner 0.4 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.1
 
 CF=1.25
 
-python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.3 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.25
+python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2 --set_seed --seed 2 --lr_policies_inner 0.5 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.25
 
-CF=1.33-1.6
+CF=1.33
 
-python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2  --set_seed --seed 2 --lr_policies_inner 0.3 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.33
+python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2 --set_seed --seed 2 --lr_policies_inner 0.4 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.33
+
+CF=1.4
+
+python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2 --set_seed --seed 2 --lr_policies_inner 0.3 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.4
+
+CF=1.6
+
+python LOLA_exact.py --n_agents 2 --ill_condition --print_every 5 --repeats 20 --num_epochs 10 --init_state_representation 2 --set_seed --seed 2 --lr_policies_inner 0.3 --lr_policies_outer 0.05 --outer_exact_prox --outer_beta 0.5 --actual_update --base_cf_no_scale 1.6
 
 ## Commands used for Figure 2
 
