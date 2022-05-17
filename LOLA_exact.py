@@ -1638,14 +1638,16 @@ if __name__ == "__main__":
                 scores = G_ts_record[epoch]
                 policy0 = game.get_policy_for_all_states(th, 0)
                 policy1 = game.get_policy_for_all_states(th, 1)
-                at_least_one_tft = (policy0[0] < 0.6 and policy0[2] < 0.6) or (policy1[0] < 0.6 and policy1[1] < 0.6)
-                both_tft = (policy0[0] < 0.6 and policy0[2] < 0.6) and (policy1[0] < 0.6 and policy1[1] < 0.6)
+                tft_coop_threshold = 0.65
+                tft_return_threshold = 0.8
+                at_least_one_tft = (policy0[0] < tft_coop_threshold and policy0[2] < tft_coop_threshold) or (policy1[0] < tft_coop_threshold and policy1[1] < tft_coop_threshold)
+                both_tft = (policy0[0] < tft_coop_threshold and policy0[2] < tft_coop_threshold) and (policy1[0] < tft_coop_threshold and policy1[1] < tft_coop_threshold)
                 # if policy0[0] < 0.6 and policy0[2] < 0.6:
                 #     at_least_one_tft = True
                 # if policy1[0] < 0.6 and policy1[1] < 0.6:
                 #     at_least_one_tft = True
-                # if scores.mean() > (inf_coop_payout * 0.9) and both_tft:
-                if scores.mean() > (inf_coop_payout * 0.9) and at_least_one_tft:
+                if scores.mean() > (inf_coop_payout * tft_return_threshold) and both_tft:
+                # if scores.mean() > (inf_coop_payout * 0.9) and at_least_one_tft:
                     tft_found = True
                     # print("TFT Found")
                 # else:
