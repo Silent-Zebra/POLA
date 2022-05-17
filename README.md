@@ -31,11 +31,12 @@ python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 2
 
 CF=1.4
 
-python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2  --set_seed --seed 1 --lr_policies_inner 0.2 --lr_policies_outer 0.1 --actual_update --base_cf_no_scale 1.4
+python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.3 --lr_policies_outer 0.1 --actual_update --base_cf_no_scale 1.4
 
 CF=1.6
 
-python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.1 --lr_policies_outer 0.05 --actual_update --base_cf_no_scale 1.6
+python LOLA_exact.py --n_agents 2 --using_nn --nn_hidden_size 16 --print_every 20 --repeats 20 --num_epochs 100 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 0.12 --lr_policies_outer 0.05 --actual_update --base_cf_no_scale 1.6
+
 
 ### LOLA Pre-Conditioned Tabular
 
