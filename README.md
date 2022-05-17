@@ -8,9 +8,9 @@ The files are self-contained. For the plots (Figures 3 and 4), the workflow is t
 
 higher (for LOLA_exact.py) (https://github.com/facebookresearch/higher)
 
-## Example Commands used for Figure 1
+## Commands used for Figure 1
 
-I give a few examples here. There are a LOT for the plot, so here are just a few that tackle harder problem settings (the easier problem settings can use similar settings, otherwise it's not too hard to tune them. I don't give hyperparameters on the harder settings where as I tried several configurations but couldn't get any combination of hyperaparameters to find TFT with probability > 0). Init state representation 2 means the start state is different from the other states (0 = defect, 1 = cooperate)
+Init state representation 2 means the start state is different from the other states (0 = defect, 1 = cooperate)
 
 ### LOLA Tabular
 
