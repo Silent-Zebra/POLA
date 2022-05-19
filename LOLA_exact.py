@@ -1642,16 +1642,9 @@ if __name__ == "__main__":
                 tft_return_threshold = 0.8
                 at_least_one_tft = (policy0[0] < tft_coop_threshold and policy0[2] < tft_coop_threshold) or (policy1[0] < tft_coop_threshold and policy1[1] < tft_coop_threshold)
                 both_tft = (policy0[0] < tft_coop_threshold and policy0[2] < tft_coop_threshold) and (policy1[0] < tft_coop_threshold and policy1[1] < tft_coop_threshold)
-                # if policy0[0] < 0.6 and policy0[2] < 0.6:
-                #     at_least_one_tft = True
-                # if policy1[0] < 0.6 and policy1[1] < 0.6:
-                #     at_least_one_tft = True
                 if scores.mean() > (inf_coop_payout * tft_return_threshold) and both_tft:
-                # if scores.mean() > (inf_coop_payout * 0.9) and at_least_one_tft:
                     tft_found = True
-                    # print("TFT Found")
-                # else:
-                    # print("TFT Not Found")
+
             if tft_found:
                 print("TFT Found")
                 num_found_tft += 1
