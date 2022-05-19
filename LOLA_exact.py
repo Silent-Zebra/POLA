@@ -1,7 +1,7 @@
 # Some parts are loosely based on https://github.com/aletcher/stable-opponent-shaping/blob/master/stable_opponent_shaping.ipynb
 
 # NOTE: there is a lot of stuff that is unused in this file. Sorry for the loss in
-# readability due to that. I tried a bunch of thing and it turned out that
+# readability due to that. I tried a bunch of things and it turned out that
 # most of them don't work well (either in performance or runtime),
 # or are too confusing or off-topic to be helpful.
 # Outer POLA is actually not that complicated. A lot of this is for the IFT version of
