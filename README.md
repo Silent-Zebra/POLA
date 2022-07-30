@@ -16,7 +16,7 @@ Init state representation 2 means the start state is different from the other st
 
 CF=1.1-1.6
 
-python LOLA_exact.py --n_agents 2 --print_every 10 --repeats 20 --num_epochs 30 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 3 --lr_policies_outer 50 --actual_update --base_cf_no_scale 1.1
+python LOLA_exact.py --n_agents 2 --print_every 10 --repeats 20 --num_epochs 30 --init_state_representation 2 --set_seed --seed 1 --lr_policies_inner 3 --lr_policies_outer 25 --actual_update --base_cf_no_scale 1.1
 
 The above set of commands works with only changing --base_cf_no_scale. Of course you can use smaller learning rates for higher CF and that will work fine too.
 
