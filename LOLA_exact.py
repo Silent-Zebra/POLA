@@ -724,6 +724,9 @@ def build_policy_and_target_policy_dists(policy_to_build, target_pol_to_build,
     # Note the policy and targets are individual agent ones
     # Only used in tabular case so far
 
+    if ill_cond:
+        print("BE CAREFUL that the policies passed in are not already adjusted for the ill-cond")
+
     if policies_are_logits:
         # if args.ill_condition:
         if ill_cond:
@@ -764,34 +767,47 @@ def get_discounted_state_visitation_weighted_kl(kl_div_no_reduce, p_mat):
 
 
 
-def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes,
-           iters=0, max_iters=1000, threshold=1e-8, ill_cond=False):
+def prox_f(th_to_build_on, kl_div_target_th, game, i, j, prox_f_step_sizes,
+           iters=0, max_iters=10000, ill_cond=False):
     # For each other player, do the prox operator
     # (this function just does on a single player, it should be used within the loop iterating over all players)
     # We will do this by gradient descent on the proximal objective
     # Until we reach a fixed point, which tells use we have reached
     # the minimum of the prox objective, which is our prox operator result
+    # i is the self, j is the other agent index. Just used for the ill cond on OM only...
     fixed_point_reached = False
 
     new_pol = game.get_policy_for_all_states(th_to_build_on, j, ill_cond=ill_cond)
     curr_pol = new_pol.detach().clone()
 
+    # print(new_pol)
+    # print(torch.sigmoid(th_to_build_on[j]))
+
     while not fixed_point_reached:
 
-        inner_losses = game.get_exact_loss(th_to_build_on, ill_cond=ill_cond)
+        inner_losses = game.get_exact_loss(th_to_build_on, ill_cond=ill_cond, self_no_cond=(not args.ill_condition), self_index=i)
+        # inner_losses = game.get_exact_loss(th_to_build_on, ill_cond=ill_cond)
 
         policy = game.get_policy_for_all_states(th_to_build_on, j, ill_cond=ill_cond)
         target_policy = game.get_policy_for_all_states(kl_div_target_th, j, ill_cond=ill_cond)
 
+        # print("DEBUGG")
+        # print(policy)
+        # print(target_policy)
+
         policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-            policy, target_policy, j, policies_are_logits=False, ill_cond=ill_cond)
+            policy, target_policy, j, policies_are_logits=False, ill_cond=False)
+
+        # print("DEBUGG")
+        # print(policy_dist)
+        # print(target_policy_dist)
 
         kl_div_reduction = 'batchmean'
 
         if args.visitation_weighted_kl:
             kl_div_reduction = 'none'
 
-            p_mat = game.get_exact_loss(th_to_build_on, return_p_mat_only=True, ill_cond=ill_cond)
+            p_mat = game.get_exact_loss(th_to_build_on, return_p_mat_only=True, ill_cond=ill_cond, self_no_cond=(not args.ill_condition), self_index=i)
             if args.init_state_representation == 2:
                 p_mat = torch.cat((p_mat, torch.ones(1)))
             elif args.init_state_representation == 1:
@@ -813,60 +829,76 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes,
         # No eta here because we are going to solve it in the loop with many iterations anyway
 
         # Non-diff to make it nl loss on outer loop, and we will use the other_terms from ift
+        combined_grad_squared = 0
+
         with torch.no_grad():
             if isinstance(th_to_build_on[j], NeuralNet):
                 for param in th_to_build_on[j].parameters():
                     param_grad = get_gradient(loss_j, param)
+                    combined_grad_squared += (param_grad ** 2).sum()
                     param.data -= prox_f_step_sizes[j] * param_grad
 
             else:
-                th_to_build_on[j] -= prox_f_step_sizes[j] * get_gradient(loss_j,
-                                                                         th_to_build_on[
-                                                                             j])
+                pol_grad = get_gradient(loss_j, th_to_build_on[j])
+                combined_grad_squared += (pol_grad ** 2).sum()
+                th_to_build_on[j] -= prox_f_step_sizes[j] * pol_grad
+
+        combined_grad_l2 = combined_grad_squared ** (1./2.)
 
         prev_pol = curr_pol.detach().clone()
         new_pol = game.get_policy_for_all_states(th_to_build_on, j, ill_cond=ill_cond)
         curr_pol = new_pol.detach().clone()
 
-        iters += 1
-
-        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-            curr_pol, prev_pol, j, policies_are_logits=False, ill_cond=ill_cond)
-
-        curr_prev_pol_div = torch.nn.functional.kl_div(
-            input=torch.log(policy_dist),
-            target=target_policy_dist,
-            reduction=kl_div_reduction,
-            log_target=False)
-
-        curr_prev_pol_div_rev = torch.nn.functional.kl_div(
-            input=torch.log(target_policy_dist),
-            target=policy_dist,
-            reduction=kl_div_reduction,
-            log_target=False)
+        # policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+        #     curr_pol, prev_pol, j, policies_are_logits=False, ill_cond=ill_cond)
+        #
+        # curr_prev_pol_div = torch.nn.functional.kl_div(
+        #     input=torch.log(policy_dist),
+        #     target=target_policy_dist,
+        #     reduction=kl_div_reduction,
+        #     log_target=False)
+        #
+        # curr_prev_pol_div_rev = torch.nn.functional.kl_div(
+        #     input=torch.log(target_policy_dist),
+        #     target=policy_dist,
+        #     reduction=kl_div_reduction,
+        #     log_target=False)
 
 
-        # print("--INNER STEP--")
+
+
+        # if args.visitation_weighted_kl:
+        #     # This stuff was originally supposed to help with numerical precision issues but I actually think it doesn't make that much of a difference
+        #     curr_prev_pol_div = get_discounted_state_visitation_weighted_kl(
+        #         curr_prev_pol_div, p_mat)
+        #     curr_prev_pol_div_rev = get_discounted_state_visitation_weighted_kl(
+        #         curr_prev_pol_div_rev, p_mat)
+
+        # print(f"--INNER STEP {iters}--")
         # print("Prev pol:")
         # print(prev_pol)
         # print("Curr pol:")
         # print(curr_pol)
-        # print("KL div prev cur")
-        # print(curr_prev_pol_div)
+        # print(combined_grad_l2)
 
-        if args.visitation_weighted_kl:
-            # This stuff was originally supposed to help with numerical precision issues but I actually think it doesn't make that much of a difference
-            curr_prev_pol_div = get_discounted_state_visitation_weighted_kl(
-                curr_prev_pol_div, p_mat)
-            curr_prev_pol_div_rev = get_discounted_state_visitation_weighted_kl(
-                curr_prev_pol_div_rev, p_mat)
+        iters += 1
 
-        if (curr_prev_pol_div < threshold and curr_prev_pol_div_rev < threshold) or iters > max_iters:
+        l2_threshold = 1e-5
+        # if (curr_prev_pol_div < threshold and curr_prev_pol_div_rev < threshold) or iters > max_iters:
+        if combined_grad_l2 < l2_threshold or iters > max_iters:
             if args.print_prox_loops_info:
                 print("Inner prox iters used: {}".format(iters))
             if iters >= max_iters:
                 print("Reached max prox iters")
+                print(combined_grad_l2)
             fixed_point_reached = True
+
+            print(f"--INNER STEP {iters}--")
+            print("Prev pol:")
+            print(prev_pol)
+            print("Curr pol:")
+            print(curr_pol)
+            print(combined_grad_l2)
 
     if isinstance(th_to_build_on[j], NeuralNet):
         if args.opp_model and args.om_using_nn:
@@ -883,7 +915,7 @@ def prox_f(th_to_build_on, kl_div_target_th, game, j, prox_f_step_sizes,
 # and made as a method of that class...
 def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j, ill_cond=False):
     losses_for_ift = game.get_exact_loss(
-        inner_lookahead_th, ill_cond=ill_cond)  # Note that new_th has only agent j updated
+        inner_lookahead_th, ill_cond=ill_cond, self_no_cond=(not args.ill_condition), self_index=i)  # Note that new_th has only agent j updated
 
     if isinstance(inner_lookahead_th[j], NeuralNet):
 
@@ -902,7 +934,7 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j, ill_cond=Fal
     target_policy = game.get_policy_for_all_states(kl_div_target_th, j, ill_cond=ill_cond)
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        policy, target_policy, j, policies_are_logits=False, ill_cond=ill_cond)
+        policy, target_policy, j, policies_are_logits=False, ill_cond=False)
 
     kl_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -1011,7 +1043,7 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n,
 
             # For each other player, do the prox operator
             inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
-                                           game, j, prox_f_step_sizes,
+                                           game, i, j, prox_f_step_sizes,
                                            max_iters=args.prox_inner_max_iters,
                                            ill_cond=ill_cond)
             # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
@@ -1036,13 +1068,13 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
     if print_info:
         game.print_policies_for_all_states(new_th, ill_cond=args.ill_condition)
 
-    outer_loss = game.get_exact_loss(new_th, ill_cond=args.ill_condition)
+    outer_loss = game.get_exact_loss(new_th, ill_cond=args.ill_condition, self_no_cond=(not args.ill_condition), self_index=i)
 
     policy = game.get_policy_for_all_states(new_th, i, ill_cond=args.ill_condition)
     target_policy = game.get_policy_for_all_states(static_th_copy, i, ill_cond=args.ill_condition)
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        policy, target_policy, i, policies_are_logits=False, ill_cond=args.ill_condition)
+        policy, target_policy, i, policies_are_logits=False, ill_cond=False)
 
     kl_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -1090,7 +1122,7 @@ def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
         print(curr_iter)
 
     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-        curr_pol, prev_pol, i, policies_are_logits=False, ill_cond=args.ill_condition)
+        curr_pol, prev_pol, i, policies_are_logits=False, ill_cond=False)
 
     curr_prev_pol_div = torch.nn.functional.kl_div(
         input=torch.log(policy_dist),
@@ -1249,6 +1281,9 @@ def update_th_exact_value(th, game, opp_models=None):
     # opp_models is a list of lists, where each sublist is basically a th that
     # the agent i thinks all the other agents are using
 
+    if args.opp_model:
+        assert opp_models is not None
+
     assert args.actual_update
     # Do DiCE style rollouts except we can calculate exact Ls like follows
     if opp_models is not None:
@@ -1309,7 +1344,7 @@ def update_th_exact_value(th, game, opp_models=None):
                         prev_pol = game.get_policy_for_all_states(new_th, i, ill_cond=args.ill_condition)
 
                         policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-                            new_pol, prev_pol, i, policies_are_logits=False, ill_cond=args.ill_condition)
+                            new_pol, prev_pol, i, policies_are_logits=False)
 
                         kl_div_error_check = torch.nn.functional.kl_div(
                             input=torch.log(policy_dist),
@@ -1325,9 +1360,7 @@ def update_th_exact_value(th, game, opp_models=None):
                     if numerical_issue or kl_div_error_check > 20:
                         print("Numerical Error occured")
                         print(kl_div_error_check)
-
                         continue
-
                     else:
                         new_th = temp_new_th
 
@@ -1365,6 +1398,7 @@ def update_th_exact_value(th, game, opp_models=None):
                         new_th = get_th_copy(static_th_copy)
                         new_th[i] = th[i]
 
+                    # TODO see if this needs something like self_no_cond=(not args.ill_condition), self_index=i
                     inner_losses = game.get_exact_loss(new_th, ill_cond=args.ill_condition)
 
                     for j in range(n):
@@ -1392,6 +1426,9 @@ def update_th_exact_value(th, game, opp_models=None):
                         args.print_prox_loops_info, i, new_th, static_th_copy,
                         game, curr_pol, other_terms, outer_iters, None)
 
+                print(f"--OUTER STEP {outer_iters}--")
+                print(curr_pol)
+
                 if isinstance(new_th[i], torch.Tensor):
                     th[i] = new_th[i]
                 else:
@@ -1403,10 +1440,19 @@ def update_th_exact_value(th, game, opp_models=None):
             # th_being_updated = get_th_copy(static_th_copy)
 
             for outer_step in range(args.outer_steps):
-                # TODO ADD OUTER BETA (but not necessary if only 1 outer step)
+
+                # TODO rewrite this whole loop. Just make it modular and everything flows nicely
+                # Opp model should always be there. If no OM, just have the opp model be a copy of the other agent true policy
+                # Then we don't have all these random conditions
+                # Just clean up this whole thing. Reproduce the tabular and OM experimental results I had before first
+                # Then move on to NN.
 
                 # print(f"Outer step: {outer_step}")
                 # game.print_policies_for_all_states(th)
+
+                # TODO AUG 4 should really just have no specification of inner steps
+                # Just exact inner prox, and the threshold is basically number of inner steps
+                # So that we shouldn't have duplicate code everywhere.
 
                 if args.opp_model:
                     if args.om_using_nn:
@@ -1418,6 +1464,11 @@ def update_th_exact_value(th, game, opp_models=None):
                                                          )
                         new_th[i] = th[i] # th here is being updated
 
+                        if args.using_nn:
+                            raise NotImplementedError # TODO Perhaps just need th_with_only_agent_i_updated again here
+
+
+
                         # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
 
                     else:
@@ -1427,12 +1478,15 @@ def update_th_exact_value(th, game, opp_models=None):
 
                 else:
                     if args.using_nn:
-                        if args.outer_steps > 1:
-                            raise NotImplementedError
-                        # prob need to do something similar to new_th[i] = th_being_updated[i] but here we have nn too...
+                        # if args.outer_steps > 1:
+                        #     raise NotImplementedError
+                        th_with_only_agent_i_updated = copy.deepcopy(
+                            static_th_copy)
+                        th_with_only_agent_i_updated[i] = th[i]
+
                         new_th, optims_th_primes = \
                             construct_f_th_and_diffoptim(n_agents, i,
-                                                         static_th_copy,
+                                                         th_with_only_agent_i_updated,
                                                          lr_policies_outer,
                                                          lr_policies_inner
                                                          )
@@ -1448,10 +1502,23 @@ def update_th_exact_value(th, game, opp_models=None):
                 # Then each player calcs the losses
                 other_terms = None
                 if args.inner_exact_prox:
-                    new_th, other_terms = inner_exact_loop_step(new_th,
-                                                                static_th_copy,
-                                                                game, i, n,
-                                                                prox_f_step_sizes=lr_policies_inner)
+                    if args.opp_model:
+                        target_th = om_static_copy[i]
+                    else:
+                        target_th = static_th_copy
+                    temp_new_th, other_terms = inner_exact_loop_step(new_th,
+                                                                     target_th,
+                                                                     game, i, n,
+                                                                     prox_f_step_sizes=lr_policies_inner)
+                    new_th = temp_new_th
+
+                    if args.using_nn:
+                        new_th, optims_th_primes = \
+                            construct_f_th_and_diffoptim(n_agents, i,
+                                                         new_th,
+                                                         lr_policies_outer,
+                                                         lr_policies_inner
+                                                         )
                     # TODO modify inner exact loop step to be based on om_precond
                     # Test this, to see that the precond policy is correct
                     # and is being updated correctly
@@ -1459,7 +1526,7 @@ def update_th_exact_value(th, game, opp_models=None):
 
                 else:
                     # TODO get this working with precond first
-                    if args.opp_model and args.om_using_nn:
+                    if args.opp_model and args.om_using_nn: # TODO should be just if args.opp_model?
                         dims_to_use = om_dims
                     else:
                         dims_to_use = dims
@@ -1542,7 +1609,27 @@ def update_th_exact_value(th, game, opp_models=None):
                         # Finally we rewrite the th by copying from the created copies
                         th[i] = new_th[i]
                     else:
-                        raise NotImplementedError
+                        print(other_terms)
+                        print(outer_losses)
+                        game.print_policies_for_all_states(th)
+
+                        optim_update(optims_th_primes[i], outer_losses[i],
+                                     new_th[i].parameters())
+
+                        game.print_policies_for_all_states(th)
+                        1/0
+
+                        counter = 0
+                        sum_terms = sum(other_terms)
+                        for param in new_th[i].parameters():
+                            param_len = param.flatten().shape[0]
+                            term_to_add = sum_terms[
+                                          counter: counter + param_len]
+                            param.data -= lr_policies_outer[
+                                              i] * term_to_add.reshape(
+                                param.shape)
+                            counter += param_len
+
 
                 else:
                     if args.taylor_with_actual_update:
@@ -1577,6 +1664,11 @@ def update_th_exact_value(th, game, opp_models=None):
                                      new_th[i].parameters())
 
                         copyNN(th[i], new_th[i])
+
+                policy = game.get_policy_for_all_states(
+                    th, i, ill_cond=args.ill_condition)
+                print(f"Outer step: {outer_step}")
+                print(policy)
 
                 # th_being_updated[i] = new_th[i]
 
@@ -1680,7 +1772,7 @@ if __name__ == "__main__":
                         help="print some additional info for the prox loop iters")
     parser.add_argument("--prox_threshold", type=float, default=1e-8,
                         help="Threshold for KL divergence below which we consider a fixed point to have been reached for the proximal LOLA. Recommended not to go to higher than 1e-8 if you want something resembling an actual fixed point")
-    parser.add_argument("--prox_inner_max_iters", type=int, default=5000,
+    parser.add_argument("--prox_inner_max_iters", type=int, default=10000,
                         help="Maximum inner proximal steps to take before timeout")
     parser.add_argument("--prox_outer_max_iters", type=int, default=5000,
                         help="Maximum outer proximal steps to take before timeout")
@@ -1710,7 +1802,7 @@ if __name__ == "__main__":
                         help="only in the exact case, get an exactly correct OM (up to some threshold)")
     parser.add_argument("--om_threshold", type=float, default=1e-7,
                         help="Threshold for KL divergence below which we consider the exact OM to have converged to the real opponent policy")
-    parser.add_argument("--om_lr_p", type=float, default=0.005,
+    parser.add_argument("--om_lr_p", type=float, default=0.2,
                         help="learning rate for opponent modeling (imitation/supervised learning) for policy")
     parser.add_argument("--om_lr_v", type=float, default=0.001,
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
