@@ -829,6 +829,7 @@ def prox_f(th_to_build_on, kl_div_target_th, game, i, j, prox_f_step_sizes,
         # No eta here because we are going to solve it in the loop with many iterations anyway
 
         # Non-diff to make it nl loss on outer loop, and we will use the other_terms from ift
+        # (basically no need for grad through the optim process, we only need the fixed point, and will calculate grad there for IFT)
         combined_grad_squared = 0
 
         with torch.no_grad():
@@ -1015,13 +1016,14 @@ def get_ift_terms(inner_lookahead_th, kl_div_target_th, game, i, j, ill_cond=Fal
 
 
 def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n,
-                          prox_f_step_sizes, opp_models = None):
+                          prox_f_step_sizes, opp_models = None, optims_th_primes = None):
+
     other_terms = []
 
-    if args.opp_model:
-        new_th = get_th_copy(starting_th, dims_to_use=om_dims)
-    else:
-        new_th = get_th_copy(starting_th)
+    # if args.opp_model:
+    #     new_th = get_th_copy(starting_th, dims_to_use=om_dims)
+    # else:
+    #     new_th = get_th_copy(starting_th)
 
     # i is the agent doing the rolling out of the other agents
     for j in range(n):
@@ -1029,8 +1031,12 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n,
             # Inner lookahead th has only agent j's th being updated
             if args.opp_model:
                 inner_lookahead_th = get_th_copy(starting_th, dims_to_use=om_dims)
+                new_th = get_th_copy(starting_th, dims_to_use=om_dims)
+
             else:
                 inner_lookahead_th = get_th_copy(starting_th)
+                new_th = get_th_copy(starting_th)
+
             # inner_lookahead_th = get_th_copy(starting_th)
 
             # Inner loop essentially
@@ -1042,15 +1048,19 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n,
                 ill_cond = args.ill_condition
 
             # For each other player, do the prox operator
-            inner_lookahead_th[j] = prox_f(inner_lookahead_th, kl_div_target_th,
-                                           game, i, j, prox_f_step_sizes,
-                                           max_iters=args.prox_inner_max_iters,
-                                           ill_cond=ill_cond)
+
             # new_th[j] = inner_lookahead_th[j].detach().clone().requires_grad_()
             # You could do this without the detach, and using x = x - grad instead of -= above, and no torch.no_grad
             # And then differentiate through the entire unrolled process
             # But we want instead fixed point / IFT for efficiency and not having to differentiate through entire unroll process.
             # For nice IFT primer, check out https://implicit-layers-tutorial.org/implicit_functions/
+
+
+            inner_lookahead_th[j] = prox_f(inner_lookahead_th,
+                                           kl_div_target_th,
+                                           game, i, j, prox_f_step_sizes,
+                                           max_iters=args.prox_inner_max_iters,
+                                           ill_cond=ill_cond)
 
             grad2_V1, grad_th1_th2prime = get_ift_terms(inner_lookahead_th,
                                                         kl_div_target_th,
@@ -1058,9 +1068,71 @@ def inner_exact_loop_step(starting_th, kl_div_target_th, game, i, n,
 
             other_terms.append(grad2_V1 @ grad_th1_th2prime)
 
+
             new_th[j] = inner_lookahead_th[j]
 
     return new_th, other_terms
+
+def inner_loop_step(game, th_with_only_agent_i_updated, starting_th, i, lr_policies_inner, lr_policies_outer, optims_th_primes=None):
+    # Do differentiable updates and produce a new_th after all agents updated
+    new_th = get_th_copy(th_with_only_agent_i_updated)
+
+    for j in range(len(th_with_only_agent_i_updated)):
+        if j != i:
+
+            inner_lookahead_th = get_th_copy(th_with_only_agent_i_updated)
+
+            for inner_step in range(args.prox_inner_max_iters):
+                if args.opp_model:
+                    if args.ill_condition:
+                        inner_losses = game.get_exact_loss(inner_lookahead_th,
+                                                           ill_cond=args.om_precond)
+                    else:
+                        inner_losses = game.get_exact_loss(inner_lookahead_th,
+                                                           ill_cond=args.om_precond,
+                                                           self_no_cond=True,
+                                                           self_index=i)
+                else:
+                    inner_losses = game.get_exact_loss(inner_lookahead_th,
+                                                       ill_cond=args.ill_condition)
+
+                # print("TESTING ONLY")
+                # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
+
+                if args.opp_model:
+                    use_ill_cond = args.om_precond
+                else:
+                    use_ill_cond = args.ill_condition
+
+
+                policy = game.get_policy_for_all_states(
+                    inner_lookahead_th, j, ill_cond=use_ill_cond)
+                target_policy = game.get_policy_for_all_states(
+                    starting_th, j,
+                    ill_cond=use_ill_cond)
+                kl_div = get_kl_div_from_policies(policy, target_policy, j)
+                inner_losses[j] += kl_div * args.inner_beta
+
+                if isinstance(inner_lookahead_th[j], torch.Tensor):
+                    inner_lookahead_th[j] = inner_lookahead_th[j] - lr_policies_inner[
+                        j] * get_gradient(inner_losses[j],
+                                          inner_lookahead_th[j])
+                else:
+                    assert optims_th_primes is not None
+                    optim_update(optims_th_primes[j],
+                                 inner_losses[j],
+                                 inner_lookahead_th[j].parameters())
+
+                # print("TESTING ONLY")
+                # game.print_policies_for_all_states(new_th,
+                #                                    ill_cond=args.om_precond)
+            new_th[j] = inner_lookahead_th[j]
+
+    return new_th
+
+
+# print("AFTER INNER UPDATES")
+# game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
 
 
 def outer_exact_loop_step(print_info, i, new_th, static_th_copy, game, curr_pol,
@@ -1264,6 +1336,54 @@ def update_th_taylor_approx_exact_value(th, game):
     return th
 
 
+
+def get_new_th_and_optims(th, n_agents, i, lr_policies_outer, lr_policies_inner, static_th_copy, om_static_copy=None):
+    optims_th_primes = None
+    if args.opp_model:
+        assert om_static_copy is not None
+        if args.om_using_nn:
+            new_th, optims_th_primes = \
+                construct_f_th_and_diffoptim(n_agents, i,
+                                             om_static_copy[i],
+                                             lr_policies_outer,
+                                             lr_policies_inner
+                                             )
+            new_th[i] = th[i]  # th here is being updated
+
+            if args.using_nn:
+                raise NotImplementedError  # TODO Perhaps just need th_with_only_agent_i_updated again here
+
+            # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
+
+        else:
+            new_th = get_th_copy(om_static_copy[i])
+            new_th[i] = th[i]  # replace an opp model of self with the actual self model
+            # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
+
+    else:
+        if args.using_nn:
+            # if args.outer_steps > 1:
+            #     raise NotImplementedError
+            th_with_only_agent_i_updated = copy.deepcopy(
+                static_th_copy)
+            th_with_only_agent_i_updated[i] = th[i]
+
+            new_th, optims_th_primes = \
+                construct_f_th_and_diffoptim(n_agents, i,
+                                             th_with_only_agent_i_updated,
+                                             lr_policies_outer,
+                                             lr_policies_inner
+                                             )
+
+
+        else:
+            new_th = get_th_copy(static_th_copy)
+            new_th[i] = th[i]
+
+    return new_th, optims_th_primes
+
+
+
 # TODO MAY 20 NOT FIXED UP YET FOR OM. Check every step of the way carefully
 # NOT YET DONE THE ACTUAL OPPONENT MODELING
 # Also yes I think, just in the IPD, param on opponent matter less
@@ -1277,7 +1397,8 @@ def update_th_taylor_approx_exact_value(th, game):
 # SO what I should do instead is: focus on cleaning up the appendix I have right now. ANd can schedule a meeting to discuss, maybe Monday or so
 # Clean up appendix, then tell profs good to look at and also my thoughts on the OM experiments. Or whatever else they want.
 
-def update_th_exact_value(th, game, opp_models=None):
+
+def update_th_exact_value_outer_exact_prox(th, game, opp_models=None):
     # opp_models is a list of lists, where each sublist is basically a th that
     # the agent i thinks all the other agents are using
 
@@ -1288,121 +1409,247 @@ def update_th_exact_value(th, game, opp_models=None):
     # Do DiCE style rollouts except we can calculate exact Ls like follows
     if opp_models is not None:
         om_static_copy = get_th_copy(opp_models)
-        # for oms in opp_models:
-        #     for i in range(len(oms)):
-        #         print_exact_policy(oms, i)
+        raise NotImplementedError
 
     static_th_copy = get_th_copy(th)
     n = len(th)
 
     for i in range(n):
 
-        if args.outer_exact_prox:
+        fixed_point_reached = False
+        outer_iters = 0
+
+        curr_pol = game.get_policy_for_all_states(th, i,
+                                                  ill_cond=args.ill_condition).detach()  # just an initialization, will be updated in the outer step loop, ill_cond=args.ill_condition)
+
+        optims_th_primes = None
+        if args.inner_exact_prox:
+            if args.using_nn:
+                # Do only once if we have inner_exact_prox
+                th_with_only_agent_i_updated = copy.deepcopy(
+                    static_th_copy)
+                th_with_only_agent_i_updated[i] = th[i]
+
+                new_th, optims_th_primes = \
+                    construct_f_th_and_diffoptim(n_agents, i,
+                                                 th_with_only_agent_i_updated,
+                                                 lr_policies_outer,
+                                                 lr_policies_inner
+                                                 )
+            else:
+                new_th = get_th_copy(static_th_copy)
+                new_th[i] = th[i]
+
+        while (not fixed_point_reached) and (outer_iters < args.prox_outer_max_iters):
+
+            # --- INNER LOOP ---
+            other_terms = None
+            if args.inner_exact_prox:
+                temp_new_th, other_terms = inner_exact_loop_step(new_th,
+                                                                 static_th_copy,
+                                                                 game, i, n,
+                                                                 prox_f_step_sizes=lr_policies_inner,
+                                                                 optims_th_primes=optims_th_primes)
+
+                # numerical_issue = False
+                # try:
+                #     new_pol = game.get_policy_for_all_states(temp_new_th, i,
+                #                                              ill_cond=args.ill_condition)
+                #     prev_pol = game.get_policy_for_all_states(new_th, i,
+                #                                               ill_cond=args.ill_condition)
+                #
+                #     policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+                #         new_pol, prev_pol, i, policies_are_logits=False)
+                #
+                #     kl_div_error_check = torch.nn.functional.kl_div(
+                #         input=torch.log(policy_dist),
+                #         target=target_policy_dist,
+                #         reduction='batchmean',
+                #         log_target=False)
+                #
+                #     print(kl_div_error_check)
+                #
+                # except:
+                #     numerical_issue = True
+                #
+                # if numerical_issue or kl_div_error_check > 20:
+                #     print("Numerical Error occured")
+                #     print(kl_div_error_check)
+                #     continue
+                # else:
+                #     new_th = temp_new_th
+
+                new_th = temp_new_th
+
+            else:
+                if args.opp_model:
+                    raise NotImplementedError
+                    # remember th has only agent i being updated
+                    new_th, optims_th_primes = \
+                        get_new_th_and_optims(th, n_agents, i,
+                                              lr_policies_outer,
+                                              lr_policies_inner, static_th_copy,
+                                              om_static_copy)
+
+                else:
+                    new_th, optims_th_primes = \
+                        get_new_th_and_optims(th, n_agents, i,
+                                              lr_policies_outer,
+                                              lr_policies_inner, static_th_copy)
+                    # optims_th_primes will be none if not args.using_nn
+
+
+                # TODO see if this needs something like self_no_cond=(not args.ill_condition), self_index=i
+                inner_losses = game.get_exact_loss(new_th,
+                                                   ill_cond=args.ill_condition)
+
+                for j in range(n):
+                    # Inner loop step essentially
+                    # Each player on the copied th does a naive update (must be differentiable!)
+                    if j != i:
+                        if isinstance(new_th[j], torch.Tensor):
+                            new_th[j] = new_th[j] - lr_policies_inner[
+                                j] * get_gradient(inner_losses[j],
+                                                  new_th[j])
+                        else:
+                            optim_update(optims_th_primes[j],
+                                         inner_losses[j],
+                                         new_th[j].parameters())
+
+            outer_iters += 1
+            if args.using_nn:
+                new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
+                    args.print_prox_loops_info, i, new_th, static_th_copy,
+                    game,
+                    curr_pol, other_terms, outer_iters,
+                    optims_th_primes)
+            else:
+                new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
+                    args.print_prox_loops_info, i, new_th, static_th_copy,
+                    game, curr_pol, other_terms, outer_iters, None)
+
+            print(f"--OUTER STEP {outer_iters}--")
+            print(curr_pol)
+
+            if isinstance(new_th[i], torch.Tensor):
+                th[i] = new_th[i]
+            else:
+                copyNN(th[i], new_th[i])
+
+    return th
+
+
+def update_th_exact_value_outer_steps(th, game, opp_models=None):
+    # opp_models is a list of lists, where each sublist is basically a th that
+    # the agent i thinks all the other agents are using
+
+    if args.opp_model:
+        assert opp_models is not None
+
+    assert args.actual_update
+    # Do DiCE style rollouts except we can calculate exact Ls like follows
+    if opp_models is not None:
+        om_static_copy = get_th_copy(opp_models)
+
+    static_th_copy = get_th_copy(th)
+    n = len(th)
+
+    for i in range(n):
+
+        for outer_step in range(args.outer_steps):
+
+            # TODO rewrite this whole loop. Just make it modular and everything flows nicely
+            # Opp model should always be there. If no OM, just have the opp model be a copy of the other agent true policy
+            # Then we don't have all these random conditions
+            # Just clean up this whole thing. Reproduce the tabular and OM experimental results I had before first
+            # Then move on to NN.
+
+            # TODO AUG 4 should really just have no specification of inner steps
+            # Just exact inner prox, and the threshold is basically number of inner steps
+            # So that we shouldn't have duplicate code everywhere.
+
 
             if args.opp_model:
-                raise NotImplementedError
-                # TODO For this would probably have to go through all of the places
-                # with get_policy_for_all_states
-                # especially for the ill conditioned/precond stuff
+                new_th, optims_th_primes = \
+                    get_new_th_and_optims(th, n_agents, i, lr_policies_outer,
+                                          lr_policies_inner, static_th_copy, om_static_copy)
+
+            else:
+                new_th, optims_th_primes = \
+                    get_new_th_and_optims(th, n_agents, i,
+                                          lr_policies_outer,
+                                          lr_policies_inner, static_th_copy)
+                # optims_th_primes will be none if not args.using_nn
 
 
-            fixed_point_reached = False
-            outer_iters = 0
-
-            curr_pol = game.get_policy_for_all_states(th, i, ill_cond=args.ill_condition).detach()  # just an initialization, will be updated in the outer step loop, ill_cond=args.ill_condition)
-
+            # --- INNER LOOP ---
+            # Then each player calcs the losses
+            other_terms = None
             if args.inner_exact_prox:
-                if args.using_nn:
-                    # Do only once if we have inner_exact_prox
-                    th_with_only_agent_i_updated = copy.deepcopy(
-                        static_th_copy)
-                    th_with_only_agent_i_updated[i] = th[i]
+                if args.opp_model:
+                    target_th = om_static_copy[i]
+                else:
+                    target_th = static_th_copy
+                temp_new_th, other_terms = inner_exact_loop_step(new_th,
+                                                                 target_th,
+                                                                 game, i, n,
+                                                                 prox_f_step_sizes=lr_policies_inner)
+                new_th = temp_new_th
 
+                if args.using_nn:
                     new_th, optims_th_primes = \
                         construct_f_th_and_diffoptim(n_agents, i,
-                                                     th_with_only_agent_i_updated,
+                                                     new_th,
                                                      lr_policies_outer,
                                                      lr_policies_inner
                                                      )
+                # TODO modify inner exact loop step to be based on om_precond
+                # Test this, to see that the precond policy is correct
+                # and is being updated correctly
+
+
+            else:
+                # TODO get this working with precond first
+                if args.opp_model and args.om_using_nn:  # TODO should be just if args.opp_model?
+                    dims_to_use = om_dims
                 else:
-                    new_th = get_th_copy(static_th_copy)
-                    new_th[i] = th[i]
+                    dims_to_use = dims
 
-            while not fixed_point_reached:
-
-                # --- INNER LOOP ---
-                other_terms = None
-                if args.inner_exact_prox:
-                    temp_new_th, other_terms = inner_exact_loop_step(new_th,
-                                                                     static_th_copy,
-                                                                     game, i, n,
-                                                                     prox_f_step_sizes=lr_policies_inner)
-
-                    numerical_issue = False
-                    try:
-                        new_pol = game.get_policy_for_all_states(temp_new_th, i, ill_cond=args.ill_condition)
-                        prev_pol = game.get_policy_for_all_states(new_th, i, ill_cond=args.ill_condition)
-
-                        policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
-                            new_pol, prev_pol, i, policies_are_logits=False)
-
-                        kl_div_error_check = torch.nn.functional.kl_div(
-                            input=torch.log(policy_dist),
-                            target=target_policy_dist,
-                            reduction='batchmean',
-                            log_target=False)
-
-                        print(kl_div_error_check)
-
-                    except:
-                        numerical_issue = True
-
-                    if numerical_issue or kl_div_error_check > 20:
-                        print("Numerical Error occured")
-                        print(kl_div_error_check)
-                        continue
+                starting_th = get_th_copy(new_th, dims_to_use=dims_to_use)
+                for inner_step in range(args.inner_steps):
+                    if args.opp_model:
+                        if args.ill_condition:
+                            inner_losses = game.get_exact_loss(new_th,
+                                                               ill_cond=args.om_precond)
+                        else:
+                            inner_losses = game.get_exact_loss(new_th,
+                                                               ill_cond=args.om_precond,
+                                                               self_no_cond=True,
+                                                               self_index=i)
                     else:
-                        new_th = temp_new_th
+                        inner_losses = game.get_exact_loss(new_th,
+                                                           ill_cond=args.ill_condition)
 
-                    if args.using_nn:
-                        new_th, optims_th_primes = \
-                            construct_f_th_and_diffoptim(n_agents, i,
-                                                         new_th,
-                                                         lr_policies_outer,
-                                                         lr_policies_inner
-                                                         )
+                    # print("TESTING ONLY")
+                    # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
 
-                else:
-                    if args.using_nn:
-                        # Reconstruct on every outer loop iter. This is if no inner exact prox
-                        # The idea is this:
-                        # Starting from the static th, take steps updating all the other player policies
-                        # Then update own policy, ONCE
-                        # Then we repeat, starting from the static th for all other players' policies
-                        # but now we have the old policies of all other players but our own updated policy
-                        # Then the other players again solve the prox objective (or do their update step), but with our new policy
-                        # And then we take another step
-                        # And repeat
-                        # WITH OUTER POLA WE JUST TAKE A SINGLE INNER STEP
-                        th_with_only_agent_i_updated = copy.deepcopy(
-                            static_th_copy)
-                        th_with_only_agent_i_updated[i] = th[i]
-
-                        new_th, optims_th_primes = \
-                            construct_f_th_and_diffoptim(n_agents, i,
-                                                         th_with_only_agent_i_updated,
-                                                         lr_policies_outer,
-                                                         lr_policies_inner
-                                                         )
+                    if args.opp_model:
+                        use_ill_cond = args.om_precond
                     else:
-                        new_th = get_th_copy(static_th_copy)
-                        new_th[i] = th[i]
+                        use_ill_cond = args.ill_condition
 
-                    # TODO see if this needs something like self_no_cond=(not args.ill_condition), self_index=i
-                    inner_losses = game.get_exact_loss(new_th, ill_cond=args.ill_condition)
+                    for ii in range(len(th)):
+                        policy = game.get_policy_for_all_states(
+                            new_th, ii, ill_cond=use_ill_cond)
+                        target_policy = game.get_policy_for_all_states(starting_th,
+                                                                       ii,
+                                                                       ill_cond=use_ill_cond)
+                        kl_div = get_kl_div_from_policies(policy, target_policy, ii)
+                        inner_losses[ii] += kl_div * args.inner_beta
+
 
                     for j in range(n):
-                        # Inner loop step essentially
+                        # Inner loop essentially
                         # Each player on the copied th does a naive update (must be differentiable!)
                         if j != i:
                             if isinstance(new_th[j], torch.Tensor):
@@ -1414,265 +1661,496 @@ def update_th_exact_value(th, game, opp_models=None):
                                              inner_losses[j],
                                              new_th[j].parameters())
 
-                outer_iters += 1
-                if args.using_nn:
-                    new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
-                        args.print_prox_loops_info, i, new_th, static_th_copy,
-                        game,
-                        curr_pol, other_terms, outer_iters,
-                        optims_th_primes)
-                else:
-                    new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
-                        args.print_prox_loops_info, i, new_th, static_th_copy,
-                        game, curr_pol, other_terms, outer_iters, None)
+                    # print("TESTING ONLY")
+                    # game.print_policies_for_all_states(new_th,
+                    #                                    ill_cond=args.om_precond)
+                # print("AFTER INNER UPDATES")
+                # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
 
-                print(f"--OUTER STEP {outer_iters}--")
-                print(curr_pol)
+            if args.print_inner_rollouts:
+                print_exact_policy(new_th, i, ill_cond=args.ill_condition)
+
+            # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
+
+            # print(args.om_precond)
+            # print(not args.ill_condition)
+            outer_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond,
+                                               self_no_cond=(
+                                                   not args.ill_condition),
+                                               self_index=i)
+
+            if other_terms is not None:
+                if args.taylor_with_actual_update:
+                    raise NotImplementedError
 
                 if isinstance(new_th[i], torch.Tensor):
+                    with torch.no_grad():
+                        new_th[i] -= lr_policies_outer[i] * (get_gradient(
+                            outer_losses[i], new_th[i]) + sum(other_terms))
+                    # Finally we rewrite the th by copying from the created copies
                     th[i] = new_th[i]
                 else:
-                    copyNN(th[i], new_th[i])
+                    print(other_terms)
+                    print(outer_losses)
+                    game.print_policies_for_all_states(th)
+
+                    optim_update(optims_th_primes[i], outer_losses[i],
+                                 new_th[i].parameters())
+
+                    game.print_policies_for_all_states(th)
+                    1 / 0
+
+                    counter = 0
+                    sum_terms = sum(other_terms)
+                    for param in new_th[i].parameters():
+                        param_len = param.flatten().shape[0]
+                        term_to_add = sum_terms[
+                                      counter: counter + param_len]
+                        param.data -= lr_policies_outer[
+                                          i] * term_to_add.reshape(
+                            param.shape)
+                        counter += param_len
 
 
-        else:
+            else:
 
-            # th_being_updated = get_th_copy(static_th_copy)
-
-            for outer_step in range(args.outer_steps):
-
-                # TODO rewrite this whole loop. Just make it modular and everything flows nicely
-                # Opp model should always be there. If no OM, just have the opp model be a copy of the other agent true policy
-                # Then we don't have all these random conditions
-                # Just clean up this whole thing. Reproduce the tabular and OM experimental results I had before first
-                # Then move on to NN.
-
-                # print(f"Outer step: {outer_step}")
-                # game.print_policies_for_all_states(th)
-
-                # TODO AUG 4 should really just have no specification of inner steps
-                # Just exact inner prox, and the threshold is basically number of inner steps
-                # So that we shouldn't have duplicate code everywhere.
-
-                if args.opp_model:
-                    if args.om_using_nn:
-                        new_th, optims_th_primes = \
-                            construct_f_th_and_diffoptim(n_agents, i,
-                                                         om_static_copy[i],
-                                                         lr_policies_outer,
-                                                         lr_policies_inner
-                                                         )
-                        new_th[i] = th[i] # th here is being updated
-
-                        if args.using_nn:
-                            raise NotImplementedError # TODO Perhaps just need th_with_only_agent_i_updated again here
-
-
-
-                        # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
-
-                    else:
-                        new_th = get_th_copy(om_static_copy[i])
-                        new_th[i] = th[i] # replace an opp model of self with the actual self model
-                        # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
-
-                else:
-                    if args.using_nn:
-                        # if args.outer_steps > 1:
-                        #     raise NotImplementedError
-                        th_with_only_agent_i_updated = copy.deepcopy(
-                            static_th_copy)
-                        th_with_only_agent_i_updated[i] = th[i]
-
-                        new_th, optims_th_primes = \
-                            construct_f_th_and_diffoptim(n_agents, i,
-                                                         th_with_only_agent_i_updated,
-                                                         lr_policies_outer,
-                                                         lr_policies_inner
-                                                         )
-
-
-                    else:
-                        new_th = get_th_copy(static_th_copy)
-                        new_th[i] = th[i]
-
-                do_comparison = False
-
-                # --- INNER LOOP ---
-                # Then each player calcs the losses
-                other_terms = None
-                if args.inner_exact_prox:
-                    if args.opp_model:
-                        target_th = om_static_copy[i]
-                    else:
-                        target_th = static_th_copy
-                    temp_new_th, other_terms = inner_exact_loop_step(new_th,
-                                                                     target_th,
-                                                                     game, i, n,
-                                                                     prox_f_step_sizes=lr_policies_inner)
-                    new_th = temp_new_th
-
-                    if args.using_nn:
-                        new_th, optims_th_primes = \
-                            construct_f_th_and_diffoptim(n_agents, i,
-                                                         new_th,
-                                                         lr_policies_outer,
-                                                         lr_policies_inner
-                                                         )
-                    # TODO modify inner exact loop step to be based on om_precond
-                    # Test this, to see that the precond policy is correct
-                    # and is being updated correctly
-
-
-                else:
-                    # TODO get this working with precond first
-                    if args.opp_model and args.om_using_nn: # TODO should be just if args.opp_model?
-                        dims_to_use = om_dims
-                    else:
-                        dims_to_use = dims
-
-                    starting_th = get_th_copy(new_th, dims_to_use=dims_to_use)
-                    for inner_step in range(args.inner_steps):
-                        if args.opp_model:
-                            if args.ill_condition:
-                                inner_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond)
-                            else:
-                                inner_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond, self_no_cond=True, self_index=i)
-                        else:
-                            inner_losses = game.get_exact_loss(new_th, ill_cond=args.ill_condition)
-
-                        # print("TESTING ONLY")
-                        # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
-
-                        if args.opp_model:
-                            use_ill_cond = args.om_precond
-                        else:
-                            use_ill_cond = args.ill_condition
-
-                        for ii in range(len(th)):
-                            policy = game.get_policy_for_all_states(
-                                new_th, ii, ill_cond=use_ill_cond)
-                            target_policy = game.get_policy_for_all_states(starting_th, ii,
-                                                                                  ill_cond=use_ill_cond)
-                            kl_div = get_kl_div_from_policies(policy, target_policy, ii)
-                            inner_losses[ii] += kl_div * args.inner_beta
-
-                        if args.taylor_with_actual_update:
-                            # Be careful with using this, check it if using it
-                            new_loss_i_approx = inner_losses[i]
-                            for j in range(n):
-                                if j != i:
-                                    delta_j = lr_policies_inner[j] * get_gradient(
-                                        inner_losses[j], new_th[j])
-                                    gradj_Vi = get_gradient(inner_losses[i],
-                                                            new_th[j])
-                                    new_loss_i_approx -= delta_j @ gradj_Vi  # - because gradient descent
-
-                        if do_comparison or not args.taylor_with_actual_update:
-                            for j in range(n):
-                                # Inner loop essentially
-                                # Each player on the copied th does a naive update (must be differentiable!)
-                                if j != i:
-                                    if isinstance(new_th[j], torch.Tensor):
-                                        new_th[j] = new_th[j] - lr_policies_inner[
-                                            j] * get_gradient(inner_losses[j],
-                                                              new_th[j])
-                                    else:
-                                        optim_update(optims_th_primes[j],
-                                                     inner_losses[j],
-                                                     new_th[j].parameters())
-
-                        # print("TESTING ONLY")
-                        # game.print_policies_for_all_states(new_th,
-                        #                                    ill_cond=args.om_precond)
-                    # print("AFTER INNER UPDATES")
-                    # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
-
-                if args.print_inner_rollouts:
-                    print_exact_policy(new_th, i, ill_cond=args.ill_condition)
-
-                # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
-
-                if do_comparison or not args.taylor_with_actual_update:
-                    # print(args.om_precond)
-                    # print(not args.ill_condition)
-                    outer_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond, self_no_cond=(not args.ill_condition), self_index=i)
-
-                if other_terms is not None:
-                    if args.taylor_with_actual_update:
-                        raise NotImplementedError
-
-                    if isinstance(new_th[i], torch.Tensor):
-                        with torch.no_grad():
-                            new_th[i] -= lr_policies_outer[i] * (get_gradient(
-                                outer_losses[i], new_th[i]) + sum(other_terms))
-                        # Finally we rewrite the th by copying from the created copies
-                        th[i] = new_th[i]
-                    else:
-                        print(other_terms)
-                        print(outer_losses)
-                        game.print_policies_for_all_states(th)
-
-                        optim_update(optims_th_primes[i], outer_losses[i],
-                                     new_th[i].parameters())
-
-                        game.print_policies_for_all_states(th)
-                        1/0
-
-                        counter = 0
-                        sum_terms = sum(other_terms)
-                        for param in new_th[i].parameters():
-                            param_len = param.flatten().shape[0]
-                            term_to_add = sum_terms[
-                                          counter: counter + param_len]
-                            param.data -= lr_policies_outer[
-                                              i] * term_to_add.reshape(
-                                param.shape)
-                            counter += param_len
-
-
-                else:
-                    if args.taylor_with_actual_update:
-                        loss_to_update = new_loss_i_approx
-                    else:
-                        loss_to_update = outer_losses[i]
-
-
-                    policy = game.get_policy_for_all_states(
-                        new_th, i, ill_cond=args.ill_condition)
-                    target_policy = game.get_policy_for_all_states(
-                        static_th_copy, i, ill_cond=args.ill_condition)
-                    kl_div_outer = get_kl_div_from_policies(policy, target_policy,
-                                                      i)
-                    outer_losses[i] += kl_div_outer * args.outer_beta
-
-                    if do_comparison:
-                        print(new_loss_i_approx)
-                        print(outer_losses)
-                        exit()  # Because there are some issues with the new_th already being updated
-                    # Compare it with the actual outer loss value.
-
-                    # Finally each player updates their own (copied) th
-                    if isinstance(new_th[i], torch.Tensor):
-                        with torch.no_grad():
-                            new_th[i] -= lr_policies_outer[i] * get_gradient(
-                                loss_to_update, new_th[i])
-                        # Finally we rewrite the th by copying from the created copies
-                        th[i] = new_th[i]
-                    else:
-                        optim_update(optims_th_primes[i], loss_to_update,
-                                     new_th[i].parameters())
-
-                        copyNN(th[i], new_th[i])
+                loss_to_update = outer_losses[i]
 
                 policy = game.get_policy_for_all_states(
-                    th, i, ill_cond=args.ill_condition)
-                print(f"Outer step: {outer_step}")
-                print(policy)
+                    new_th, i, ill_cond=args.ill_condition)
+                target_policy = game.get_policy_for_all_states(
+                    static_th_copy, i, ill_cond=args.ill_condition)
+                kl_div_outer = get_kl_div_from_policies(policy, target_policy,
+                                                        i)
+                outer_losses[i] += kl_div_outer * args.outer_beta
 
-                # th_being_updated[i] = new_th[i]
+
+                # Finally each player updates their own (copied) th
+                if isinstance(new_th[i], torch.Tensor):
+                    with torch.no_grad():
+                        new_th[i] -= lr_policies_outer[i] * get_gradient(
+                            loss_to_update, new_th[i])
+                    # Finally we rewrite the th by copying from the created copies
+                    th[i] = new_th[i]
+                else:
+                    optim_update(optims_th_primes[i], loss_to_update,
+                                 new_th[i].parameters())
+
+                    copyNN(th[i], new_th[i])
+
+            policy = game.get_policy_for_all_states(
+                th, i, ill_cond=args.ill_condition)
+            print(f"Outer step: {outer_step}")
+            print(policy)
 
     return th
+
+def update_th_exact_value(th, game, opp_models=None):
+    # new_th = update_th_exact_value_outer_exact_prox(th, game, opp_models)
+
+    if args.outer_exact_prox:
+        new_th = update_th_exact_value_outer_exact_prox(th, game, opp_models)
+    else:
+        new_th = update_th_exact_value_outer_steps(th, game, opp_models)
+    return new_th
+
+#
+# def update_th_exact_value(th, game, opp_models=None):
+#     # opp_models is a list of lists, where each sublist is basically a th that
+#     # the agent i thinks all the other agents are using
+#
+#     if args.opp_model:
+#         assert opp_models is not None
+#
+#     assert args.actual_update
+#     # Do DiCE style rollouts except we can calculate exact Ls like follows
+#     if opp_models is not None:
+#         om_static_copy = get_th_copy(opp_models)
+#         # for oms in opp_models:
+#         #     for i in range(len(oms)):
+#         #         print_exact_policy(oms, i)
+#
+#     static_th_copy = get_th_copy(th)
+#     n = len(th)
+#
+#     for i in range(n):
+#
+#         if args.outer_exact_prox:
+#
+#             if args.opp_model:
+#                 raise NotImplementedError
+#                 # TODO For this would probably have to go through all of the places
+#                 # with get_policy_for_all_states
+#                 # especially for the ill conditioned/precond stuff
+#
+#
+#             fixed_point_reached = False
+#             outer_iters = 0
+#
+#             curr_pol = game.get_policy_for_all_states(th, i, ill_cond=args.ill_condition).detach()  # just an initialization, will be updated in the outer step loop, ill_cond=args.ill_condition)
+#
+#             if args.inner_exact_prox:
+#                 if args.using_nn:
+#                     # Do only once if we have inner_exact_prox
+#                     th_with_only_agent_i_updated = copy.deepcopy(
+#                         static_th_copy)
+#                     th_with_only_agent_i_updated[i] = th[i]
+#
+#                     new_th, optims_th_primes = \
+#                         construct_f_th_and_diffoptim(n_agents, i,
+#                                                      th_with_only_agent_i_updated,
+#                                                      lr_policies_outer,
+#                                                      lr_policies_inner
+#                                                      )
+#                 else:
+#                     new_th = get_th_copy(static_th_copy)
+#                     new_th[i] = th[i]
+#
+#             while not fixed_point_reached:
+#
+#                 # --- INNER LOOP ---
+#                 other_terms = None
+#                 if args.inner_exact_prox:
+#                     temp_new_th, other_terms = inner_exact_loop_step(new_th,
+#                                                                      static_th_copy,
+#                                                                      game, i, n,
+#                                                                      prox_f_step_sizes=lr_policies_inner)
+#
+#                     numerical_issue = False
+#                     try:
+#                         new_pol = game.get_policy_for_all_states(temp_new_th, i, ill_cond=args.ill_condition)
+#                         prev_pol = game.get_policy_for_all_states(new_th, i, ill_cond=args.ill_condition)
+#
+#                         policy_dist, target_policy_dist = build_policy_and_target_policy_dists(
+#                             new_pol, prev_pol, i, policies_are_logits=False)
+#
+#                         kl_div_error_check = torch.nn.functional.kl_div(
+#                             input=torch.log(policy_dist),
+#                             target=target_policy_dist,
+#                             reduction='batchmean',
+#                             log_target=False)
+#
+#                         print(kl_div_error_check)
+#
+#                     except:
+#                         numerical_issue = True
+#
+#                     if numerical_issue or kl_div_error_check > 20:
+#                         print("Numerical Error occured")
+#                         print(kl_div_error_check)
+#                         continue
+#                     else:
+#                         new_th = temp_new_th
+#
+#                     if args.using_nn:
+#                         new_th, optims_th_primes = \
+#                             construct_f_th_and_diffoptim(n_agents, i,
+#                                                          new_th,
+#                                                          lr_policies_outer,
+#                                                          lr_policies_inner
+#                                                          )
+#
+#                 else:
+#                     if args.using_nn:
+#                         # Reconstruct on every outer loop iter. This is if no inner exact prox
+#                         # The idea is this:
+#                         # Starting from the static th, take steps updating all the other player policies
+#                         # Then update own policy, ONCE
+#                         # Then we repeat, starting from the static th for all other players' policies
+#                         # but now we have the old policies of all other players but our own updated policy
+#                         # Then the other players again solve the prox objective (or do their update step), but with our new policy
+#                         # And then we take another step
+#                         # And repeat
+#                         # WITH OUTER POLA WE JUST TAKE A SINGLE INNER STEP
+#                         th_with_only_agent_i_updated = copy.deepcopy(
+#                             static_th_copy)
+#                         th_with_only_agent_i_updated[i] = th[i]
+#
+#                         new_th, optims_th_primes = \
+#                             construct_f_th_and_diffoptim(n_agents, i,
+#                                                          th_with_only_agent_i_updated,
+#                                                          lr_policies_outer,
+#                                                          lr_policies_inner
+#                                                          )
+#                     else:
+#                         new_th = get_th_copy(static_th_copy)
+#                         new_th[i] = th[i]
+#
+#                     # TODO see if this needs something like self_no_cond=(not args.ill_condition), self_index=i
+#                     inner_losses = game.get_exact_loss(new_th, ill_cond=args.ill_condition)
+#
+#                     for j in range(n):
+#                         # Inner loop step essentially
+#                         # Each player on the copied th does a naive update (must be differentiable!)
+#                         if j != i:
+#                             if isinstance(new_th[j], torch.Tensor):
+#                                 new_th[j] = new_th[j] - lr_policies_inner[
+#                                     j] * get_gradient(inner_losses[j],
+#                                                       new_th[j])
+#                             else:
+#                                 optim_update(optims_th_primes[j],
+#                                              inner_losses[j],
+#                                              new_th[j].parameters())
+#
+#                 outer_iters += 1
+#                 if args.using_nn:
+#                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
+#                         args.print_prox_loops_info, i, new_th, static_th_copy,
+#                         game,
+#                         curr_pol, other_terms, outer_iters,
+#                         optims_th_primes)
+#                 else:
+#                     new_th, curr_pol, fixed_point_reached = outer_exact_loop_step(
+#                         args.print_prox_loops_info, i, new_th, static_th_copy,
+#                         game, curr_pol, other_terms, outer_iters, None)
+#
+#                 print(f"--OUTER STEP {outer_iters}--")
+#                 print(curr_pol)
+#
+#                 if isinstance(new_th[i], torch.Tensor):
+#                     th[i] = new_th[i]
+#                 else:
+#                     copyNN(th[i], new_th[i])
+#
+#
+#         else:
+#
+#             # th_being_updated = get_th_copy(static_th_copy)
+#
+#             for outer_step in range(args.outer_steps):
+#
+#                 # TODO rewrite this whole loop. Just make it modular and everything flows nicely
+#                 # Opp model should always be there. If no OM, just have the opp model be a copy of the other agent true policy
+#                 # Then we don't have all these random conditions
+#                 # Just clean up this whole thing. Reproduce the tabular and OM experimental results I had before first
+#                 # Then move on to NN.
+#
+#                 # print(f"Outer step: {outer_step}")
+#                 # game.print_policies_for_all_states(th)
+#
+#                 # TODO AUG 4 should really just have no specification of inner steps
+#                 # Just exact inner prox, and the threshold is basically number of inner steps
+#                 # So that we shouldn't have duplicate code everywhere.
+#
+#                 if args.opp_model:
+#                     if args.om_using_nn:
+#                         new_th, optims_th_primes = \
+#                             construct_f_th_and_diffoptim(n_agents, i,
+#                                                          om_static_copy[i],
+#                                                          lr_policies_outer,
+#                                                          lr_policies_inner
+#                                                          )
+#                         new_th[i] = th[i] # th here is being updated
+#
+#                         if args.using_nn:
+#                             raise NotImplementedError # TODO Perhaps just need th_with_only_agent_i_updated again here
+#
+#
+#
+#                         # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
+#
+#                     else:
+#                         new_th = get_th_copy(om_static_copy[i])
+#                         new_th[i] = th[i] # replace an opp model of self with the actual self model
+#                         # new_th[i] = static_th_copy[i] # replace an opp model of self with the actual self model
+#
+#                 else:
+#                     if args.using_nn:
+#                         # if args.outer_steps > 1:
+#                         #     raise NotImplementedError
+#                         th_with_only_agent_i_updated = copy.deepcopy(
+#                             static_th_copy)
+#                         th_with_only_agent_i_updated[i] = th[i]
+#
+#                         new_th, optims_th_primes = \
+#                             construct_f_th_and_diffoptim(n_agents, i,
+#                                                          th_with_only_agent_i_updated,
+#                                                          lr_policies_outer,
+#                                                          lr_policies_inner
+#                                                          )
+#
+#
+#                     else:
+#                         new_th = get_th_copy(static_th_copy)
+#                         new_th[i] = th[i]
+#
+#                 do_comparison = False
+#
+#                 # --- INNER LOOP ---
+#                 # Then each player calcs the losses
+#                 other_terms = None
+#                 if args.inner_exact_prox:
+#                     if args.opp_model:
+#                         target_th = om_static_copy[i]
+#                     else:
+#                         target_th = static_th_copy
+#                     temp_new_th, other_terms = inner_exact_loop_step(new_th,
+#                                                                      target_th,
+#                                                                      game, i, n,
+#                                                                      prox_f_step_sizes=lr_policies_inner)
+#                     new_th = temp_new_th
+#
+#                     if args.using_nn:
+#                         new_th, optims_th_primes = \
+#                             construct_f_th_and_diffoptim(n_agents, i,
+#                                                          new_th,
+#                                                          lr_policies_outer,
+#                                                          lr_policies_inner
+#                                                          )
+#                     # TODO modify inner exact loop step to be based on om_precond
+#                     # Test this, to see that the precond policy is correct
+#                     # and is being updated correctly
+#
+#
+#                 else:
+#                     # TODO get this working with precond first
+#                     if args.opp_model and args.om_using_nn: # TODO should be just if args.opp_model?
+#                         dims_to_use = om_dims
+#                     else:
+#                         dims_to_use = dims
+#
+#                     starting_th = get_th_copy(new_th, dims_to_use=dims_to_use)
+#                     for inner_step in range(args.inner_steps):
+#                         if args.opp_model:
+#                             if args.ill_condition:
+#                                 inner_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond)
+#                             else:
+#                                 inner_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond, self_no_cond=True, self_index=i)
+#                         else:
+#                             inner_losses = game.get_exact_loss(new_th, ill_cond=args.ill_condition)
+#
+#                         # print("TESTING ONLY")
+#                         # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
+#
+#                         if args.opp_model:
+#                             use_ill_cond = args.om_precond
+#                         else:
+#                             use_ill_cond = args.ill_condition
+#
+#                         for ii in range(len(th)):
+#                             policy = game.get_policy_for_all_states(
+#                                 new_th, ii, ill_cond=use_ill_cond)
+#                             target_policy = game.get_policy_for_all_states(starting_th, ii,
+#                                                                                   ill_cond=use_ill_cond)
+#                             kl_div = get_kl_div_from_policies(policy, target_policy, ii)
+#                             inner_losses[ii] += kl_div * args.inner_beta
+#
+#                         if args.taylor_with_actual_update:
+#                             # Be careful with using this, check it if using it
+#                             new_loss_i_approx = inner_losses[i]
+#                             for j in range(n):
+#                                 if j != i:
+#                                     delta_j = lr_policies_inner[j] * get_gradient(
+#                                         inner_losses[j], new_th[j])
+#                                     gradj_Vi = get_gradient(inner_losses[i],
+#                                                             new_th[j])
+#                                     new_loss_i_approx -= delta_j @ gradj_Vi  # - because gradient descent
+#
+#                         if do_comparison or not args.taylor_with_actual_update:
+#                             for j in range(n):
+#                                 # Inner loop essentially
+#                                 # Each player on the copied th does a naive update (must be differentiable!)
+#                                 if j != i:
+#                                     if isinstance(new_th[j], torch.Tensor):
+#                                         new_th[j] = new_th[j] - lr_policies_inner[
+#                                             j] * get_gradient(inner_losses[j],
+#                                                               new_th[j])
+#                                     else:
+#                                         optim_update(optims_th_primes[j],
+#                                                      inner_losses[j],
+#                                                      new_th[j].parameters())
+#
+#                         # print("TESTING ONLY")
+#                         # game.print_policies_for_all_states(new_th,
+#                         #                                    ill_cond=args.om_precond)
+#                     # print("AFTER INNER UPDATES")
+#                     # game.print_policies_for_all_states(new_th, ill_cond=args.om_precond)
+#
+#                 if args.print_inner_rollouts:
+#                     print_exact_policy(new_th, i, ill_cond=args.ill_condition)
+#
+#                 # Then each player recalcs losses using mixed th where everyone else's is the new th but own th is the old (copied) one (do this in a for loop)
+#
+#                 if do_comparison or not args.taylor_with_actual_update:
+#                     # print(args.om_precond)
+#                     # print(not args.ill_condition)
+#                     outer_losses = game.get_exact_loss(new_th, ill_cond=args.om_precond, self_no_cond=(not args.ill_condition), self_index=i)
+#
+#                 if other_terms is not None:
+#                     if args.taylor_with_actual_update:
+#                         raise NotImplementedError
+#
+#                     if isinstance(new_th[i], torch.Tensor):
+#                         with torch.no_grad():
+#                             new_th[i] -= lr_policies_outer[i] * (get_gradient(
+#                                 outer_losses[i], new_th[i]) + sum(other_terms))
+#                         # Finally we rewrite the th by copying from the created copies
+#                         th[i] = new_th[i]
+#                     else:
+#                         print(other_terms)
+#                         print(outer_losses)
+#                         game.print_policies_for_all_states(th)
+#
+#                         optim_update(optims_th_primes[i], outer_losses[i],
+#                                      new_th[i].parameters())
+#
+#                         game.print_policies_for_all_states(th)
+#                         1/0
+#
+#                         counter = 0
+#                         sum_terms = sum(other_terms)
+#                         for param in new_th[i].parameters():
+#                             param_len = param.flatten().shape[0]
+#                             term_to_add = sum_terms[
+#                                           counter: counter + param_len]
+#                             param.data -= lr_policies_outer[
+#                                               i] * term_to_add.reshape(
+#                                 param.shape)
+#                             counter += param_len
+#
+#
+#                 else:
+#                     if args.taylor_with_actual_update:
+#                         loss_to_update = new_loss_i_approx
+#                     else:
+#                         loss_to_update = outer_losses[i]
+#
+#
+#                     policy = game.get_policy_for_all_states(
+#                         new_th, i, ill_cond=args.ill_condition)
+#                     target_policy = game.get_policy_for_all_states(
+#                         static_th_copy, i, ill_cond=args.ill_condition)
+#                     kl_div_outer = get_kl_div_from_policies(policy, target_policy,
+#                                                       i)
+#                     outer_losses[i] += kl_div_outer * args.outer_beta
+#
+#                     if do_comparison:
+#                         print(new_loss_i_approx)
+#                         print(outer_losses)
+#                         exit()  # Because there are some issues with the new_th already being updated
+#                     # Compare it with the actual outer loss value.
+#
+#                     # Finally each player updates their own (copied) th
+#                     if isinstance(new_th[i], torch.Tensor):
+#                         with torch.no_grad():
+#                             new_th[i] -= lr_policies_outer[i] * get_gradient(
+#                                 loss_to_update, new_th[i])
+#                         # Finally we rewrite the th by copying from the created copies
+#                         th[i] = new_th[i]
+#                     else:
+#                         optim_update(optims_th_primes[i], loss_to_update,
+#                                      new_th[i].parameters())
+#
+#                         copyNN(th[i], new_th[i])
+#
+#                 policy = game.get_policy_for_all_states(
+#                     th, i, ill_cond=args.ill_condition)
+#                 print(f"Outer step: {outer_step}")
+#                 print(policy)
+#
+#                 # th_being_updated[i] = new_th[i]
+#
+#     return th
 
 
 def construct_f_th_and_diffoptim(n_agents, i, starting_th, lr_policies_outer,
