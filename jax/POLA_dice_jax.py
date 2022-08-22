@@ -373,7 +373,7 @@ def env_step(stuff, unused):
     #                                               h_p2,
     #                                               h_v2)
     skenv = jax.random.split(skenv, args.batch_size)
-    env_state, new_obs, (r1, r2) = vec_env_step(env_state, a1, a2, skenv)
+    env_state, new_obs, (r1, r2), (rr_match, rb_match, br_match, bb_match) = vec_env_step(env_state, a1, a2, skenv)
     # env_state, new_obs, (r1, r2) = env.step(env_state, a1, a2, skenv)
     obs1 = new_obs
     obs2 = new_obs
@@ -390,7 +390,9 @@ def env_step(stuff, unused):
 
     aux2 = (cat_act_probs2, obs2, lp2, lp1, v2, r2, a2, a1)
 
-    return stuff, (aux1, aux2)
+    aux_info = (rr_match, rb_match, br_match, bb_match)
+
+    return stuff, (aux1, aux2, aux_info)
 
 
 @partial(jit, static_argnums=(11))
@@ -438,7 +440,7 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
              h_p1, h_v1, h_p2, h_v2)
 
     stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
-    aux1, aux2 = aux
+    aux1, aux2, aux_info = aux
 
     key, env_state, obs1, obs2, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,\
     trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params, h_p1, h_v1, h_p2, h_v2 = stuff
@@ -755,7 +757,7 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
     h_p1, h_v1, h_p2, h_v2)
 
     stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
-    aux1, aux2 = aux
+    aux1, aux2, aux_info = aux
 
     key, env_state, obs1, obs2, \
     trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,\
@@ -846,15 +848,17 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
                                                         state_history_for_kl_div)
 
     kl_div = kl_div_jax(self_pol_probs, self_pol_probs_old)
-    print(f"Outer KL Div: {kl_div}")
+    # print(f"Outer KL Div: {kl_div}")
 
     # return grad
     return objective + args.outer_beta * kl_div
 
 
-def one_outer_step_objective(key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
+def one_outer_step_objective_selfagent1(key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
                              trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
-                             trainstate_th_ref, trainstate_val_ref, self_agent, other_agent):
+                             trainstate_th_ref, trainstate_val_ref):
+    self_agent = 1
+    other_agent = 2
     key, subkey = jax.random.split(key)
     trainstate_th2_after_inner_steps, trainstate_val2_after_inner_steps = \
         inner_steps_plus_update(subkey,
@@ -900,6 +904,55 @@ def one_outer_step_objective(key, trainstate_th1_copy, trainstate_th1_copy_param
     return objective
 
 
+def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
+                             trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
+                             trainstate_th_ref, trainstate_val_ref):
+    self_agent = 2
+    other_agent = 1
+    key, subkey = jax.random.split(key)
+    trainstate_th1_after_inner_steps, trainstate_val1_after_inner_steps = \
+        inner_steps_plus_update(subkey,
+                                trainstate_th1_copy, trainstate_th1_copy_params,
+                                trainstate_val1_copy,
+                                trainstate_val1_copy_params,
+                                trainstate_th2_copy, trainstate_th2_copy_params,
+                                trainstate_val2_copy,
+                                trainstate_val2_copy_params,
+                                trainstate_th2_copy, trainstate_val2_copy,
+                                # this is for the other agent
+                                other_agent=other_agent)
+
+    # TODO perhaps one way to get around this conditional outer step with kind of global storage
+    # is that we should have one call to the lookaheads in the first time step
+    # and then a scan over the rest of the x steps
+
+    # update own parameters from out_lookahead:
+
+    if use_baseline:
+        objective = out_lookahead(key, trainstate_th1_after_inner_steps,
+                                  trainstate_th1_after_inner_steps.params,
+                                  trainstate_val1_after_inner_steps,
+                                  trainstate_val1_after_inner_steps.params,
+                                  trainstate_th2_copy,
+                                  trainstate_th2_copy_params,
+                                  trainstate_val2_copy,
+                                  trainstate_val2_copy.params,
+                                  trainstate_th_ref,
+                                  trainstate_val_ref,
+                                  self_agent=self_agent)
+    else:
+        objective = out_lookahead(key, trainstate_th1_after_inner_steps,
+                                  trainstate_th1_after_inner_steps.params,
+                                  None, None,
+                                  trainstate_th2_copy,
+                                  trainstate_th2_copy_params,
+                                  None, None,
+                                  trainstate_th_ref,
+                                  trainstate_val_ref,
+                                  self_agent=self_agent)
+
+    return objective
+
 def one_outer_step_update_selfagent1(stuff, unused):
     key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
     trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
@@ -907,10 +960,7 @@ def one_outer_step_update_selfagent1(stuff, unused):
 
     key, subkey = jax.random.split(key)
 
-    self_agent = 1
-    other_agent = 2
-
-    obj_grad_fn = jax.grad(one_outer_step_objective, argnums=[2, 4])
+    obj_grad_fn = jax.grad(one_outer_step_objective_selfagent1, argnums=[2, 4])
 
     grad_th, grad_v = obj_grad_fn(subkey,
                                   trainstate_th1_copy,
@@ -921,9 +971,7 @@ def one_outer_step_update_selfagent1(stuff, unused):
                                   trainstate_th2_copy_params,
                                   trainstate_val2_copy,
                                   trainstate_val2_copy_params,
-                                  trainstate_th_ref, trainstate_val_ref,
-                                  self_agent, other_agent
-                                  )
+                                  trainstate_th_ref, trainstate_val_ref)
 
     # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
     trainstate_th1_copy = trainstate_th1_copy.apply_gradients(grads=grad_th)
@@ -949,12 +997,10 @@ def one_outer_step_update_selfagent2(stuff, unused):
     trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
     trainstate_th_ref, trainstate_val_ref = stuff
 
-    self_agent = 2
-    other_agent = 1
 
     key, subkey = jax.random.split(key)
 
-    obj_grad_fn = jax.grad(one_outer_step_objective, argnums=[6, 8])
+    obj_grad_fn = jax.grad(one_outer_step_objective_selfagent2, argnums=[6, 8])
 
     grad_th, grad_v = obj_grad_fn(subkey,
                                   trainstate_th1_copy,
@@ -965,8 +1011,7 @@ def one_outer_step_update_selfagent2(stuff, unused):
                                   trainstate_th2_copy_params,
                                   trainstate_val2_copy,
                                   trainstate_val2_copy_params,
-                                  trainstate_th_ref, trainstate_val_ref,
-                                  self_agent, other_agent)
+                                  trainstate_th_ref, trainstate_val_ref)
 
     # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
     trainstate_th2_copy = trainstate_th2_copy.apply_gradients(grads=grad_th)
@@ -982,7 +1027,7 @@ def one_outer_step_update_selfagent2(stuff, unused):
     stuff = (
     key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
     trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
-    trainstate_th_ref, trainstate_val_ref, self_agent, other_agent)
+    trainstate_th_ref, trainstate_val_ref)
     aux = None
 
     return stuff, aux
@@ -1202,20 +1247,6 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         stuff, aux = jax.lax.scan(one_outer_step_update_selfagent1, stuff, None, args.outer_steps)
         _, trainstate_th1_copy, _, trainstate_val1_copy, _, _, _, _, _, _, _ = stuff
 
-
-        # for outer_step in range(args.outer_steps):
-        #     # WRAP FROM HERE
-        #
-        #     key, subkey = jax.random.split(key)
-        #     stuff = (subkey, trainstate_th1_copy, trainstate_th1_copy.params, trainstate_val1_copy, trainstate_val1_copy.params,
-        #              trainstate_th2_copy, trainstate_th2_copy.params, trainstate_val2_copy, trainstate_val2_copy.params,
-        #              trainstate_th1_ref, trainstate_val1_ref)
-        #
-        #     stuff, aux = one_outer_step_update_selfagent1(stuff, None)
-        #     _, trainstate_th1_copy, _, trainstate_val1_copy, _, _, _, _, _, _, _ = stuff
-
-        1/0
-
         # Doing this just as a safety failcase scenario, and copy this at the end
         trainstate_after_outer_steps_th1 = TrainState.create(
             apply_fn=trainstate_th1_copy.apply_fn,
@@ -1249,40 +1280,36 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         # kind of like what I have in the other file, where then I can use that outer step function to take the grad of agent 1 params after
         # agent 2 has done a bunch of inner steps.
 
-        for outer_step in range(outer_steps):
-            th1_to_copy = start_theta1
-            val1_to_copy = start_val1
-            if use_opp_model:
-                th1_to_copy = agent1_theta_p_model
-                val1_to_copy = agent1_theta_v_model
+        key, subkey = jax.random.split(key)
+        stuff = (subkey, trainstate_th1_copy, trainstate_th1_copy.params,
+                 trainstate_val1_copy, trainstate_val1_copy.params,
+                 trainstate_th2_copy, trainstate_th2_copy.params,
+                 trainstate_val2_copy, trainstate_val2_copy.params,
+                 trainstate_th2_ref, trainstate_val2_ref)
 
-            theta1_ = [tp.detach().clone().requires_grad_(True) for tp in
-                       th1_to_copy]
-            values1_ = [tv.detach().clone().requires_grad_(True) for tv in
-                        val1_to_copy]
+        stuff, aux = jax.lax.scan(one_outer_step_update_selfagent2, stuff, None,
+                                  args.outer_steps)
+        _, _, _, _, _, trainstate_th2_copy, _, trainstate_val2_copy, _, _, _ = stuff
 
-            for inner_step in range(args.inner_steps):
-                # estimate other's gradients from in_lookahead:
-                if inner_step == 0:
-                    grad1 = agent2.in_lookahead_(theta1_, values1_, first_inner_step=True)
-                else:
-                    grad1 = agent2.in_lookahead(theta1_, values1_, first_inner_step=False)
-                # update other's theta
-                theta1_ = [theta1_[i] - args.lr_in * grad1[i] for i in
-                           range(len(theta1_))]
-
-            if outer_step == 0:
-                agent2.out_lookahead(theta1_, values1_, first_outer_step=True, agent_copy_for_val_update=agent2_copy_for_val_update)
-            else:
-                agent2.out_lookahead(theta1_, values1_, first_outer_step=False, agent_copy_for_val_update=agent2_copy_for_val_update)
+        trainstate_after_outer_steps_th2 = TrainState.create(
+            apply_fn=trainstate_th2_copy.apply_fn,
+            params=trainstate_th2_copy.params,
+            tx=trainstate_th2_copy.tx)
+        trainstate_after_outer_steps_val2 = TrainState.create(
+            apply_fn=trainstate_val2_copy.apply_fn,
+            params=trainstate_val2_copy.params,
+            tx=trainstate_val2_copy.tx)
 
 
         # TODO ensure this is correct. Ensure that the copy is updated on the outer loop once that has finished.
         # Note that this is updated only after all the outer loop steps have finished. the copies are
         # updated during the outer loops. But the main trainstate (like the main th) is updated only
         # after the loops finish
-        trainstate_th1 = trainstate_th1_copy
-        trainstate_th2 = trainstate_th2_copy
+        trainstate_th1 = trainstate_after_outer_steps_th1
+        trainstate_th2 = trainstate_after_outer_steps_th2
+
+        trainstate_val1 = trainstate_after_outer_steps_val1
+        trainstate_val2 = trainstate_after_outer_steps_val2
 
         # if args.val_update_after_loop:
         #     updated_theta_v_1 = [tv.detach().clone().requires_grad_(True)
@@ -1295,8 +1322,54 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         #     agent2.theta_v = updated_theta_v_2
 
         # evaluate progress:
-        score, info = step(agent1.theta_p, agent2.theta_p, agent1.theta_v,
-                           agent2.theta_v)
+        keys = jax.random.split(key, args.batch_size + 1)
+        key, env_subkeys = keys[0], keys[1:]
+        env_state, obsv = vec_env_reset(env_subkeys)
+        obs1 = obsv
+        obs2 = obsv
+        h_p1, h_p2 = (
+            jnp.zeros((args.batch_size, args.hidden_size)),
+            jnp.zeros((args.batch_size, args.hidden_size))
+        )
+        h_v1, h_v2 = None, None
+        if use_baseline:
+            h_v1, h_v2 = (
+                jnp.zeros((args.batch_size, args.hidden_size)),
+                jnp.zeros((args.batch_size, args.hidden_size))
+            )
+        key, subkey = jax.random.split(key)
+        stuff = (subkey, env_state, obs1, obs2,
+                 trainstate_th1, trainstate_th1.params, trainstate_val1,
+                 trainstate_val1.params,
+                 trainstate_th2, trainstate_th2.params, trainstate_val2,
+                 trainstate_val2.params,
+                 h_p1, h_v1, h_p2, h_v2)
+
+        stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
+        aux1, aux2, aux_info = aux
+
+        _, _, _, _, _, r1, _, _ = aux1
+        _, _, _, _, _, r2, _, _ = aux2
+
+        rr_matches, rb_matches, br_matches, bb_matches = aux_info
+
+        score1 = r1.sum(axis=0).mean()
+        score2 = r2.sum(axis=0).mean()
+        # print("Reward info (avg over batch, sum over episode length)")
+        # print(score1)
+        # print(score2)
+
+        rr_matches_amount = rr_matches.sum(axis=0).mean()
+        rb_matches_amount = rb_matches.sum(axis=0).mean()
+        br_matches_amount = br_matches.sum(axis=0).mean()
+        bb_matches_amount = bb_matches.sum(axis=0).mean()
+
+        # print("Matched coin info (avg over batch, sum over episode length)")
+        # print(rr_matches_amount)
+        # print(rb_matches_amount)
+        # print(br_matches_amount)
+        # print(bb_matches_amount)
+
 
         print("Eval vs Fixed strategies not yet implemented")
         # print("Eval vs Fixed Strategies:")
@@ -1319,29 +1392,24 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         # vs_fixed_strats_score_record[0].append(score1rec)
         # vs_fixed_strats_score_record[1].append(score2rec)
 
-        rr_matches, rb_matches, br_matches, bb_matches = info
-        same_colour_coins = (rr_matches + bb_matches).item()
-        diff_colour_coins = (rb_matches + br_matches).item()
-        same_colour_coins_record.append(same_colour_coins)
-        diff_colour_coins_record.append(diff_colour_coins)
 
-        joint_scores.append(0.5 * (score[0] + score[1]))
-        score = jnp.stack(score)
-        score_record.append(score)
+        # joint_scores.append(0.5 * (score[0] + score[1]))
+        # score = jnp.stack(score)
+        # score_record.append(score)
 
         # print
         if update % args.print_every == 0:
             print("*" * 10)
             print("Epoch: {}".format(update + 1), flush=True)
-            print(f"Score 0: {score[0]}")
-            print(f"Score 1: {score[1]}")
-            if args.env == "coin" or args.env == "ogcoin":
-                print("Same coins: {}".format(same_colour_coins))
-                print("Diff coins: {}".format(diff_colour_coins))
-                print("RR coins {}".format(rr_matches))
-                print("RB coins {}".format(rb_matches))
-                print("BR coins {}".format(br_matches))
-                print("BB coins {}".format(bb_matches))
+            print(f"Score for Agent 1: {score1}")
+            print(f"Score for Agent 2: {score2}")
+
+            print("Same coins: {}".format(rr_matches_amount + bb_matches_amount))
+            print("Diff coins: {}".format(rb_matches_amount + br_matches_amount))
+            print("RR coins {}".format(rr_matches_amount))
+            print("RB coins {}".format(rb_matches_amount))
+            print("BR coins {}".format(br_matches_amount))
+            print("BB coins {}".format(bb_matches_amount))
 
 
     return joint_scores
