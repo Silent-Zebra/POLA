@@ -204,11 +204,6 @@ def act(stuff, unused ):
     # return actions, log_probs_actions, ret_vals, h_p, h_v, categorical_act_probs
 
 
-def get_gradient(objective, theta):
-    # create differentiable gradient for 2nd orders:
-    grad_objective = jnp.autograd.grad(objective, (theta), create_graph=True)
-    return grad_objective
-
 
 # def step(theta1, theta2, values1, values2):
 #     # just to evaluate progress:
@@ -851,10 +846,148 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
                                                         state_history_for_kl_div)
 
     kl_div = kl_div_jax(self_pol_probs, self_pol_probs_old)
-    print(f"KL Div: {kl_div}")
+    print(f"Outer KL Div: {kl_div}")
 
     # return grad
     return objective + args.outer_beta * kl_div
+
+
+def one_outer_step_objective(key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
+                             trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
+                             trainstate_th_ref, trainstate_val_ref, self_agent, other_agent):
+    key, subkey = jax.random.split(key)
+    trainstate_th2_after_inner_steps, trainstate_val2_after_inner_steps = \
+        inner_steps_plus_update(subkey,
+                                trainstate_th1_copy, trainstate_th1_copy_params,
+                                trainstate_val1_copy,
+                                trainstate_val1_copy_params,
+                                trainstate_th2_copy, trainstate_th2_copy_params,
+                                trainstate_val2_copy,
+                                trainstate_val2_copy_params,
+                                trainstate_th2_copy, trainstate_val2_copy,
+                                # this is for the other agent
+                                other_agent=other_agent)
+
+    # TODO perhaps one way to get around this conditional outer step with kind of global storage
+    # is that we should have one call to the lookaheads in the first time step
+    # and then a scan over the rest of the x steps
+
+    # update own parameters from out_lookahead:
+
+    if use_baseline:
+        objective = out_lookahead(key, trainstate_th1_copy,
+                                  trainstate_th1_copy_params,
+                                  trainstate_val1_copy,
+                                  trainstate_val1_copy_params,
+                                  trainstate_th2_after_inner_steps,
+                                  trainstate_th2_after_inner_steps.params,
+                                  trainstate_val2_after_inner_steps,
+                                  trainstate_val2_after_inner_steps.params,
+                                  trainstate_th_ref,
+                                  trainstate_val_ref,
+                                  self_agent=self_agent)
+    else:
+        objective = out_lookahead(key, trainstate_th1_copy,
+                                  trainstate_th1_copy_params,
+                                  None, None,
+                                  trainstate_th2_after_inner_steps,
+                                  trainstate_th2_after_inner_steps.params,
+                                  None, None,
+                                  trainstate_th_ref,
+                                  trainstate_val_ref,
+                                  self_agent=self_agent)
+
+    return objective
+
+
+def one_outer_step_update_selfagent1(stuff, unused):
+    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
+    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
+    trainstate_th_ref, trainstate_val_ref = stuff
+
+    key, subkey = jax.random.split(key)
+
+    self_agent = 1
+    other_agent = 2
+
+    obj_grad_fn = jax.grad(one_outer_step_objective, argnums=[2, 4])
+
+    grad_th, grad_v = obj_grad_fn(subkey,
+                                  trainstate_th1_copy,
+                                  trainstate_th1_copy_params,
+                                  trainstate_val1_copy,
+                                  trainstate_val1_copy_params,
+                                  trainstate_th2_copy,
+                                  trainstate_th2_copy_params,
+                                  trainstate_val2_copy,
+                                  trainstate_val2_copy_params,
+                                  trainstate_th_ref, trainstate_val_ref,
+                                  self_agent, other_agent
+                                  )
+
+    # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
+    trainstate_th1_copy = trainstate_th1_copy.apply_gradients(grads=grad_th)
+
+    # TODO when value update the inner model? Do it at all?
+    if use_baseline:
+        raise NotImplementedError
+        # model_state_val_ = model_state_val_.apply_gradients(
+        #     grads=grad_v)
+        # return model_state_th_, model_state_val_
+
+    # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
+    stuff = (
+    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
+    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
+    trainstate_th_ref, trainstate_val_ref)
+    aux = None
+
+    return stuff, aux
+
+def one_outer_step_update_selfagent2(stuff, unused):
+    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
+    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
+    trainstate_th_ref, trainstate_val_ref = stuff
+
+    self_agent = 2
+    other_agent = 1
+
+    key, subkey = jax.random.split(key)
+
+    obj_grad_fn = jax.grad(one_outer_step_objective, argnums=[6, 8])
+
+    grad_th, grad_v = obj_grad_fn(subkey,
+                                  trainstate_th1_copy,
+                                  trainstate_th1_copy_params,
+                                  trainstate_val1_copy,
+                                  trainstate_val1_copy_params,
+                                  trainstate_th2_copy,
+                                  trainstate_th2_copy_params,
+                                  trainstate_val2_copy,
+                                  trainstate_val2_copy_params,
+                                  trainstate_th_ref, trainstate_val_ref,
+                                  self_agent, other_agent)
+
+    # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
+    trainstate_th2_copy = trainstate_th2_copy.apply_gradients(grads=grad_th)
+
+    # TODO when value update the inner model? Do it at all?
+    if use_baseline:
+        raise NotImplementedError
+        # model_state_val_ = model_state_val_.apply_gradients(
+        #     grads=grad_v)
+        # return model_state_th_, model_state_val_
+
+    # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
+    stuff = (
+    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
+    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
+    trainstate_th_ref, trainstate_val_ref, self_agent, other_agent)
+    aux = None
+
+    return stuff, aux
+
+
 
 
 # def rollout_collect_data_for_opp_model(self, other_theta_p, other_theta_v):
@@ -1059,76 +1192,41 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         #                                       args.lr_v, theta_p_2_copy_for_vals,
         #                                       theta_v_2_copy_for_vals)
 
-        for outer_step in range(args.outer_steps):
+        key, subkey = jax.random.split(key)
+        stuff = (subkey, trainstate_th1_copy, trainstate_th1_copy.params,
+                 trainstate_val1_copy, trainstate_val1_copy.params,
+                 trainstate_th2_copy, trainstate_th2_copy.params,
+                 trainstate_val2_copy, trainstate_val2_copy.params,
+                 trainstate_th1_ref, trainstate_val1_ref)
 
-            # WRAP FROM HERE
+        stuff, aux = jax.lax.scan(one_outer_step_update_selfagent1, stuff, None, args.outer_steps)
+        _, trainstate_th1_copy, _, trainstate_val1_copy, _, _, _, _, _, _, _ = stuff
 
-            key, subkey = jax.random.split(key)
-            trainstate_th2_after_inner_steps, trainstate_val2_after_inner_steps = \
-                inner_steps_plus_update(subkey,
-                                        trainstate_th1_copy, trainstate_th1_copy.params, trainstate_val1_copy, trainstate_val1_copy.params,
-                                        trainstate_th2_copy, trainstate_th2_copy.params, trainstate_val2_copy, trainstate_val2_copy.params,
-                                        trainstate_th2_copy, trainstate_val2_copy, # this is for the other agent
-                                        other_agent=2)
 
-            # TODO perhaps one way to get around this conditional outer step with kind of global storage
-            # is that we should have one call to the lookaheads in the first time step
-            # and then a scan over the rest of the x steps
+        # for outer_step in range(args.outer_steps):
+        #     # WRAP FROM HERE
+        #
+        #     key, subkey = jax.random.split(key)
+        #     stuff = (subkey, trainstate_th1_copy, trainstate_th1_copy.params, trainstate_val1_copy, trainstate_val1_copy.params,
+        #              trainstate_th2_copy, trainstate_th2_copy.params, trainstate_val2_copy, trainstate_val2_copy.params,
+        #              trainstate_th1_ref, trainstate_val1_ref)
+        #
+        #     stuff, aux = one_outer_step_update_selfagent1(stuff, None)
+        #     _, trainstate_th1_copy, _, trainstate_val1_copy, _, _, _, _, _, _, _ = stuff
 
-            # update own parameters from out_lookahead:
-            if outer_step == 0:
-                first_outer_step = True
-            else:
-                first_outer_step = False
-
-            if use_baseline:
-                objective = out_lookahead(key, trainstate_th1_copy, trainstate_th1_copy.params, trainstate_val1_copy, trainstate_val1_copy.params,
-                                          trainstate_th2_after_inner_steps, trainstate_th2_after_inner_steps.params,
-                                          trainstate_val2_after_inner_steps, trainstate_val2_after_inner_steps.params,
-                                          trainstate_th1_ref,
-                                          trainstate_val1_ref,
-                                          self_agent=1)
-            else:
-                objective = out_lookahead(key, trainstate_th1_copy,
-                                          trainstate_th1_copy.params,
-                                          None, None,
-                                          trainstate_th2_after_inner_steps, trainstate_th2_after_inner_steps.params,
-                                          None, None,
-                                          trainstate_th1_ref,
-                                          trainstate_val1_ref,
-                                          self_agent=1)
-
-            # TO HERE in a function, maybe outer_loop_step or something, or same way I named the inner_steps_plus_update
-            # To get the grad on the outer loop
-            # TODO then check that the grad is correct, with proper higher order gradients (it should be)
-            # And then start running
-            # Oh but we have to JIT everything first
-            # And we also need to make sure that it all works correctly for the second agent too
-            # Be very careful checking for bugs
-            # I should probably re-go-over everything in the code once all done.
-
-            # TODO Aug 18 Now we need the grad from the objective
-            # TO do this, we can wrap this whole block (everything after (for outer_step in ...))
-            # in another function. Then this function can take in the params of agent 1
-            # Right so maybe get rid of the agent stuff, just directly use the params/trainstate of agent 1
-            # instead of accessing the agent parameters
-            # Store everything directly in trainstates, try to get rid of all the agent stuff as well
-            # Define just as a function
-            # Maybe even just define everything else as a function too, without calls to agent
-            # ideally there should be 0 calls to agent.anything.
-            # Then once I have this wrapper function I can take the grad again.
-
-            1/0
+        1/0
 
         # Doing this just as a safety failcase scenario, and copy this at the end
-        updated_trainstate_th1 = TrainState.create(
+        trainstate_after_outer_steps_th1 = TrainState.create(
             apply_fn=trainstate_th1_copy.apply_fn,
             params=trainstate_th1_copy.params,
             tx=trainstate_th1_copy.tx)
-        updated_trainstate_val1 = TrainState.create(
+        trainstate_after_outer_steps_val1 = TrainState.create(
             apply_fn=trainstate_val1_copy.apply_fn,
             params=trainstate_val1_copy.params,
             tx=trainstate_val1_copy.tx)
+
+        # --- START OF AGENT 2 UPDATE ---
 
         # Doing this just as a safety failcase scenario, to make sure each agent loop starts from the beginning
         trainstate_th1_copy = TrainState.create(
