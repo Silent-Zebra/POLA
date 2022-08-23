@@ -374,6 +374,7 @@ def env_step(stuff, unused):
     #                                               h_v2)
     skenv = jax.random.split(skenv, args.batch_size)
     env_state, new_obs, (r1, r2), (rr_match, rb_match, br_match, bb_match) = vec_env_step(env_state, a1, a2, skenv)
+    # print(new_obs)
     # env_state, new_obs, (r1, r2) = env.step(env_state, a1, a2, skenv)
     obs1 = new_obs
     obs2 = new_obs
@@ -473,8 +474,7 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
                                                values=v2_list,
                                                end_state_v=end_state_v2)
 
-        print(
-            f"Inner Agent (Agent 2) episode return avg {r2_list.sum(axis=0).mean()}")
+        # print(f"Inner Agent (Agent 2) episode return avg {r2_list.sum(axis=0).mean()}")
 
 
     else:
@@ -501,8 +501,7 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
                                                values=v1_list,
                                                end_state_v=end_state_v1)
 
-        print(
-            f"Inner Agent (Agent 1) episode return avg {r1_list.sum(axis=0).mean()}")
+        # print(f"Inner Agent (Agent 1) episode return avg {r1_list.sum(axis=0).mean()}")
 
     key, sk1, sk2 = jax.random.split(key, 3)
 
@@ -1134,6 +1133,64 @@ def one_outer_step_update_selfagent2(stuff, unused):
 #
 #     return agent_opp.theta_p, agent_opp.theta_v
 
+def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2):
+    keys = jax.random.split(subkey, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+    env_state, obsv = vec_env_reset(env_subkeys)
+    obs1 = obsv
+    obs2 = obsv
+    h_p1, h_p2 = (
+        jnp.zeros((args.batch_size, args.hidden_size)),
+        jnp.zeros((args.batch_size, args.hidden_size))
+    )
+    h_v1, h_v2 = None, None
+    if use_baseline:
+        h_v1, h_v2 = (
+            jnp.zeros((args.batch_size, args.hidden_size)),
+            jnp.zeros((args.batch_size, args.hidden_size))
+        )
+    key, subkey = jax.random.split(key)
+    stuff = (subkey, env_state, obs1, obs2,
+             trainstate_th1, trainstate_th1.params, trainstate_val1,
+             trainstate_val1.params,
+             trainstate_th2, trainstate_th2.params, trainstate_val2,
+             trainstate_val2.params,
+             h_p1, h_v1, h_p2, h_v2)
+
+    stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
+    aux1, aux2, aux_info = aux
+
+    # cat_act_probs1, obs1, lp1, lp2, v1, r1, a1, a2 = aux1
+    # _, _, _, _, _, r2, _, _ = aux2
+    #
+    # for i in range(args.rollout_len):
+    #     print(f"step {i}")
+    #     print(obs1[i])
+    #     print(a1[i+1])
+    #     print(a2[i+1])
+    #     print(r1[i+1])
+    #     print(r2[i+1])
+    #     print(obs1[i+1])
+
+    _, _, _, _, _, r1, _, _ = aux1
+    _, _, _, _, _, r2, _, _ = aux2
+
+    rr_matches, rb_matches, br_matches, bb_matches = aux_info
+
+    score1 = r1.sum(axis=0).mean()
+    score2 = r2.sum(axis=0).mean()
+    # print("Reward info (avg over batch, sum over episode length)")
+    # print(score1)
+    # print(score2)
+
+    rr_matches_amount = rr_matches.sum(axis=0).mean()
+    rb_matches_amount = rb_matches.sum(axis=0).mean()
+    br_matches_amount = br_matches.sum(axis=0).mean()
+    bb_matches_amount = bb_matches.sum(axis=0).mean()
+
+    return score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount
+
+
 # @jit
 def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, init_trainstate_val2,
          # theta_v1, theta_v1_params, agent1_value_optimizer,
@@ -1167,6 +1224,10 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
     trainstate_val2 = TrainState.create(apply_fn=init_trainstate_val2.apply_fn,
                                         params=init_trainstate_val2.params,
                                         tx=init_trainstate_val2.tx)
+
+    # key, subkey = jax.random.split(key)
+    # score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount = \
+    #     eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 
     for update in range(args.n_update):
         # TODO RECREATE TRAINSTATES IF NEEDED
@@ -1322,47 +1383,51 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         #     agent2.theta_v = updated_theta_v_2
 
         # evaluate progress:
-        keys = jax.random.split(key, args.batch_size + 1)
-        key, env_subkeys = keys[0], keys[1:]
-        env_state, obsv = vec_env_reset(env_subkeys)
-        obs1 = obsv
-        obs2 = obsv
-        h_p1, h_p2 = (
-            jnp.zeros((args.batch_size, args.hidden_size)),
-            jnp.zeros((args.batch_size, args.hidden_size))
-        )
-        h_v1, h_v2 = None, None
-        if use_baseline:
-            h_v1, h_v2 = (
-                jnp.zeros((args.batch_size, args.hidden_size)),
-                jnp.zeros((args.batch_size, args.hidden_size))
-            )
         key, subkey = jax.random.split(key)
-        stuff = (subkey, env_state, obs1, obs2,
-                 trainstate_th1, trainstate_th1.params, trainstate_val1,
-                 trainstate_val1.params,
-                 trainstate_th2, trainstate_th2.params, trainstate_val2,
-                 trainstate_val2.params,
-                 h_p1, h_v1, h_p2, h_v2)
+        score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount = \
+            eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 
-        stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
-        aux1, aux2, aux_info = aux
-
-        _, _, _, _, _, r1, _, _ = aux1
-        _, _, _, _, _, r2, _, _ = aux2
-
-        rr_matches, rb_matches, br_matches, bb_matches = aux_info
-
-        score1 = r1.sum(axis=0).mean()
-        score2 = r2.sum(axis=0).mean()
-        # print("Reward info (avg over batch, sum over episode length)")
-        # print(score1)
-        # print(score2)
-
-        rr_matches_amount = rr_matches.sum(axis=0).mean()
-        rb_matches_amount = rb_matches.sum(axis=0).mean()
-        br_matches_amount = br_matches.sum(axis=0).mean()
-        bb_matches_amount = bb_matches.sum(axis=0).mean()
+        # keys = jax.random.split(key, args.batch_size + 1)
+        # key, env_subkeys = keys[0], keys[1:]
+        # env_state, obsv = vec_env_reset(env_subkeys)
+        # obs1 = obsv
+        # obs2 = obsv
+        # h_p1, h_p2 = (
+        #     jnp.zeros((args.batch_size, args.hidden_size)),
+        #     jnp.zeros((args.batch_size, args.hidden_size))
+        # )
+        # h_v1, h_v2 = None, None
+        # if use_baseline:
+        #     h_v1, h_v2 = (
+        #         jnp.zeros((args.batch_size, args.hidden_size)),
+        #         jnp.zeros((args.batch_size, args.hidden_size))
+        #     )
+        # key, subkey = jax.random.split(key)
+        # stuff = (subkey, env_state, obs1, obs2,
+        #          trainstate_th1, trainstate_th1.params, trainstate_val1,
+        #          trainstate_val1.params,
+        #          trainstate_th2, trainstate_th2.params, trainstate_val2,
+        #          trainstate_val2.params,
+        #          h_p1, h_v1, h_p2, h_v2)
+        #
+        # stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
+        # aux1, aux2, aux_info = aux
+        #
+        # _, _, _, _, _, r1, _, _ = aux1
+        # _, _, _, _, _, r2, _, _ = aux2
+        #
+        # rr_matches, rb_matches, br_matches, bb_matches = aux_info
+        #
+        # score1 = r1.sum(axis=0).mean()
+        # score2 = r2.sum(axis=0).mean()
+        # # print("Reward info (avg over batch, sum over episode length)")
+        # # print(score1)
+        # # print(score2)
+        #
+        # rr_matches_amount = rr_matches.sum(axis=0).mean()
+        # rb_matches_amount = rb_matches.sum(axis=0).mean()
+        # br_matches_amount = br_matches.sum(axis=0).mean()
+        # bb_matches_amount = bb_matches.sum(axis=0).mean()
 
         # print("Matched coin info (avg over batch, sum over episode length)")
         # print(rr_matches_amount)
