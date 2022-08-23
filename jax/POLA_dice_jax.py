@@ -1628,7 +1628,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser("NPLOLA")
+    parser = argparse.ArgumentParser("POLA")
     parser.add_argument("--inner_steps", type=int, default=1, help="inner loop steps for DiCE")
     parser.add_argument("--outer_steps", type=int, default=1, help="outer loop steps for POLA")
     parser.add_argument("--lr_out", type=float, default=0.005,
