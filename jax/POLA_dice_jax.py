@@ -31,7 +31,7 @@ tfd = tfp.distributions
 from coin_game_jax import CoinGame
 
 
-
+@jit
 def reverse_cumsum(x, dim):
     return x + jnp.sum(x, dim=dim, keepdims=True) - jnp.cumsum(x, dim=dim)
 
@@ -39,10 +39,11 @@ def reverse_cumsum(x, dim):
 device = 'cpu'
 
 # DiCE operator
+@jit
 def magic_box(x):
     return jnp.exp(x - jax.lax.stop_gradient(x))
 
-
+@jit
 def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     # print(self_logprobs)
     # self_logprobs = jnp.stack(self_logprobs, dim=1)
@@ -124,7 +125,7 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     return -dice_objective  # want to minimize -objective
 
 
-
+@jit
 def value_loss(values, rewards, final_state_vals):
     # Fixed original value update which I'm almost certain is wrong
 
@@ -151,7 +152,7 @@ def value_loss(values, rewards, final_state_vals):
     return values_loss
 
 
-
+@jit
 def act_w_iter_over_obs(stuff, env_batch_obs):
     key, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, h_p, h_v = stuff
     key, subkey = jax.random.split(key)
@@ -705,6 +706,7 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
 
     # return model_state_th_, None
 
+@partial(jit, static_argnums=(11))
 def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
                   trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params,
                   old_trainstate_th, old_trainstate_val, self_agent=1):
@@ -853,6 +855,7 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
     return objective + args.outer_beta * kl_div
 
 
+@jit
 def one_outer_step_objective_selfagent1(key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
                              trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
                              trainstate_th_ref, trainstate_val_ref):
@@ -902,7 +905,7 @@ def one_outer_step_objective_selfagent1(key, trainstate_th1_copy, trainstate_th1
 
     return objective
 
-
+@jit
 def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
                              trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
                              trainstate_th_ref, trainstate_val_ref):
@@ -952,6 +955,7 @@ def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1
 
     return objective
 
+@jit
 def one_outer_step_update_selfagent1(stuff, unused):
     key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
     trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
@@ -991,6 +995,7 @@ def one_outer_step_update_selfagent1(stuff, unused):
 
     return stuff, aux
 
+@jit
 def one_outer_step_update_selfagent2(stuff, unused):
     key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
     trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
@@ -1133,6 +1138,7 @@ def one_outer_step_update_selfagent2(stuff, unused):
 #
 #     return agent_opp.theta_p, agent_opp.theta_v
 
+@jit
 def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2):
     keys = jax.random.split(subkey, args.batch_size + 1)
     key, env_subkeys = keys[0], keys[1:]
