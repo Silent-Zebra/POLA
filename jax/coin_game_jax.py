@@ -219,51 +219,53 @@ class CoinGame:
         return new_state, obs, (red_reward, blue_reward), (red_red_matches, red_blue_matches, blue_red_matches, blue_blue_matches)
 
 
-    # def get_moves_shortest_path_to_coin(self, red_agent_perspective=True):
-    #     # Ties broken arbitrarily, in this case, since I check the vertical distance later
-    #     # priority is given to closing vertical distance (making up or down moves)
-    #     # before horizontal moves
-    #     if red_agent_perspective:
-    #         agent_pos = self.red_pos
-    #     else:
-    #         agent_pos = self.blue_pos
-    #     actions = jnp.zeros(self.batch_size) - 1
-    #     # assumes red agent perspective
-    #     horiz_dist_right = (self.coin_pos[:, 1] - agent_pos[:, 1]) % self.grid_size
-    #     horiz_dist_left = (agent_pos[:, 1] - self.coin_pos[:, 1]) % self.grid_size
-    #
-    #     vert_dist_down = (self.coin_pos[:, 0] - agent_pos[:,
-    #                                             0]) % self.grid_size
-    #     vert_dist_up = (agent_pos[:, 0] - self.coin_pos[:,
-    #                                          0]) % self.grid_size
-    #     actions[horiz_dist_right < horiz_dist_left] = 0
-    #     actions[horiz_dist_left < horiz_dist_right] = 1
-    #     actions[vert_dist_down < vert_dist_up] = 2
-    #     actions[vert_dist_up < vert_dist_down] = 3
-    #     # Assumes no coin spawns under agent
-    #     assert jnp.logical_and(horiz_dist_right == horiz_dist_left, vert_dist_down == vert_dist_up).sum() == 0
-    #
-    #     return actions.long()
-    #
-    # def get_moves_away_from_coin(self, moves_towards_coin):
-    #     opposite_moves = jnp.zeros_like(moves_towards_coin)
-    #     opposite_moves[moves_towards_coin == 0] = 1
-    #     opposite_moves[moves_towards_coin == 1] = 0
-    #     opposite_moves[moves_towards_coin == 2] = 3
-    #     opposite_moves[moves_towards_coin == 3] = 2
-    #     return opposite_moves
-    #
-    # def get_coop_action(self, red_agent_perspective=True):
-    #     # move toward coin if same colour, away if opposite colour
-    #     # An agent that always does this is considered to 'always cooperate'
-    #     moves_towards_coin = self.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent_perspective)
-    #     moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin)
-    #     coop_moves = jnp.zeros_like(moves_towards_coin) - 1
-    #     if red_agent_perspective:
-    #         is_my_coin = self.red_coin
-    #     else:
-    #         is_my_coin = 1 - self.red_coin
-    #
-    #     coop_moves[is_my_coin == 1] = moves_towards_coin[is_my_coin == 1]
-    #     coop_moves[is_my_coin == 0] = moves_away_from_coin[is_my_coin == 0]
-    #     return coop_moves
+    def get_moves_shortest_path_to_coin(self, red_agent_perspective=True):
+        # Ties broken arbitrarily, in this case, since I check the vertical distance later
+        # priority is given to closing vertical distance (making up or down moves)
+        # before horizontal moves
+        if red_agent_perspective:
+            agent_pos = self.red_pos
+        else:
+            agent_pos = self.blue_pos
+        actions = jax.random.randint(jax.random.PRNGKey(0), shape=(1,), minval=0, maxval=0)
+
+        # assumes red agent perspective
+        horiz_dist_right = (self.coin_pos[1] - agent_pos[1]) % self.grid_size
+        horiz_dist_left = (agent_pos[1] - self.coin_pos[1]) % self.grid_size
+
+        vert_dist_down = (self.coin_pos[0] - agent_pos[0]) % self.grid_size
+        vert_dist_up = (agent_pos[0] - self.coin_pos[0]) % self.grid_size
+        actions[horiz_dist_right < horiz_dist_left] = 0
+        actions[horiz_dist_left < horiz_dist_right] = 1
+        actions[vert_dist_down < vert_dist_up] = 2
+        actions[vert_dist_up < vert_dist_down] = 3
+        # Assumes no coin spawns under agent
+        assert jnp.logical_and(horiz_dist_right == horiz_dist_left, vert_dist_down == vert_dist_up).sum() == 0
+
+        print(actions)
+        1/0
+
+        return actions
+
+    def get_moves_away_from_coin(self, moves_towards_coin):
+        opposite_moves = jnp.zeros_like(moves_towards_coin)
+        opposite_moves[moves_towards_coin == 0] = 1
+        opposite_moves[moves_towards_coin == 1] = 0
+        opposite_moves[moves_towards_coin == 2] = 3
+        opposite_moves[moves_towards_coin == 3] = 2
+        return opposite_moves
+
+    def get_coop_action(self, red_agent_perspective=True):
+        # move toward coin if same colour, away if opposite colour
+        # An agent that always does this is considered to 'always cooperate'
+        moves_towards_coin = self.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent_perspective)
+        moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin)
+        coop_moves = jnp.zeros_like(moves_towards_coin) - 1
+        if red_agent_perspective:
+            is_my_coin = self.red_coin
+        else:
+            is_my_coin = 1 - self.red_coin
+
+        coop_moves[is_my_coin == 1] = moves_towards_coin[is_my_coin == 1]
+        coop_moves[is_my_coin == 0] = moves_away_from_coin[is_my_coin == 0]
+        return coop_moves
