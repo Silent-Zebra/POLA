@@ -689,15 +689,15 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
     #         stuff, aux  = inner_step_get_grad_otheragent1(stuff, None)
     #     _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _ = stuff
 
-    # if args.inner_steps > 1:
-    stuff = (subkey1, trainstate_th1_, trainstate_val1_, trainstate_th2_,
-             trainstate_val2_, other_old_trainstate_th,
-             other_old_trainstate_val)
-    if other_agent == 2:
-        stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent2, stuff, None, args.inner_steps - 1)
-    else:
-        stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff, None, args.inner_steps - 1)
-    _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _ = stuff
+    if args.inner_steps > 1:
+        stuff = (subkey1, trainstate_th1_, trainstate_val1_, trainstate_th2_,
+                 trainstate_val2_, other_old_trainstate_th,
+                 other_old_trainstate_val)
+        if other_agent == 2:
+            stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent2, stuff, None, args.inner_steps - 1)
+        else:
+            stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff, None, args.inner_steps - 1)
+        _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _ = stuff
 
     if other_agent == 2:
         return trainstate_th2_, None
@@ -1674,6 +1674,7 @@ if __name__ == "__main__":
                         help="lambda for GAE (1 = monte carlo style, 0 = TD style)")
     parser.add_argument("--val_update_after_loop", action="store_true", help="Update values only after outer POLA loop finishes, not during the POLA loop")
     parser.add_argument("--std", type=float, default=0.1, help="standard deviation for initialization of policy/value parameters")
+    parser.add_argument("--old_kl_div", action="store_true", help="Use the old version of KL div relative to just one batch of states at the beginning")
 
 
     args = parser.parse_args()
