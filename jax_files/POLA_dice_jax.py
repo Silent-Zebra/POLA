@@ -31,9 +31,8 @@ tfd = tfp.distributions
 from coin_game_jax import CoinGame
 
 
-@jit
-def reverse_cumsum(x, dim):
-    return x + jnp.sum(x, dim=dim, keepdims=True) - jnp.cumsum(x, dim=dim)
+def reverse_cumsum(x, axis):
+    return x + jnp.sum(x, axis=axis, keepdims=True) - jnp.cumsum(x, axis=axis)
 
 
 device = 'cpu'
@@ -42,6 +41,22 @@ device = 'cpu'
 @jit
 def magic_box(x):
     return jnp.exp(x - jax.lax.stop_gradient(x))
+
+
+@jit
+def get_gae_advantages(rewards, values, next_val_history):
+    advantages = jnp.zeros_like(values)
+    deltas = rewards + args.gamma * jax.lax.stop_gradient(
+        next_val_history) - jax.lax.stop_gradient(values)
+
+    gae = jnp.zeros_like(deltas[0, :])
+    for i in range(deltas.shape[0] - 1, -1, -1):
+        gae = gae * args.gamma * args.gae_lambda + deltas[i, :]
+        advantages.at[i, :].set(gae)
+    # Later TODO lax scan here. Ensure the results are the same though.
+    return advantages
+
+
 
 @jit
 def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
@@ -82,73 +97,95 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
         use_loaded_dice = True
 
     if use_loaded_dice:
-        print("NOT YET FULLY CHECKED")
-        raise NotImplementedError
-        next_val_history = jnp.zeros((args.batch_size, args.rollout_len))
-        next_val_history[:, :args.rollout_len - 1] = values[:, 1:args.rollout_len]
-        next_val_history[:, -1] = end_state_v
+        next_val_history = jnp.zeros((args.rollout_len, args.batch_size))
+
+        next_val_history.at[:args.rollout_len - 1, :].set(values[1:args.rollout_len, :])
+        next_val_history.at[-1, :].set(end_state_v)
 
         if args.zero_vals:
             next_val_history = jnp.zeros_like(next_val_history)
             values = jnp.zeros_like(values)
 
-        advantages = jnp.zeros_like(values)
-        lambd = args.gae_lambda # 1 here is essentially monte carlo (but with extrapolation of value in the end state)
-        deltas = rewards + args.gamma * next_val_history.detach() - values.detach()
-        gae = jnp.zeros_like(deltas[:, 0]).float()
-        for i in range(deltas.size(1) - 1, -1, -1):
-            gae = gae * args.gamma * lambd + deltas[:, i]
-            advantages[:, i] = gae
+        advantages = get_gae_advantages(rewards, values, next_val_history)
 
-        discounts = jnp.cumprod(
-            args.gamma * jnp.ones((args.rollout_len), device=device),
-            dim=0) / args.gamma
+        discounted_advantages = advantages * cum_discount
 
-        discounted_advantages = advantages * discounts
-
-        deps_up_to_t = (jnp.cumsum(stochastic_nodes, dim=1))
+        deps_up_to_t = (jnp.cumsum(stochastic_nodes, axis=0))
 
         deps_less_than_t = deps_up_to_t - stochastic_nodes  # take out the dependency in the given time step
 
         # Look at Loaded DiCE and GAE papers to see where this formulation comes from
         loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(
-            deps_less_than_t)) * discounted_advantages).sum(dim=1).mean(dim=0)
+            deps_less_than_t)) * discounted_advantages).sum(axis=0).mean()
 
-        dice_objective = loaded_dice_rewards
+        dice_obj = loaded_dice_rewards
 
     else:
         # dice objective:
-        dice_objective = jnp.mean(
+        dice_obj = jnp.mean(
             jnp.sum(magic_box(dependencies) * discounted_rewards, axis=1))
 
 
-    return -dice_objective  # want to minimize -objective
+    return -dice_obj  # want to minimize -objective
 
 
 @jit
-def value_loss(values, rewards, final_state_vals):
-    # Fixed original value update which I'm almost certain is wrong
+def dice_objective_plus_value_loss(self_logprobs, other_logprobs, rewards, values, end_state_v):
+    # Essentially a wrapper function for the objective to put all the control flow in one spot
+    # The reasoning behind this function here is that the reward_loss has a stop_gradient
+    # on all of the nodes related to the value function
+    # and the value function has no nodes related to the policy
+    # Then we can actually take the respective grads like the way I have things set up now
+    # And I should be able to update both policy and value functions
 
-    discounts = jnp.cumprod(
-        args.gamma * jnp.ones((args.rollout_len), device=device),
-        dim=0) / args.gamma
+    reward_loss = dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v)
+
+    if use_baseline:
+        val_loss = value_loss(rewards, values, end_state_v)
+        return reward_loss + val_loss
+    else:
+        return reward_loss
+
+
+@jit
+def value_loss(rewards, values, final_state_vals):
+
+    final_state_vals = jax.lax.stop_gradient(final_state_vals)
+
+    rewards = rewards.squeeze(-1)
+
+
+    discounts = jnp.cumprod(args.gamma * jnp.ones(rewards.shape),
+                                 axis=0) / args.gamma
+
+    print(rewards)
 
     gamma_t_r_ts = rewards * discounts
-    G_ts = reverse_cumsum(gamma_t_r_ts, dim=1)
-    R_ts = G_ts / discounts
 
-    final_val_discounted_to_curr = (args.gamma * discounts.flip(dims=[0])).expand((final_state_vals.shape[0], discounts.shape[0])) \
-                                   * final_state_vals.expand((discounts.shape[0], final_state_vals.shape[0])).t()
+    G_ts = reverse_cumsum(gamma_t_r_ts, axis=0)
+    R_ts = G_ts / discounts
+    # print(G_ts) # TODO check the actual numbers, check that the cumsum is correct. Get rid of jits and whatever, just try something outside of a lax.scan loop first
+
+    # print(discounts)
+    # print(args.gamma * jnp.flip(discounts, axis=0))
+    # print(final_state_vals)
+
+    final_val_discounted_to_curr = (args.gamma * jnp.flip(discounts, axis=0)) * final_state_vals
+    # print(final_val_discounted_to_curr)
+    # print(R_ts)
+
+
 
     # You DO need a detach on these. Because it's the target - it should be detached. It's a target value.
     # Essentially a Monte Carlo style type return for R_t, except for the final state we also use the estimated final state value.
     # This becomes our target for the value function loss. So it's kind of a mix of Monte Carlo and bootstrap, but anyway you need the final value
     # because otherwise your value calculations will be inconsistent
     values_loss = (R_ts + final_val_discounted_to_curr - values) ** 2
-    values_loss = values_loss.sum(dim=1).mean(dim=0)
 
-    print("Values loss")
-    print(values_loss)
+    values_loss = values_loss.sum(axis=0).mean()
+
+    # print("Values loss")
+    # print(values_loss)
     return values_loss
 
 
@@ -206,43 +243,6 @@ def act(stuff, unused ):
 
 
 
-# def step(theta1, theta2, values1, values2):
-#     # just to evaluate progress:
-#     env_state, obsv = env.reset()
-#     s1 = obsv
-#     s2 = obsv
-#
-#     score1 = 0
-#     score2 = 0
-#     h_p1, h_v1, h_p2, h_v2 = (
-#     jnp.zeros(args.batch_size, args.hidden_size).to(device),
-#     jnp.zeros(args.batch_size, args.hidden_size).to(device),
-#     jnp.zeros(args.batch_size, args.hidden_size).to(device),
-#     jnp.zeros(args.batch_size, args.hidden_size).to(device))
-#     if args.env == "coin" or args.env == "ogcoin":
-#         rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record = 0., 0., 0., 0.
-#
-#     for t in range(args.rollout_len):
-#         a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(s1, theta1, values1, h_p1, h_v1)
-#         a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(s2, theta2, values2, h_p2, h_v2)
-#         (s1, s2), (r1, r2), _, info = env.step((a1, a2))
-#         # cumulate scores
-#         score1 += jnp.mean(r1) / float(args.rollout_len)
-#         score2 += jnp.mean(r2) / float(args.rollout_len)
-#
-#         if args.env == "coin" or args.env == "ogcoin":
-#             rr_matches, rb_matches, br_matches, bb_matches = info
-#             rr_matches_record += rr_matches
-#             rb_matches_record += rb_matches
-#             br_matches_record += br_matches
-#             bb_matches_record += bb_matches
-#
-#     if args.env == "coin" or args.env == "ogcoin":
-#         return (score1, score2), (rr_matches_record, rb_matches_record, br_matches_record, bb_matches_record)
-#
-#     return (score1, score2), None
-
-
 class RNN(nn.Module):
     num_outputs: int
     num_hidden_units: int
@@ -260,12 +260,6 @@ class RNN(nn.Module):
     #     return self.GRUCell.initialize_carry(
     #         jax.random.PRNGKey(0), (), self.num_hidden_units
     #     )
-
-# def jnp.zeros(num_hidden_units):
-#     # initializes as all 0s without regard to the prngkey
-#     return nn.GRUCell.initialize_carry(
-#         jax.random.PRNGKey(0), (), num_hidden_units
-#     )
 
 
 
@@ -318,36 +312,6 @@ def get_policies_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_t
 
     return cat_act_probs_list
 
-
-def get_other_logits_values_for_states(self, other_theta, other_values, state_history):
-    # Same comments as above. Questionable variable naming here
-    h_p1, h_v1 = (
-        jnp.zeros(args.batch_size, args.hidden_size).to(device),
-        jnp.zeros(args.batch_size, args.hidden_size).to(device))
-
-    logits_hist = []
-    vals_hist = []
-
-
-    for t in range(args.rollout_len):
-        s1 = state_history[t]
-        a1, lp1, v1, h_p1, h_v1, cat_act_probs1, logits = act(s1, other_theta,
-                                                      other_values, h_p1,
-                                                      h_v1, ret_logits=True)
-        logits_hist.append(logits)
-        vals_hist.append(v1)
-
-    final_state = state_history[-1]
-    # act just to get the final state values
-    a1, lp1, v1, h_p1, h_v1, cat_act_probs1 = act(final_state, other_theta,
-                                                  other_values,
-                                                  h_p1, h_v1)
-    final_state_vals = v1
-
-    if use_baseline:
-        return jnp.stack(logits_hist, dim=1), jnp.stack(vals_hist, dim=1), final_state_vals
-    else:
-        return jnp.stack(logits_hist, dim=1), None, None
 
 @jit
 def env_step(stuff, unused):
@@ -527,7 +491,7 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
         #                                               h_p2, h_v2)
         end_state_v2 = v2
 
-        inner_agent_objective = dice_objective(self_logprobs=lp2_list,
+        inner_agent_objective = dice_objective_plus_value_loss(self_logprobs=lp2_list,
                                                other_logprobs=lp1_list,
                                                rewards=r2_list,
                                                values=v2_list,
@@ -554,7 +518,7 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
         #                                               h_p1, h_v1)
         end_state_v1 = v1
 
-        inner_agent_objective = dice_objective(self_logprobs=lp1_list,
+        inner_agent_objective = dice_objective_plus_value_loss(self_logprobs=lp1_list,
                                                other_logprobs=lp2_list,
                                                rewards=r1_list,
                                                values=v1_list,
@@ -642,12 +606,11 @@ def inner_step_get_grad_otheragent2(stuff, unused):
     # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
     trainstate_th2_ = trainstate_th2_.apply_gradients(grads=grad_th)
 
-    # TODO when value update the inner model? Do it at all?
+    # TODO when value update the inner model? Do it at all? In old code I didn't update on inner loop but also I only used 1 inner step in most experiments
     if use_baseline:
-        raise NotImplementedError
-        # model_state_val_ = model_state_val_.apply_gradients(
-        #     grads=grad_v)
-        # return model_state_th_, model_state_val_
+        # Now this should be correct because I am using dice_objective_plus_value_loss
+        # which has both the policy and the value loss together
+        trainstate_val2_ = trainstate_val2_.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
     stuff = (key, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old)
@@ -680,12 +643,11 @@ def inner_step_get_grad_otheragent1(stuff, unused):
 
     trainstate_th1_ = trainstate_th1_.apply_gradients(grads=grad_th)
 
-    # TODO when value update the inner model? Do it at all?
+    # TODO when value update the inner model? Do it at all? In old code I didn't update on inner loop but also I only used 1 inner step in most experiments
     if use_baseline:
-        raise NotImplementedError
-        # model_state_val_ = model_state_val_.apply_gradients(
-        #     grads=grad_v)
-        # return model_state_th_, model_state_val_
+        # Now this should be correct because I am using dice_objective_plus_value_loss
+        # which has both the policy and the value loss together
+        trainstate_val1_ = trainstate_val1_.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
     stuff = (key, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old)
@@ -800,12 +762,18 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
             stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff, None, args.inner_steps - 1)
         _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _, _ = stuff
 
+    ret_trainstate_val = None
     if other_agent == 2:
-        return trainstate_th2_, None
+        ret_trainstate_th = trainstate_th2_
+        if use_baseline:
+            ret_trainstate_val = trainstate_val2_
     else:
-        return trainstate_th1_, None
+        ret_trainstate_th = trainstate_th1_
+        if use_baseline:
+            ret_trainstate_val = trainstate_val1_
 
-    # return model_state_th_, None
+    return ret_trainstate_th, ret_trainstate_val
+
 
 @partial(jit, static_argnums=(11))
 def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
@@ -901,7 +869,7 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
         #                                               h_p1, h_v1)
 
         end_state_v = v1
-        objective = dice_objective(self_logprobs=lp1_list,
+        objective = dice_objective_plus_value_loss(self_logprobs=lp1_list,
                                    other_logprobs=lp2_list,
                                    rewards=r1_list, values=v1_list,
                                    end_state_v=end_state_v)
@@ -926,7 +894,7 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
         #                                               trainstate_val2_params,
         #                                               h_p2, h_v2)
         end_state_v = v2
-        objective = dice_objective(self_logprobs=lp2_list,
+        objective = dice_objective_plus_value_loss(self_logprobs=lp2_list,
                                    other_logprobs=lp1_list,
                                    rewards=r2_list, values=v2_list,
                                    end_state_v=end_state_v)
@@ -1079,8 +1047,7 @@ def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1
 
 @jit
 def one_outer_step_update_selfagent1(stuff, unused):
-    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
-    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
+    key, trainstate_th1_copy, trainstate_val1_copy, trainstate_th2_copy, trainstate_val2_copy, \
     trainstate_th_ref, trainstate_val_ref, self_pol_probs_ref = stuff
 
     key, subkey = jax.random.split(key)
@@ -1089,13 +1056,13 @@ def one_outer_step_update_selfagent1(stuff, unused):
 
     grad_th, grad_v = obj_grad_fn(subkey,
                                   trainstate_th1_copy,
-                                  trainstate_th1_copy_params,
+                                  trainstate_th1_copy.params,
                                   trainstate_val1_copy,
-                                  trainstate_val1_copy_params,
+                                  trainstate_val1_copy.params,
                                   trainstate_th2_copy,
-                                  trainstate_th2_copy_params,
+                                  trainstate_th2_copy.params,
                                   trainstate_val2_copy,
-                                  trainstate_val2_copy_params,
+                                  trainstate_val2_copy.params,
                                   trainstate_th_ref, trainstate_val_ref,
                                   self_pol_probs_ref)
 
@@ -1104,15 +1071,13 @@ def one_outer_step_update_selfagent1(stuff, unused):
 
     # TODO when value update the inner model? Do it at all?
     if use_baseline:
-        raise NotImplementedError
-        # model_state_val_ = model_state_val_.apply_gradients(
-        #     grads=grad_v)
-        # return model_state_th_, model_state_val_
+        # Now this should be correct because I am using dice_objective_plus_value_loss
+        # which has both the policy and the value loss together
+        trainstate_val1_copy = trainstate_val1_copy.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
     stuff = (
-    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
-    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
+    key, trainstate_th1_copy,  trainstate_val1_copy, trainstate_th2_copy,  trainstate_val2_copy,
     trainstate_th_ref, trainstate_val_ref, self_pol_probs_ref)
     aux = None
 
@@ -1120,8 +1085,8 @@ def one_outer_step_update_selfagent1(stuff, unused):
 
 @jit
 def one_outer_step_update_selfagent2(stuff, unused):
-    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,\
-    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,\
+    key, trainstate_th1_copy, trainstate_val1_copy, \
+    trainstate_th2_copy, trainstate_val2_copy,\
     trainstate_th_ref, trainstate_val_ref, self_pol_probs_ref = stuff
 
 
@@ -1131,13 +1096,13 @@ def one_outer_step_update_selfagent2(stuff, unused):
 
     grad_th, grad_v = obj_grad_fn(subkey,
                                   trainstate_th1_copy,
-                                  trainstate_th1_copy_params,
+                                  trainstate_th1_copy.params,
                                   trainstate_val1_copy,
-                                  trainstate_val1_copy_params,
+                                  trainstate_val1_copy.params,
                                   trainstate_th2_copy,
-                                  trainstate_th2_copy_params,
+                                  trainstate_th2_copy.params,
                                   trainstate_val2_copy,
-                                  trainstate_val2_copy_params,
+                                  trainstate_val2_copy.params,
                                   trainstate_th_ref, trainstate_val_ref,
                                   self_pol_probs_ref)
 
@@ -1146,15 +1111,14 @@ def one_outer_step_update_selfagent2(stuff, unused):
 
     # TODO when value update the inner model? Do it at all?
     if use_baseline:
-        raise NotImplementedError
-        # model_state_val_ = model_state_val_.apply_gradients(
-        #     grads=grad_v)
-        # return model_state_th_, model_state_val_
+        # Now this should be correct because I am using dice_objective_plus_value_loss
+        # which has both the policy and the value loss together
+        trainstate_val2_copy = trainstate_val2_copy.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
     stuff = (
-    key, trainstate_th1_copy, trainstate_th1_copy_params, trainstate_val1_copy, trainstate_val1_copy_params,
-    trainstate_th2_copy, trainstate_th2_copy_params, trainstate_val2_copy, trainstate_val2_copy_params,
+    key, trainstate_th1_copy, trainstate_val1_copy,
+    trainstate_th2_copy, trainstate_val2_copy,
     trainstate_th_ref, trainstate_val_ref, self_pol_probs_ref)
     aux = None
 
@@ -1610,14 +1574,12 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
                                                             state_history_for_kl_div)
 
 
-        stuff = (reused_subkey, trainstate_th1_copy, trainstate_th1_copy.params,
-                 trainstate_val1_copy, trainstate_val1_copy.params,
-                 trainstate_th2_copy, trainstate_th2_copy.params,
-                 trainstate_val2_copy, trainstate_val2_copy.params,
+        stuff = (reused_subkey, trainstate_th1_copy, trainstate_val1_copy,
+                 trainstate_th2_copy, trainstate_val2_copy,
                  trainstate_th1_ref, trainstate_val1_ref, self_pol_probs_ref)
 
         stuff, aux = jax.lax.scan(one_outer_step_update_selfagent1, stuff, None, args.outer_steps)
-        _, trainstate_th1_copy, _, trainstate_val1_copy, _, _, _, _, _, _, _, _ = stuff
+        _, trainstate_th1_copy, trainstate_val1_copy, _, _, _, _, _ = stuff
 
         # Doing this just as a safety failcase scenario, and copy this at the end
         trainstate_after_outer_steps_th1 = TrainState.create(
@@ -1688,15 +1650,13 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
                                                          state_history_for_kl_div)
 
 
-        stuff = (reused_subkey, trainstate_th1_copy, trainstate_th1_copy.params,
-                 trainstate_val1_copy, trainstate_val1_copy.params,
-                 trainstate_th2_copy, trainstate_th2_copy.params,
-                 trainstate_val2_copy, trainstate_val2_copy.params,
+        stuff = (reused_subkey, trainstate_th1_copy, trainstate_val1_copy,
+                 trainstate_th2_copy, trainstate_val2_copy,
                  trainstate_th2_ref, trainstate_val2_ref, self_pol_probs_ref)
 
         stuff, aux = jax.lax.scan(one_outer_step_update_selfagent2, stuff, None,
                                   args.outer_steps)
-        _, _, _, _, _, trainstate_th2_copy, _, trainstate_val2_copy, _, _, _, _ = stuff
+        _, _, _, trainstate_th2_copy, trainstate_val2_copy, _, _, _ = stuff
 
         trainstate_after_outer_steps_th2 = TrainState.create(
             apply_fn=trainstate_th2_copy.apply_fn,
