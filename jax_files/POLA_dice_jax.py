@@ -158,7 +158,7 @@ def value_loss(rewards, values, final_state_vals):
     discounts = jnp.cumprod(args.gamma * jnp.ones(rewards.shape),
                                  axis=0) / args.gamma
 
-    print(rewards)
+    # print(rewards)
 
     gamma_t_r_ts = rewards * discounts
 
@@ -873,7 +873,7 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
                                    other_logprobs=lp2_list,
                                    rewards=r1_list, values=v1_list,
                                    end_state_v=end_state_v)
-        print(f"Agent 1 episode return avg {r1_list.sum(axis=0).mean()}")
+        # print(f"Agent 1 episode return avg {r1_list.sum(axis=0).mean()}")
     else:
         assert self_agent == 2
         cat_act_probs2_list, obs2_list, lp2_list, lp1_list, v2_list, r2_list, a2_list, a1_list = aux2
@@ -898,7 +898,7 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
                                    other_logprobs=lp1_list,
                                    rewards=r2_list, values=v2_list,
                                    end_state_v=end_state_v)
-        print(f"Agent 2 episode return avg {r2_list.sum(axis=0).mean()}")
+        # print(f"Agent 2 episode return avg {r2_list.sum(axis=0).mean()}")
 
     key, sk1, sk2 = jax.random.split(key, 3)
 
