@@ -235,10 +235,10 @@ class CoinGame:
 
         vert_dist_down = (self.coin_pos[0] - agent_pos[0]) % self.grid_size
         vert_dist_up = (agent_pos[0] - self.coin_pos[0]) % self.grid_size
-        actions[horiz_dist_right < horiz_dist_left] = 0
-        actions[horiz_dist_left < horiz_dist_right] = 1
-        actions[vert_dist_down < vert_dist_up] = 2
-        actions[vert_dist_up < vert_dist_down] = 3
+        actions.at[horiz_dist_right < horiz_dist_left].set(0)
+        actions.at[horiz_dist_left < horiz_dist_right].set(1)
+        actions.at[vert_dist_down < vert_dist_up].set(2)
+        actions.at[vert_dist_up < vert_dist_down].set(3)
         # Assumes no coin spawns under agent
         assert jnp.logical_and(horiz_dist_right == horiz_dist_left, vert_dist_down == vert_dist_up).sum() == 0
 
@@ -249,10 +249,10 @@ class CoinGame:
 
     def get_moves_away_from_coin(self, moves_towards_coin):
         opposite_moves = jnp.zeros_like(moves_towards_coin)
-        opposite_moves[moves_towards_coin == 0] = 1
-        opposite_moves[moves_towards_coin == 1] = 0
-        opposite_moves[moves_towards_coin == 2] = 3
-        opposite_moves[moves_towards_coin == 3] = 2
+        opposite_moves.at[moves_towards_coin == 0].set(1)
+        opposite_moves.at[moves_towards_coin == 1].set(0)
+        opposite_moves.at[moves_towards_coin == 2].set(3)
+        opposite_moves.at[moves_towards_coin == 3].set(2)
         return opposite_moves
 
     def get_coop_action(self, red_agent_perspective=True):
@@ -262,10 +262,10 @@ class CoinGame:
         moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin)
         coop_moves = jnp.zeros_like(moves_towards_coin) - 1
         if red_agent_perspective:
-            is_my_coin = self.red_coin
+            is_my_coin = self.is_red_coin
         else:
-            is_my_coin = 1 - self.red_coin
+            is_my_coin = 1 - self.is_red_coin
 
-        coop_moves[is_my_coin == 1] = moves_towards_coin[is_my_coin == 1]
-        coop_moves[is_my_coin == 0] = moves_away_from_coin[is_my_coin == 0]
+        coop_moves.at[is_my_coin == 1].set(moves_towards_coin[is_my_coin == 1])
+        coop_moves.at[is_my_coin == 0].set(moves_away_from_coin[is_my_coin == 0])
         return coop_moves
