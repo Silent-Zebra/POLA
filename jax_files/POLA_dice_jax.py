@@ -70,7 +70,6 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     # print(rewards.shape)
     # print(rewards.size)
 
-
     rewards = rewards.squeeze(-1)
 
     # print(self_logprobs.shape)
@@ -81,7 +80,6 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     cum_discount = jnp.cumprod(args.gamma * jnp.ones(rewards.shape),
                                  axis=0) / args.gamma
     discounted_rewards = rewards * cum_discount
-
 
     # print(cum_discount)
     # print(discounted_rewards)
@@ -123,7 +121,7 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     else:
         # dice objective:
         dice_obj = jnp.mean(
-            jnp.sum(magic_box(dependencies) * discounted_rewards, axis=1))
+            jnp.sum(magic_box(dependencies) * discounted_rewards, axis=0))
 
 
     return -dice_obj  # want to minimize -objective
