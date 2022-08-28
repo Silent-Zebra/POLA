@@ -122,6 +122,8 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
 
     else:
         # dice objective:
+        # REMEMBER that in this jax code the axis 0 is the rollout_len (number of time steps in the environment)
+        # and axis 1 is the batch.
         dice_obj = jnp.mean(
             jnp.sum(magic_box(dependencies) * discounted_rewards, axis=0))
 
@@ -182,6 +184,7 @@ def value_loss(rewards, values, final_state_vals):
     # because otherwise your value calculations will be inconsistent
     values_loss = (R_ts + final_val_discounted_to_curr - values) ** 2
 
+
     values_loss = values_loss.sum(axis=0).mean()
 
     # print("Values loss")
@@ -202,7 +205,6 @@ def act_w_iter_over_obs(stuff, env_batch_obs):
 @jit
 def act(stuff, unused ):
     key, env_batch_states, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, h_p, h_v = stuff
-    # TODO vectorize the env batch states, follow Chris code as example
     # print(env_batch_states)
 
     h_p, logits = th_p_trainstate.apply_fn(th_p_trainstate_params, env_batch_states, h_p)
@@ -495,6 +497,7 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
         # inner_agent_cat_act_probs.extend(cat_act_probs2_list)
         inner_agent_state_history.extend(obs2_list)
 
+        # act just to get the final state values
         act_args2 = (subkey2, obs2, trainstate_th2, trainstate_th2_params,
                      trainstate_val2, trainstate_val2_params, h_p2, h_v2)
         stuff2, aux2 = act(act_args2, None)
@@ -686,7 +689,7 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
     trainstate_val1_ = TrainState.create(apply_fn=trainstate_val1.apply_fn,
                                          params=trainstate_val1_params,
                                          tx=optax.sgd(
-                                             learning_rate=args.lr_in))
+                                             learning_rate=args.lr_v))
 
     trainstate_th2_ = TrainState.create(apply_fn=trainstate_th2.apply_fn,
                                          params=trainstate_th2_params,
@@ -695,7 +698,7 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
     trainstate_val2_ = TrainState.create(apply_fn=trainstate_val2.apply_fn,
                                           params=trainstate_val2_params,
                                           tx=optax.sgd(
-                                              learning_rate=args.lr_in))
+                                              learning_rate=args.lr_v))
 
 
     key, reused_subkey = jax.random.split(key)
