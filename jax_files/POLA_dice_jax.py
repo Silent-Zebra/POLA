@@ -123,7 +123,7 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     else:
         # dice objective:
         dice_obj = jnp.mean(
-            jnp.sum(magic_box(dependencies) * discounted_rewards, axis=1))
+            jnp.sum(magic_box(dependencies) * discounted_rewards, axis=0))
 
 
     return -dice_obj  # want to minimize -objective
