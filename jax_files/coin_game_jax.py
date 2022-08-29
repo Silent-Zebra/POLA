@@ -28,7 +28,6 @@ MOVES = jax.device_put(
 class CoinGame:
     def __init__(self, grid_size=3):
         self.grid_size = grid_size
-        pass
 
     def generate_coins(self, subkey, red_pos_flat, blue_pos_flat):
         # if red_pos_flat == blue_pos_flat:

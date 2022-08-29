@@ -1,0 +1,34 @@
+import jax.numpy as jnp
+
+class IPD:
+    """
+    A two-agent vectorized environment.
+    Possible actions for each agent are (C)ooperate and (D)efect.
+    """
+    def __init__(self, init_state_coop=False):
+        self.payout_mat = jnp.array([[-2,0],[-3,-1]])
+        # One hot state representation because this would scale to n agents
+        self.states = jnp.array([[[1, 0, 0, 1, 0, 0], #DD (WE ARE BACK TO THE REPR OF FIRST AGENT, SECOND AGENT)
+                                          [1, 0, 0, 0, 1, 0]], #DC
+                                         [[0, 1, 0, 1, 0, 0], #CD
+                                          [0, 1, 0, 0, 1, 0]]]) #CC
+        if init_state_coop:
+            self.init_state = jnp.array([0, 1, 0, 0, 1, 0])
+        else:
+            self.init_state = jnp.array([0, 0, 1, 0, 0, 1])
+        # self.step_count = None
+
+    def reset(self, unused_key):
+        return self.init_state, self.init_state
+
+    def step(self, unused_state, ac0, ac1, unused_key):
+        # self.step_count += 1
+
+        r0 = self.payout_mat[ac0, ac1]
+        r1 = self.payout_mat[ac1, ac0]
+        state = self.states[ac0, ac1]
+        observation = state
+        reward = (r0, r1)
+        # done = (self.step_count == self.max_steps)
+        # State is observation in the IPD
+        return state, observation, reward, None

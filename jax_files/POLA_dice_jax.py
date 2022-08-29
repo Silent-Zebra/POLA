@@ -29,7 +29,7 @@ tfd = tfp.distributions
 
 
 from coin_game_jax import CoinGame
-
+from ipd_jax import IPD
 
 def reverse_cumsum(x, axis):
     return x + jnp.sum(x, axis=axis, keepdims=True) - jnp.cumsum(x, axis=axis)
@@ -70,8 +70,8 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     # print(rewards.shape)
     # print(rewards.size)
 
-
-    rewards = rewards.squeeze(-1)
+    if args.env == 'coin':
+        rewards = rewards.squeeze(-1)
 
     # print(self_logprobs.shape)
     # print(other_logprobs.shape)
@@ -269,7 +269,7 @@ class RNN(nn.Module):
     #     )
 
 
-
+@jit
 def get_policies_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, obs_hist):
 
     h_p = jnp.zeros((args.batch_size, args.hidden_size))
@@ -286,51 +286,50 @@ def get_policies_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_t
     obs_hist_for_scan = jnp.stack(obs_hist[:args.rollout_len], axis=0)
 
     act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, args.rollout_len)
+    # act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, obs_hist_for_scan.shape[0])
+
     a_list, lp_list, v_list, h_p_list, h_v_list, cat_act_probs_list, logits_list = aux_lists
 
-    # print(a_list.shape)
-    # print(cat_act_probs_list.shape)
-
-    # cat_act_probs = []
-    # h_p, h_v = (
-    #     jnp.zeros((args.batch_size, args.hidden_size)),
-    #     jnp.zeros((args.batch_size, args.hidden_size)))
-    # key, subkey = jax.random.split(key)
-    # for t in range(args.rollout_len):
-    #     act_args = (
-    #         subkey, obs_hist[t], th_p_trainstate, th_p_trainstate.params,
-    #         th_v_trainstate, th_v_trainstate.params, h_p, h_v)
-    #     act_args, aux = act(act_args, None)
-    #     _, _, _, _, _, _, h_p, h_v = act_args
-    #     a1, lp1, v1, h_p1, h_v1, cat_act_probs1, logits1 = aux
-    #     cat_act_probs.append(cat_act_probs1)
-
-    # print(len(cat_act_probs))
-    # print(cat_act_probs)
-    # print(cat_act_probs[0])
-    # cat_act_probs = jnp.stack(cat_act_probs, axis=0)
-
-    # TODO Check that these two are the same.
-    # print(cat_act_probs)
-    # print(cat_act_probs_list)
-    # print(jnp.abs(cat_act_probs - cat_act_probs_list).sum())
-    #
-    # return jnp.stack(cat_act_probs, dim=1)
 
     return cat_act_probs_list
 
 
 @jit
-def env_step_from_actions(stuff, unused):
-    # TODO I may have to pass in one agent params anyway and kind of follow the env_step pattern
-    # I may need a other_agent=2 switch again...
-    # Plan out the whole thing before coding
-    # TODO anyway all this needs to go into the eval_progress and eval_vs_fixed... functions
-    skenv, env_state, a1, a2 = stuff
-    env_state, new_obs, (r1, r2), (rr_match, rb_match, br_match, bb_match) = vec_env_step(env_state, a1, a2, skenv)
-    stuff = (skenv, env_state, a1, a2)
-    aux = (r1, r2, rr_match, rb_match, br_match, bb_match)
-    return stuff, aux
+def get_policies_for_states_onebatch(key, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, obs_hist):
+
+    h_p = jnp.zeros((1, args.hidden_size))
+    h_v = None
+    if use_baseline:
+        h_v = jnp.zeros((1, args.hidden_size))
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (subkey, th_p_trainstate, th_p_trainstate_params,
+                th_v_trainstate, th_v_trainstate_params, h_p, h_v)
+    # Note that I am scanning using xs = obs_hist. Then the scan should work through the
+    # array of obs.
+    obs_hist_for_scan = jnp.stack(obs_hist[:len(obs_hist)], axis=0)
+
+    # act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, args.rollout_len)
+    act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, obs_hist_for_scan.shape[0])
+
+    a_list, lp_list, v_list, h_p_list, h_v_list, cat_act_probs_list, logits_list = aux_lists
+
+
+    return cat_act_probs_list
+
+
+@jit
+# def env_step_from_actions(stuff, unused):
+#     # TODO I may have to pass in one agent params anyway and kind of follow the env_step pattern
+#     # I may need a other_agent=2 switch again...
+#     # Plan out the whole thing before coding
+#     # TODO anyway all this needs to go into the eval_progress and eval_vs_fixed... functions
+#     skenv, env_state, a1, a2 = stuff
+#     env_state, new_obs, (r1, r2), (rr_match, rb_match, br_match, bb_match) = vec_env_step(env_state, a1, a2, skenv)
+#     stuff = (skenv, env_state, a1, a2)
+#     aux = (r1, r2, rr_match, rb_match, br_match, bb_match)
+#     return stuff, aux
 
 @jit
 def env_step(stuff, unused):
@@ -357,7 +356,8 @@ def env_step(stuff, unused):
     #                                               h_p2,
     #                                               h_v2)
     skenv = jax.random.split(skenv, args.batch_size)
-    env_state, new_obs, (r1, r2), (rr_match, rb_match, br_match, bb_match) = vec_env_step(env_state, a1, a2, skenv)
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2, skenv)
     # print(new_obs)
     # env_state, new_obs, (r1, r2) = env.step(env_state, a1, a2, skenv)
     obs1 = new_obs
@@ -374,8 +374,6 @@ def env_step(stuff, unused):
     aux1 = (cat_act_probs1, obs1, lp1, lp2, v1, r1, a1, a2)
 
     aux2 = (cat_act_probs2, obs2, lp2, lp1, v2, r2, a2, a1)
-
-    aux_info = (rr_match, rb_match, br_match, bb_match)
 
     return stuff, (aux1, aux2, aux_info)
 
@@ -396,17 +394,7 @@ def do_env_rollout(key, trainstate_th1, trainstate_th1_params, trainstate_val1,
     # print(obsv.shape)
 
     # other_memory = Memory()
-    h_p1, h_p2 = (
-        jnp.zeros((args.batch_size, args.hidden_size)),
-        jnp.zeros((args.batch_size, args.hidden_size))
-    )
-
-    h_v1, h_v2 = None, None
-    if use_baseline:
-        h_v1, h_v2 = (
-            jnp.zeros((args.batch_size, args.hidden_size)),
-            jnp.zeros((args.batch_size, args.hidden_size))
-        )
+    h_p1, h_p2, h_v1, h_v2 = get_init_hidden_states()
 
     # inner_agent_cat_act_probs = []
     # TODO something like this for the vals?
@@ -1470,16 +1458,7 @@ def eval_vs_fixed_strategy(trainstate_th, trainstate_val, strat="alld", i_am_red
     env_state, obsv = vec_env_reset(env_subkeys)
     obs1 = obsv
     obs2 = obsv
-    h_p1, h_p2 = (
-        jnp.zeros((args.batch_size, args.hidden_size)),
-        jnp.zeros((args.batch_size, args.hidden_size))
-    )
-    h_v1, h_v2 = None, None
-    if use_baseline:
-        h_v1, h_v2 = (
-            jnp.zeros((args.batch_size, args.hidden_size)),
-            jnp.zeros((args.batch_size, args.hidden_size))
-        )
+    h_p1, h_p2, h_v1, h_v2 = get_init_hidden_states()
     key, subkey = jax.random.split(key)
     stuff = (subkey, env_state, obs1, obs2,
              trainstate_th1, trainstate_th1.params, trainstate_val1,
@@ -1561,15 +1540,7 @@ def eval_vs_fixed_strategy(trainstate_th, trainstate_val, strat="alld", i_am_red
     return (score1, score2), None
 
 
-
-
-@jit
-def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2):
-    keys = jax.random.split(subkey, args.batch_size + 1)
-    key, env_subkeys = keys[0], keys[1:]
-    env_state, obsv = vec_env_reset(env_subkeys)
-    obs1 = obsv
-    obs2 = obsv
+def get_init_hidden_states():
     h_p1, h_p2 = (
         jnp.zeros((args.batch_size, args.hidden_size)),
         jnp.zeros((args.batch_size, args.hidden_size))
@@ -1580,6 +1551,74 @@ def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, train
             jnp.zeros((args.batch_size, args.hidden_size)),
             jnp.zeros((args.batch_size, args.hidden_size))
         )
+    return h_p1, h_p2, h_v1, h_v2
+
+
+def inspect_ipd(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2):
+    assert args.env == 'ipd'
+    unused_keys = jax.random.split(jax.random.PRNGKey(0), args.batch_size)
+    state, obsv = vec_env_reset(unused_keys)
+    obs1 = obsv
+    obs2 = obsv
+    h_p1, h_p2, h_v1, h_v2 = get_init_hidden_states()
+    stuff = (jax.random.PRNGKey(0), state, obs1, obs2,
+             trainstate_th1, trainstate_th1.params, trainstate_val1,
+             trainstate_val1.params,
+             trainstate_th2, trainstate_th2.params, trainstate_val2,
+             trainstate_val2.params,
+             h_p1, h_v1, h_p2, h_v2)
+
+    # state_history = [obs1]
+    #
+    # stuff, aux = jax.lax.scan(env_step, stuff, None, 2)
+    # aux1, aux2, aux_info = aux
+    # cat_act_probs1_list, obs1_list, lp1_list, lp2_list, v1_list, r1_list, a1_list, a2_list = aux1
+    #
+    # state_history.extend(obs1_list)
+
+    init_state = env.init_state
+
+    for i in range(2):
+        for j in range(2):
+            state1 = env.states[i, j]
+            for ii in range(2):
+                for jj in range(2):
+                    state2 = env.states[ii, jj]
+
+                    state_history = [init_state, state1, state2]
+                    print(state_history)
+
+                    pol_probs1 = get_policies_for_states_onebatch(jax.random.PRNGKey(0),
+                                                         trainstate_th1,
+                                                         trainstate_th1.params,
+                                                         trainstate_val1,
+                                                         trainstate_val1.params,
+                                                         state_history)
+                    pol_probs2 = get_policies_for_states_onebatch(jax.random.PRNGKey(0),
+                                                         trainstate_th2,
+                                                         trainstate_th2.params,
+                                                         trainstate_val2,
+                                                         trainstate_val2.params,
+                                                         state_history)
+                    print(pol_probs1)
+                    print(pol_probs2)
+
+
+
+    # Build state history artificially for all combs, and pass those into the pol_probs.
+
+
+
+
+
+@jit
+def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2):
+    keys = jax.random.split(subkey, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+    env_state, obsv = vec_env_reset(env_subkeys)
+    obs1 = obsv
+    obs2 = obsv
+    h_p1, h_p2, h_v1, h_v2 = get_init_hidden_states()
     key, subkey = jax.random.split(key)
     stuff = (subkey, env_state, obs1, obs2,
              trainstate_th1, trainstate_th1.params, trainstate_val1,
@@ -1606,24 +1645,6 @@ def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, train
     _, _, _, _, _, r1, _, _ = aux1
     _, _, _, _, _, r2, _, _ = aux2
 
-    rr_matches, rb_matches, br_matches, bb_matches = aux_info
-
-    # TODO the score in the old file had another division by the rollout length
-    # But score is only used for eval and doesn't affect gradients
-    # But KL Div definitely would affect the gradients.
-    avg_rew1 = r1.sum(axis=0).mean()
-    # score1 = r1.mean()
-    avg_rew2 = r2.sum(axis=0).mean()
-    # score2 = r2.mean()
-
-    # print("Reward info (avg over batch, sum over episode length)")
-    # print(score1)
-    # print(score2)
-
-    rr_matches_amount = rr_matches.sum(axis=0).mean()
-    rb_matches_amount = rb_matches.sum(axis=0).mean()
-    br_matches_amount = br_matches.sum(axis=0).mean()
-    bb_matches_amount = bb_matches.sum(axis=0).mean()
 
     print("Eval vs fixed strategies not yet set up")
     # print("Eval vs Fixed Strategies:")
@@ -1649,7 +1670,28 @@ def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, train
     # vs_fixed_strats_score_record[0].append(score1rec)
     # vs_fixed_strats_score_record[1].append(score2rec)
 
-    return avg_rew1, avg_rew2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount
+    # TODO the score in the old file had another division by the rollout length
+    # But score is only used for eval and doesn't affect gradients
+    # But KL Div definitely would affect the gradients.
+    # avg_rew1 = r1.sum(axis=0).mean()
+    avg_rew1 = r1.mean()
+    # avg_rew2 = r2.sum(axis=0).mean()
+    avg_rew2 = r2.mean()
+
+    if args.env == 'coin':
+        rr_matches, rb_matches, br_matches, bb_matches = aux_info
+        rr_matches_amount = rr_matches.sum(axis=0).mean()
+        rb_matches_amount = rb_matches.sum(axis=0).mean()
+        br_matches_amount = br_matches.sum(axis=0).mean()
+        bb_matches_amount = bb_matches.sum(axis=0).mean()
+        return avg_rew1, avg_rew2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount
+
+    else:
+        return avg_rew1, avg_rew2, None, None, None, None
+
+
+
+
 
 #
 # def eval_vs_fixed_strategy(subkey, trainstate_th, trainstate_val, strat="alld", i_am_red_agent=True):
@@ -2124,13 +2166,16 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
             print("Epoch: {}".format(update + 1), flush=True)
             print(f"Score for Agent 1: {score1}")
             print(f"Score for Agent 2: {score2}")
+            if args.env == 'coin':
+                print("Same coins: {}".format(rr_matches_amount + bb_matches_amount))
+                print("Diff coins: {}".format(rb_matches_amount + br_matches_amount))
+                print("RR coins {}".format(rr_matches_amount))
+                print("RB coins {}".format(rb_matches_amount))
+                print("BR coins {}".format(br_matches_amount))
+                print("BB coins {}".format(bb_matches_amount))
 
-            print("Same coins: {}".format(rr_matches_amount + bb_matches_amount))
-            print("Diff coins: {}".format(rb_matches_amount + br_matches_amount))
-            print("RR coins {}".format(rr_matches_amount))
-            print("RB coins {}".format(rb_matches_amount))
-            print("BR coins {}".format(br_matches_amount))
-            print("BB coins {}".format(bb_matches_amount))
+            if args.env == 'ipd':
+                inspect_ipd(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 
 
     return joint_scores
@@ -2174,8 +2219,8 @@ if __name__ == "__main__":
                         help="learning rate for opponent modeling (imitation/supervised learning) for policy")
     parser.add_argument("--om_lr_v", type=float, default=0.001,
                         help="learning rate for opponent modeling (imitation/supervised learning) for value")
-    parser.add_argument("--env", type=str, default="ogcoin",
-                        choices=["ipd", "ogcoin"])
+    parser.add_argument("--env", type=str, default="coin",
+                        choices=["ipd", "coin"])
     parser.add_argument("--hist_one", action="store_true", help="Use one step history (no gru or rnn, just one step history)")
     parser.add_argument("--print_info_each_outer_step", action="store_true", help="For debugging/curiosity sake")
     parser.add_argument("--init_state_coop", action="store_true", help="For IPD only: have the first state be CC instead of a separate start state")
@@ -2195,10 +2240,18 @@ if __name__ == "__main__":
     # jnp.manual_seed(args.seed)
     # TODO all the jax rng...
 
-    assert args.grid_size == 3 # rest not implemented yet
-    input_size = args.grid_size ** 2 * 4
-    action_size = 4
-    env = CoinGame()
+
+    if args.env == 'coin':
+        assert args.grid_size == 3  # rest not implemented yet
+        input_size = args.grid_size ** 2 * 4
+        action_size = 4
+        env = CoinGame()
+    elif args.env == 'ipd':
+        input_size = 6 # 3 * n_agents
+        action_size = 2
+        env = IPD(init_state_coop=args.init_state_coop)
+    else:
+        raise NotImplementedError("unknown env")
     vec_env_reset = jax.vmap(env.reset)
     vec_env_step = jax.vmap(env.step)
 
