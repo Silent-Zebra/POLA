@@ -604,20 +604,21 @@ def kl_div_jax(curr, target):
 
 @jit
 def inner_step_get_grad_otheragent2(stuff, unused):
-    key, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old = stuff
+    key, trainstate_th1_, trainstate_th1_params, trainstate_val1_, trainstate_val1_params, \
+    trainstate_th2_, trainstate_th2_params, trainstate_val2_, trainstate_val2_params, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old = stuff
     key, subkey = jax.random.split(key)
 
     other_agent_obj_grad_fn = jax.grad(in_lookahead, argnums=[6, 8])
 
     grad_th, grad_v = other_agent_obj_grad_fn(subkey,
                                               trainstate_th1_,
-                                              trainstate_th1_.params,
+                                              trainstate_th1_params,
                                               trainstate_val1_,
-                                              trainstate_val1_.params,
+                                              trainstate_val1_params,
                                               trainstate_th2_,
-                                              trainstate_th2_.params,
+                                              trainstate_th2_params,
                                               trainstate_val2_,
-                                              trainstate_val2_.params,
+                                              trainstate_val2_params,
                                               old_trainstate_th,
                                               old_trainstate_val,
                                               other_agent=2,
@@ -633,14 +634,18 @@ def inner_step_get_grad_otheragent2(stuff, unused):
         trainstate_val2_ = trainstate_val2_.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
-    stuff = (key, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old)
+    # Note the dot here (on agent 2) because we want to return the updated params
+    stuff = (key, trainstate_th1_, trainstate_th1_params, trainstate_val1_, trainstate_val1_params,
+             trainstate_th2_, trainstate_th2.params, trainstate_val2_, trainstate_val2.params,
+             old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old)
     aux = None
 
     return stuff, aux
 
 @jit
 def inner_step_get_grad_otheragent1(stuff, unused):
-    key, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old = stuff
+    key, trainstate_th1_, trainstate_th1_params, trainstate_val1_, trainstate_val1_params, \
+    trainstate_th2_, trainstate_th2_params, trainstate_val2_, trainstate_val2_params, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old = stuff
     key, subkey = jax.random.split(key)
 
     other_agent_obj_grad_fn = jax.grad(in_lookahead,
@@ -648,13 +653,13 @@ def inner_step_get_grad_otheragent1(stuff, unused):
 
     grad_th, grad_v = other_agent_obj_grad_fn(subkey,
                                               trainstate_th1_,
-                                              trainstate_th1_.params,
+                                              trainstate_th1_params,
                                               trainstate_val1_,
-                                              trainstate_val1_.params,
+                                              trainstate_val1_params,
                                               trainstate_th2_,
-                                              trainstate_th2_.params,
+                                              trainstate_th2_params,
                                               trainstate_val2_,
-                                              trainstate_val2_.params,
+                                              trainstate_val2_params,
                                               old_trainstate_th, old_trainstate_val,
                                               other_agent=1,
                                               inner_agent_pol_probs_old=inner_agent_pol_probs_old)
@@ -670,18 +675,108 @@ def inner_step_get_grad_otheragent1(stuff, unused):
         trainstate_val1_ = trainstate_val1_.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
-    stuff = (key, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old)
+    # Note the dot here (on agent 1) because we want to return the updated params
+    stuff = (key, trainstate_th1_, trainstate_th1_.params, trainstate_val1_, trainstate_val1_.params,
+             trainstate_th2_, trainstate_th2_params, trainstate_val2_, trainstate_val2_params,
+             old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old)
     aux = None
 
     return stuff, aux
 
-@partial(jit, static_argnums=(11))
-# TODO can replace other_agent with each of the theta_p or theta_v or whatever. This could be one way to remove the agent class
-# So that things can be jittable. Everything has to be pure somehow
-def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
-                            trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params,
-                            other_old_trainstate_th, other_old_trainstate_val, other_agent=2 ):
-    # TODO ensure that this starts from scratch (well the agent 2 policy before the updates happen)
+
+@jit
+def inner_steps_plus_update_otheragent2(key, trainstate_th1, trainstate_th1_params,
+                            trainstate_val1, trainstate_val1_params,
+                            trainstate_th2, trainstate_th2_params,
+                            trainstate_val2, trainstate_val2_params,
+                            other_old_trainstate_th, other_old_trainstate_val):
+
+    # TODO reinstate the use of the th1params everywhere
+    # and then do this for the other agent perspective too
+    # Finally put it all together.
+    # in inner_step_get_grad_otheragent2...
+
+    trainstate_th2_ = TrainState.create(apply_fn=trainstate_th2.apply_fn,
+                                        params=trainstate_th2_params,
+                                        tx=optax.sgd(
+                                            learning_rate=args.lr_in))
+    trainstate_val2_ = TrainState.create(apply_fn=trainstate_val2.apply_fn,
+                                         params=trainstate_val2_params,
+                                         tx=optax.sgd(
+                                             learning_rate=args.lr_v))
+
+    key, reused_subkey = jax.random.split(key)
+    # reuse the subkey to get consistent trajectories for the first batch
+    # This is only needed so I can be consistent with my previous pytorch code
+    # And does not really have a theoretical or logical grounding really
+
+    other_pol_probs_ref = None
+
+    key, subkey = jax.random.split(key)
+
+    if args.old_kl_div:
+        stuff, aux, unfinished_state_history = do_env_rollout(reused_subkey,
+                                                              trainstate_th1,
+                                                              trainstate_th1_params,
+                                                              trainstate_val1,
+                                                              trainstate_val1_params,
+                                                              trainstate_th2_,
+                                                              trainstate_th2_.params,
+                                                              trainstate_val2_,
+                                                              trainstate_val2_.params,
+                                                              agent_for_state_history=2)
+
+        aux1, aux2, aux_info = aux
+
+        _, obs2_list, _, _, _, _, _, _ = aux2
+
+        state_history_for_kl_div = unfinished_state_history
+        state_history_for_kl_div.extend(obs2_list)
+
+        other_pol_probs_ref = get_policies_for_states(subkey,
+                                                      trainstate_th2_,
+                                                      trainstate_th2_.params,
+                                                      trainstate_val2_,
+                                                      trainstate_val2_.params,
+                                                      state_history_for_kl_div)
+
+
+
+    # preserving the params we want to diff through on the outer loop (th1)
+    stuff = (reused_subkey, trainstate_th1, trainstate_th1_params,
+             trainstate_val1, trainstate_val1_params,
+             trainstate_th2_, trainstate_th2_.params,
+             trainstate_val2_, trainstate_val2_.params, other_old_trainstate_th,
+             other_old_trainstate_val, other_pol_probs_ref)
+
+    stuff, aux = inner_step_get_grad_otheragent2(stuff, None)
+
+    _, _, _, _, _, trainstate_th2_, _, trainstate_val2_, _, _, _, _ = stuff
+
+    key, subkey = jax.random.split(key)
+
+    if args.inner_steps > 1:
+        stuff = (subkey, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
+                 trainstate_th2_, trainstate_th2_.params,
+                 trainstate_val2_, trainstate_val2_.params,
+                 other_old_trainstate_th, other_old_trainstate_val, other_pol_probs_ref)
+        stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent2, stuff,
+                                  None, args.inner_steps - 1)
+        _, _, _, _, _, trainstate_th2_, _, trainstate_val2_, _, _, _, _ = stuff
+
+    if use_baseline:
+        return trainstate_th2_, trainstate_val2_
+    else:
+        return trainstate_th2_, None
+
+
+@jit
+def inner_steps_plus_update_otheragent1(key, trainstate_th1, trainstate_th1_params,
+                            trainstate_val1, trainstate_val1_params,
+                            trainstate_th2, trainstate_th2_params,
+                            trainstate_val2, trainstate_val2_params,
+                            other_old_trainstate_th, other_old_trainstate_val):
+
     trainstate_th1_ = TrainState.create(apply_fn=trainstate_th1.apply_fn,
                                         params=trainstate_th1_params,
                                         tx=optax.sgd(
@@ -691,16 +786,6 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
                                          tx=optax.sgd(
                                              learning_rate=args.lr_v))
 
-    trainstate_th2_ = TrainState.create(apply_fn=trainstate_th2.apply_fn,
-                                         params=trainstate_th2_params,
-                                         tx=optax.sgd(
-                                             learning_rate=args.lr_in))
-    trainstate_val2_ = TrainState.create(apply_fn=trainstate_val2.apply_fn,
-                                          params=trainstate_val2_params,
-                                          tx=optax.sgd(
-                                              learning_rate=args.lr_v))
-
-
     key, reused_subkey = jax.random.split(key)
     # reuse the subkey to get consistent trajectories for the first batch
     # This is only needed so I can be consistent with my previous pytorch code
@@ -708,91 +793,190 @@ def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainsta
 
     other_pol_probs_ref = None
 
+    key, subkey = jax.random.split(key)
+
     if args.old_kl_div:
         stuff, aux, unfinished_state_history = do_env_rollout(reused_subkey,
                                                               trainstate_th1_,
                                                               trainstate_th1_.params,
                                                               trainstate_val1_,
                                                               trainstate_val1_.params,
-                                                              trainstate_th2_,
-                                                              trainstate_th2_.params,
-                                                              trainstate_val2_,
-                                                              trainstate_val2_.params,
+                                                              trainstate_th2,
+                                                              trainstate_th2_params,
+                                                              trainstate_val2,
+                                                              trainstate_val2_params,
                                                               agent_for_state_history=2)
 
         aux1, aux2, aux_info = aux
 
-        if other_agent == 2:
-            _, obs2_list, _, _, _, _, _, _ = aux2
+        _, obs1_list, _, _, _, _, _, _ = aux1
 
-            state_history_for_kl_div = unfinished_state_history
-            state_history_for_kl_div.extend(obs2_list)
+        state_history_for_kl_div = unfinished_state_history
+        state_history_for_kl_div.extend(obs1_list)
 
-            other_pol_probs_ref = get_policies_for_states(key,
-                                                         trainstate_th2_,
-                                                         trainstate_th2_.params,
-                                                         trainstate_val2_,
-                                                         trainstate_val2_.params,
-                                                         state_history_for_kl_div)
-        else:
-            _, obs1_list, _, _, _, _, _, _ = aux1
+        other_pol_probs_ref = get_policies_for_states(subkey,
+                                                      trainstate_th1_,
+                                                      trainstate_th1_.params,
+                                                      trainstate_val1_,
+                                                      trainstate_val1_.params,
+                                                      state_history_for_kl_div)
 
-            state_history_for_kl_div = unfinished_state_history
-            state_history_for_kl_div.extend(obs1_list)
+    # preserving the params we want to diff through on the outer loop (th2)
+    stuff = (reused_subkey, trainstate_th1_, trainstate_th1_.params,
+             trainstate_val1_, trainstate_val1_.params,
+             trainstate_th2, trainstate_th2_params,
+             trainstate_val2, trainstate_val2_params, other_old_trainstate_th,
+             other_old_trainstate_val, other_pol_probs_ref)
 
-            other_pol_probs_ref = get_policies_for_states(key,
-                                                          trainstate_th1_,
-                                                          trainstate_th1_.params,
-                                                          trainstate_val1_,
-                                                          trainstate_val1_.params,
-                                                          state_history_for_kl_div)
+    stuff, aux = inner_step_get_grad_otheragent1(stuff, None)
 
-    stuff = (reused_subkey, trainstate_th1_, trainstate_val1_, trainstate_th2_,
-             trainstate_val2_, other_old_trainstate_th, other_old_trainstate_val, other_pol_probs_ref)
-    if other_agent == 2:
-        stuff, aux = inner_step_get_grad_otheragent2(stuff, None)
-    else:
-        assert other_agent == 1
-        stuff, aux = inner_step_get_grad_otheragent1(stuff, None)
-
-    _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _, _ = stuff
-
-
-    # Somehow this loop is faster than the lax.scan?
-    # if args.inner_steps > 1:
-    # for inner_step in range(args.inner_steps-1):
-    #     subkey, subkey1 = jax.random.split(subkey)
-    #     stuff = (subkey1, trainstate_th1_, trainstate_val1_, trainstate_th2_,
-    #     trainstate_val2_, other_old_trainstate_th, other_old_trainstate_val)
-    #     if other_agent == 2:
-    #         stuff, aux  = inner_step_get_grad_otheragent2(stuff, None)
-    #     else:
-    #         stuff, aux  = inner_step_get_grad_otheragent1(stuff, None)
-    #     _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _ = stuff
+    _, trainstate_th1_, _, trainstate_val1_, _, _, _, _, _, _, _, _ = stuff
 
     key, subkey = jax.random.split(key)
 
     if args.inner_steps > 1:
-        stuff = (subkey, trainstate_th1_, trainstate_val1_, trainstate_th2_,
-                 trainstate_val2_, other_old_trainstate_th,
-                 other_old_trainstate_val, other_pol_probs_ref)
-        if other_agent == 2:
-            stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent2, stuff, None, args.inner_steps - 1)
-        else:
-            stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff, None, args.inner_steps - 1)
-        _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _, _ = stuff
+        stuff = (subkey, trainstate_th1_, trainstate_th1_.params, trainstate_val1_, trainstate_val1_.params,
+                 trainstate_th2, trainstate_th2_params,
+                 trainstate_val2, trainstate_val2_params,
+                 other_old_trainstate_th, other_old_trainstate_val, other_pol_probs_ref)
+        stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff,
+                                  None, args.inner_steps - 1)
+        _, trainstate_th1_, _, trainstate_val1_, _, _, _, _, _, _, _, _ = stuff
 
-    ret_trainstate_val = None
-    if other_agent == 2:
-        ret_trainstate_th = trainstate_th2_
-        if use_baseline:
-            ret_trainstate_val = trainstate_val2_
+    if use_baseline:
+        return trainstate_th1_, trainstate_val1_
     else:
-        ret_trainstate_th = trainstate_th1_
-        if use_baseline:
-            ret_trainstate_val = trainstate_val1_
+        return trainstate_th1_, None
 
-    return ret_trainstate_th, ret_trainstate_val
+# @partial(jit, static_argnums=(11))
+# # TODO can replace other_agent with each of the theta_p or theta_v or whatever. This could be one way to remove the agent class
+# # So that things can be jittable. Everything has to be pure somehow
+# def inner_steps_plus_update(key, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
+#                             trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params,
+#                             other_old_trainstate_th, other_old_trainstate_val, other_agent=2 ):
+#     # TODO ensure that this starts from scratch (well the agent 2 policy before the updates happen)
+#     trainstate_th1_ = TrainState.create(apply_fn=trainstate_th1.apply_fn,
+#                                         params=trainstate_th1_params,
+#                                         tx=optax.sgd(
+#                                             learning_rate=args.lr_in))
+#     trainstate_val1_ = TrainState.create(apply_fn=trainstate_val1.apply_fn,
+#                                          params=trainstate_val1_params,
+#                                          tx=optax.sgd(
+#                                              learning_rate=args.lr_v))
+#
+#     # TODO MAJOR TODO
+#     # This is wrong isn't it, shouldn't be recreating both agents theta... only other agent's...
+#     # And the optim too...
+#     # Because the inner dice objective is going to be based on those params
+#     # And you can't reset/create a new param otherwise the gradient won't flow
+#     if other_agent == 2:
+#
+#
+#         trainstate_th2_ = TrainState.create(apply_fn=trainstate_th2.apply_fn,
+#                                              params=trainstate_th2_params,
+#                                              tx=optax.sgd(
+#                                                  learning_rate=args.lr_in))
+#         trainstate_val2_ = TrainState.create(apply_fn=trainstate_val2.apply_fn,
+#                                               params=trainstate_val2_params,
+#                                               tx=optax.sgd(
+#                                                   learning_rate=args.lr_v))
+#
+#
+#     key, reused_subkey = jax.random.split(key)
+#     # reuse the subkey to get consistent trajectories for the first batch
+#     # This is only needed so I can be consistent with my previous pytorch code
+#     # And does not really have a theoretical or logical grounding really
+#
+#     other_pol_probs_ref = None
+#
+#     key, subkey = jax.random.split(key)
+#
+#
+#     if args.old_kl_div:
+#         stuff, aux, unfinished_state_history = do_env_rollout(reused_subkey,
+#                                                               trainstate_th1_,
+#                                                               trainstate_th1_.params,
+#                                                               trainstate_val1_,
+#                                                               trainstate_val1_.params,
+#                                                               trainstate_th2_,
+#                                                               trainstate_th2_.params,
+#                                                               trainstate_val2_,
+#                                                               trainstate_val2_.params,
+#                                                               agent_for_state_history=2)
+#
+#         aux1, aux2, aux_info = aux
+#
+#         if other_agent == 2:
+#             _, obs2_list, _, _, _, _, _, _ = aux2
+#
+#             state_history_for_kl_div = unfinished_state_history
+#             state_history_for_kl_div.extend(obs2_list)
+#
+#             other_pol_probs_ref = get_policies_for_states(subkey,
+#                                                          trainstate_th2_,
+#                                                          trainstate_th2_.params,
+#                                                          trainstate_val2_,
+#                                                          trainstate_val2_.params,
+#                                                          state_history_for_kl_div)
+#         else:
+#             _, obs1_list, _, _, _, _, _, _ = aux1
+#
+#             state_history_for_kl_div = unfinished_state_history
+#             state_history_for_kl_div.extend(obs1_list)
+#
+#             other_pol_probs_ref = get_policies_for_states(subkey,
+#                                                           trainstate_th1_,
+#                                                           trainstate_th1_.params,
+#                                                           trainstate_val1_,
+#                                                           trainstate_val1_.params,
+#                                                           state_history_for_kl_div)
+#
+#     stuff = (reused_subkey, trainstate_th1_, trainstate_val1_, trainstate_th2_,
+#              trainstate_val2_, other_old_trainstate_th, other_old_trainstate_val, other_pol_probs_ref)
+#     if other_agent == 2:
+#         stuff, aux = inner_step_get_grad_otheragent2(stuff, None)
+#     else:
+#         assert other_agent == 1
+#         stuff, aux = inner_step_get_grad_otheragent1(stuff, None)
+#
+#     _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _, _ = stuff
+#
+#
+#     # Somehow this loop is faster than the lax.scan?
+#     # if args.inner_steps > 1:
+#     # for inner_step in range(args.inner_steps-1):
+#     #     subkey, subkey1 = jax.random.split(subkey)
+#     #     stuff = (subkey1, trainstate_th1_, trainstate_val1_, trainstate_th2_,
+#     #     trainstate_val2_, other_old_trainstate_th, other_old_trainstate_val)
+#     #     if other_agent == 2:
+#     #         stuff, aux  = inner_step_get_grad_otheragent2(stuff, None)
+#     #     else:
+#     #         stuff, aux  = inner_step_get_grad_otheragent1(stuff, None)
+#     #     _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _ = stuff
+#
+#     key, subkey = jax.random.split(key)
+#
+#     if args.inner_steps > 1:
+#         stuff = (subkey, trainstate_th1_, trainstate_val1_, trainstate_th2_,
+#                  trainstate_val2_, other_old_trainstate_th,
+#                  other_old_trainstate_val, other_pol_probs_ref)
+#         if other_agent == 2:
+#             stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent2, stuff, None, args.inner_steps - 1)
+#         else:
+#             stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff, None, args.inner_steps - 1)
+#         _, trainstate_th1_, trainstate_val1_, trainstate_th2_, trainstate_val2_, _, _, _ = stuff
+#
+#     ret_trainstate_val = None
+#     if other_agent == 2:
+#         ret_trainstate_th = trainstate_th2_
+#         if use_baseline:
+#             ret_trainstate_val = trainstate_val2_
+#     else:
+#         ret_trainstate_th = trainstate_th1_
+#         if use_baseline:
+#             ret_trainstate_val = trainstate_val1_
+#
+#     return ret_trainstate_th, ret_trainstate_val
 
 
 @partial(jit, static_argnums=(11))
@@ -969,16 +1153,15 @@ def one_outer_step_objective_selfagent1(key, trainstate_th1_copy, trainstate_th1
     other_agent = 2
     key, subkey = jax.random.split(key)
     trainstate_th2_after_inner_steps, trainstate_val2_after_inner_steps = \
-        inner_steps_plus_update(subkey,
+        inner_steps_plus_update_otheragent2(subkey,
                                 trainstate_th1_copy, trainstate_th1_copy_params,
                                 trainstate_val1_copy,
                                 trainstate_val1_copy_params,
                                 trainstate_th2_copy, trainstate_th2_copy_params,
                                 trainstate_val2_copy,
                                 trainstate_val2_copy_params,
-                                trainstate_th2_copy, trainstate_val2_copy,
-                                # this is for the other agent
-                                other_agent=other_agent)
+                                trainstate_th2_copy, trainstate_val2_copy
+                                )
 
     # TODO perhaps one way to get around this conditional outer step with kind of global storage
     # is that we should have one call to the lookaheads in the first time step
@@ -1021,16 +1204,14 @@ def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1
     other_agent = 1
     key, subkey = jax.random.split(key)
     trainstate_th1_after_inner_steps, trainstate_val1_after_inner_steps = \
-        inner_steps_plus_update(subkey,
+        inner_steps_plus_update_otheragent1(subkey,
                                 trainstate_th1_copy, trainstate_th1_copy_params,
                                 trainstate_val1_copy,
                                 trainstate_val1_copy_params,
                                 trainstate_th2_copy, trainstate_th2_copy_params,
                                 trainstate_val2_copy,
                                 trainstate_val2_copy_params,
-                                trainstate_th2_copy, trainstate_val2_copy,
-                                # this is for the other agent
-                                other_agent=other_agent)
+                                trainstate_th2_copy, trainstate_val2_copy)
 
     # TODO perhaps one way to get around this conditional outer step with kind of global storage
     # is that we should have one call to the lookaheads in the first time step
@@ -1575,6 +1756,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
     agent2_theta_p_model, agent1_theta_p_model = None, None
     agent2_theta_v_model, agent1_theta_v_model = None, None
 
+    # Pretty sure this creation is unnecessary and we can directly use the trainstates passed in
     trainstate_th1 = TrainState.create(apply_fn=init_trainstate_th1.apply_fn,
                                        params=init_trainstate_th1.params,
                                        tx=init_trainstate_th1.tx)
@@ -1690,12 +1872,14 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
             state_history_for_kl_div = unfinished_state_history
             state_history_for_kl_div.extend(obs1_list)
 
-            self_pol_probs_ref = get_policies_for_states(key,
+            key, subkey = jax.random.split(key)
+
+            self_pol_probs_ref = jax.lax.stop_gradient(get_policies_for_states(subkey,
                                                             trainstate_th1_copy,
                                                             trainstate_th1_copy.params,
                                                             trainstate_val1_copy,
                                                             trainstate_val1_copy.params,
-                                                            state_history_for_kl_div)
+                                                            state_history_for_kl_div))
 
 
         stuff = (reused_subkey, trainstate_th1_copy, trainstate_val1_copy,
@@ -1766,12 +1950,14 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
             state_history_for_kl_div = unfinished_state_history
             state_history_for_kl_div.extend(obs2_list)
 
-            self_pol_probs_ref = get_policies_for_states(key,
+            key, subkey = jax.random.split(key)
+
+            self_pol_probs_ref = jax.lax.stop_gradient(get_policies_for_states(subkey,
                                                          trainstate_th2_copy,
                                                          trainstate_th2_copy.params,
                                                          trainstate_val2_copy,
                                                          trainstate_val2_copy.params,
-                                                         state_history_for_kl_div)
+                                                         state_history_for_kl_div))
 
 
         stuff = (reused_subkey, trainstate_th1_copy, trainstate_val1_copy,
