@@ -726,6 +726,7 @@ def inner_steps_plus_update_otheragent2(key, trainstate_th1, trainstate_th1_para
     # And does not really have a theoretical or logical grounding really
 
     other_pol_probs_ref = None
+    other_state_history_ref = None
 
     key, subkey = jax.random.split(key)
 
@@ -809,6 +810,7 @@ def inner_steps_plus_update_otheragent1(key, trainstate_th1, trainstate_th1_para
     # And does not really have a theoretical or logical grounding really
 
     other_pol_probs_ref = None
+    other_state_history_ref = None
 
     key, subkey = jax.random.split(key)
 
@@ -1885,6 +1887,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         # trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params, h_p1, h_v1, h_p2, h_v2 = stuff
 
         self_pol_probs_ref = None
+        self_state_history_ref = None
         # TODO use the do_env_rollout and save self_pol_prob somewhere
         # TODO then do the same for agent 2.
         if args.old_kl_div:
@@ -1965,6 +1968,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         # trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params, h_p1, h_v1, h_p2, h_v2 = stuff
 
         self_pol_probs_ref = None
+        self_state_history_ref = None
 
         if args.old_kl_div:
             stuff, aux, unfinished_state_history = do_env_rollout(reused_subkey,
