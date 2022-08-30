@@ -49,11 +49,33 @@ def get_gae_advantages(rewards, values, next_val_history):
     deltas = rewards + args.gamma * jax.lax.stop_gradient(
         next_val_history) - jax.lax.stop_gradient(values)
 
+    # print(rewards)
+    # print(rewards.shape)
+    #
+    # print(deltas)
+    # print(deltas.shape)
+
     gae = jnp.zeros_like(deltas[0, :])
+
+    # print(gae.shape)
+
     for i in range(deltas.shape[0] - 1, -1, -1):
         gae = gae * args.gamma * args.gae_lambda + deltas[i, :]
-        advantages.at[i, :].set(gae)
+
+        # print(f"step {i}")
+        # print(advantages[i, :])
+        # print(gae)
+        advantages = advantages.at[i, :].set(gae)
+
+        # print(gae.shape)
+        # print(deltas[i,:].shape)
+        # print(deltas[i,:])
+        # print(advantages[i, :].shape)
+        # print(advantages[i, :])
+
     # Later TODO lax scan here. Ensure the results are the same though.
+
+    # print(advantages)
     return advantages
 
 
@@ -99,8 +121,14 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     if use_loaded_dice:
         next_val_history = jnp.zeros((args.rollout_len, args.batch_size))
 
-        next_val_history.at[:args.rollout_len - 1, :].set(values[1:args.rollout_len, :])
-        next_val_history.at[-1, :].set(end_state_v)
+        next_val_history = next_val_history.at[:args.rollout_len - 1, :].set(values[1:args.rollout_len, :])
+        next_val_history = next_val_history.at[-1, :].set(end_state_v)
+
+        # print(next_val_history.shape)
+        # print(next_val_history[:args.rollout_len - 1, :].shape)
+        # print(values[1:args.rollout_len, :].shape)
+        # print(next_val_history[-1, :].shape)
+        # print(end_state_v.shape)
 
         if args.zero_vals:
             next_val_history = jnp.zeros_like(next_val_history)
@@ -108,15 +136,27 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
 
         advantages = get_gae_advantages(rewards, values, next_val_history)
 
+        # print(advantages.shape)
+
         discounted_advantages = advantages * cum_discount
+
+        # print(cum_discount.shape)
 
         deps_up_to_t = (jnp.cumsum(stochastic_nodes, axis=0))
 
+        # print(deps_up_to_t.shape)
+
         deps_less_than_t = deps_up_to_t - stochastic_nodes  # take out the dependency in the given time step
+
+        # print(stochastic_nodes.shape)
+        # print(deps_less_than_t.shape)
 
         # Look at Loaded DiCE and GAE papers to see where this formulation comes from
         loaded_dice_rewards = ((magic_box(deps_up_to_t) - magic_box(
             deps_less_than_t)) * discounted_advantages).sum(axis=0).mean()
+
+        # print(((magic_box(deps_up_to_t) - magic_box(
+            # deps_less_than_t)) * discounted_advantages).shape)
 
         dice_obj = loaded_dice_rewards
 
@@ -1709,6 +1749,55 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
     # key, subkey = jax.random.split(key)
     # score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount = \
     #     eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
+
+
+    # TODO REMOVE TESTING ONLY
+    stuff, aux, unfinished_inner_agent_state_history = do_env_rollout(key,
+                                                                      trainstate_th1,
+                                                                      trainstate_th1.params,
+                                                                      trainstate_val1,
+                                                                      trainstate_val1.params,
+                                                                      trainstate_th2,
+                                                                      trainstate_th2.params,
+                                                                      trainstate_val2,
+                                                                      trainstate_val2.params,
+                                                                      agent_for_state_history=2)
+    aux1, aux2, aux_info = aux
+
+    inner_agent_state_history = unfinished_inner_agent_state_history
+
+    key, env_state, obs1, obs2, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params, \
+    trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params, h_p1, h_v1, h_p2, h_v2 = stuff
+
+    key, subkey1, subkey2 = jax.random.split(key, 3)
+
+    cat_act_probs2_list, obs2_list, lp2_list, lp1_list, v2_list, r2_list, a2_list, a1_list = aux2
+
+    # inner_agent_cat_act_probs.extend(cat_act_probs2_list)
+    inner_agent_state_history.extend(obs2_list)
+
+    # act just to get the final state values
+    act_args2 = (subkey2, obs2, trainstate_th2, trainstate_th2_params,
+                 trainstate_val2, trainstate_val2_params, h_p2, h_v2)
+    stuff2, aux2 = act(act_args2, None)
+    a2, lp2, v2, h_p2, h_v2, cat_act_probs2, logits2 = aux2
+
+    # a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(subkey2, obs2,
+    #                                               trainstate_th2,
+    #                                               trainstate_th2_params,
+    #                                               trainstate_val2,
+    #                                               trainstate_val2_params,
+    #                                               h_p2, h_v2)
+    end_state_v2 = v2
+
+    inner_agent_objective = dice_objective_plus_value_loss(
+        self_logprobs=lp2_list,
+        other_logprobs=lp1_list,
+        rewards=r2_list,
+        values=v2_list, end_state_v=end_state_v2)
+
+    1/0
+
 
     for update in range(args.n_update):
         # TODO RECREATE TRAINSTATES IF NEEDED
