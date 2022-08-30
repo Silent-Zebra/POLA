@@ -1751,54 +1751,6 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
     #     eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 
 
-    # TODO REMOVE TESTING ONLY
-    stuff, aux, unfinished_inner_agent_state_history = do_env_rollout(key,
-                                                                      trainstate_th1,
-                                                                      trainstate_th1.params,
-                                                                      trainstate_val1,
-                                                                      trainstate_val1.params,
-                                                                      trainstate_th2,
-                                                                      trainstate_th2.params,
-                                                                      trainstate_val2,
-                                                                      trainstate_val2.params,
-                                                                      agent_for_state_history=2)
-    aux1, aux2, aux_info = aux
-
-    inner_agent_state_history = unfinished_inner_agent_state_history
-
-    key, env_state, obs1, obs2, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params, \
-    trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params, h_p1, h_v1, h_p2, h_v2 = stuff
-
-    key, subkey1, subkey2 = jax.random.split(key, 3)
-
-    cat_act_probs2_list, obs2_list, lp2_list, lp1_list, v2_list, r2_list, a2_list, a1_list = aux2
-
-    # inner_agent_cat_act_probs.extend(cat_act_probs2_list)
-    inner_agent_state_history.extend(obs2_list)
-
-    # act just to get the final state values
-    act_args2 = (subkey2, obs2, trainstate_th2, trainstate_th2_params,
-                 trainstate_val2, trainstate_val2_params, h_p2, h_v2)
-    stuff2, aux2 = act(act_args2, None)
-    a2, lp2, v2, h_p2, h_v2, cat_act_probs2, logits2 = aux2
-
-    # a2, lp2, v2, h_p2, h_v2, cat_act_probs2 = act(subkey2, obs2,
-    #                                               trainstate_th2,
-    #                                               trainstate_th2_params,
-    #                                               trainstate_val2,
-    #                                               trainstate_val2_params,
-    #                                               h_p2, h_v2)
-    end_state_v2 = v2
-
-    inner_agent_objective = dice_objective_plus_value_loss(
-        self_logprobs=lp2_list,
-        other_logprobs=lp1_list,
-        rewards=r2_list,
-        values=v2_list, end_state_v=end_state_v2)
-
-    1/0
-
-
     for update in range(args.n_update):
         # TODO RECREATE TRAINSTATES IF NEEDED
 
