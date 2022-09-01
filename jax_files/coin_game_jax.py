@@ -215,6 +215,9 @@ class CoinGame:
         new_state = CoinGameState(new_red_pos, new_blue_pos, new_coin_pos, new_is_red_coin, step_count)
         obs = self.state_to_obs(new_state)
 
+        red_reward = red_reward.squeeze(-1)
+        blue_reward = blue_reward.squeeze(-1)
+
         return new_state, obs, (red_reward, blue_reward), (red_red_matches, red_blue_matches, blue_red_matches, blue_blue_matches)
 
 

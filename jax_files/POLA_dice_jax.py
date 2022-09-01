@@ -43,37 +43,43 @@ def magic_box(x):
     return jnp.exp(x - jax.lax.stop_gradient(x))
 
 
+
+@jit
+def update_gae_with_delta_backwards(gae, delta):
+    gae = gae * args.gamma * args.gae_lambda + delta
+    return gae, gae
+
+
 @jit
 def get_gae_advantages(rewards, values, next_val_history):
-    advantages = jnp.zeros_like(values)
     deltas = rewards + args.gamma * jax.lax.stop_gradient(
         next_val_history) - jax.lax.stop_gradient(values)
 
     # print(rewards)
     # print(rewards.shape)
     #
+    # print(next_val_history.shape)
+    # print(values.shape)
     # print(deltas)
     # print(deltas.shape)
 
     gae = jnp.zeros_like(deltas[0, :])
 
     # print(gae.shape)
+    # print(gae)
 
-    for i in range(deltas.shape[0] - 1, -1, -1):
-        gae = gae * args.gamma * args.gae_lambda + deltas[i, :]
+    deltas = jnp.flip(deltas, axis=0)
+    gae, flipped_advantages = jax.lax.scan(update_gae_with_delta_backwards, gae, deltas, deltas.shape[0])
+    advantages = jnp.flip(flipped_advantages, axis=0)
 
-        # print(f"step {i}")
-        # print(advantages[i, :])
-        # print(gae)
-        advantages = advantages.at[i, :].set(gae)
+    # print(gae.shape)
+    # print(advantages.shape)
 
-        # print(gae.shape)
-        # print(deltas[i,:].shape)
-        # print(deltas[i,:])
-        # print(advantages[i, :].shape)
-        # print(advantages[i, :])
 
-    # Later TODO lax scan here. Ensure the results are the same though.
+    # TODO REWRITE THIS LOOP AS LAX.SCAN AND THEN TEST THAT IT COMPILES REASONABLY WITH VALUE FUNC.
+    # for i in range(deltas.shape[0] - 1, -1, -1):
+    #     gae = gae * args.gamma * args.gae_lambda + deltas[i, :]
+    #     advantages = advantages.at[i, :].set(gae)
 
     # print(advantages)
     return advantages
@@ -92,8 +98,8 @@ def dice_objective(self_logprobs, other_logprobs, rewards, values, end_state_v):
     # print(rewards.shape)
     # print(rewards.size)
 
-    if args.env == 'coin':
-        rewards = rewards.squeeze(-1)
+    # if args.env == 'coin':
+    #     rewards = rewards.squeeze(-1)
 
     # print(self_logprobs.shape)
     # print(other_logprobs.shape)
@@ -194,8 +200,8 @@ def value_loss(rewards, values, final_state_vals):
 
     final_state_vals = jax.lax.stop_gradient(final_state_vals)
 
-    if args.env == 'coin':
-        rewards = rewards.squeeze(-1)
+    # if args.env == 'coin':
+    #     rewards = rewards.squeeze(-1)
 
 
     discounts = jnp.cumprod(args.gamma * jnp.ones(rewards.shape),
@@ -1859,6 +1865,14 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
                                                             trainstate_val1_copy.params,
                                                             state_history_for_kl_div))
             self_state_history_ref = state_history_for_kl_div
+
+
+            # TODO TEST THE ADVANTAGES CALC
+            # print(r1_list)
+            # print(v1_list)
+            # advantages = get_gae_advantages(r1_list, v1_list, v1_list[-1])
+            # print(advantages)
+            # print(advantages.shape)
 
 
         stuff = (reused_subkey, trainstate_th1_copy, trainstate_val1_copy,
