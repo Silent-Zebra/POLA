@@ -23,6 +23,8 @@ import jax.numpy as jnp
 from typing import NamedTuple, Callable, Any
 from flax.training.train_state import TrainState
 
+from flax.training import checkpoints
+
 from tensorflow_probability.substrates import jax as tfp
 
 tfd = tfp.distributions
@@ -2354,6 +2356,10 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
                 if args.inspect_ipd:
                     inspect_ipd(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 
+        if update % args.checkpoint_every == 0:
+            now = datetime.datetime.now()
+            checkpoints.save_checkpoint(ckpt_dir=args.save_dir, target=(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2),
+                                        step=update + 1, prefix=f"checkpoint_{now.strftime('%Y-%m-%d_%H-%M')}_seed{args.seed}_epoch")
 
 
     return joint_scores
@@ -2381,8 +2387,9 @@ if __name__ == "__main__":
     parser.add_argument("--outer_beta", type=float, default=0.0, help="for outer kl penalty with POLA")
     parser.add_argument("--inner_beta", type=float, default=0.0, help="for inner kl penalty with POLA")
     parser.add_argument("--save_dir", type=str, default='.', help="Where to save checkpoints")
-    parser.add_argument("--checkpoint_every", type=int, default=1000, help="Epochs between checkpoint save")
-    parser.add_argument("--load_path", type=str, default=None, help="Give path if loading from a checkpoint")
+    parser.add_argument("--checkpoint_every", type=int, default=50, help="Epochs between checkpoint save")
+    parser.add_argument("--load_dir", type=str, default=None, help="Directory for loading checkpoint")
+    parser.add_argument("--load_prefix", type=str, default=None, help="Prefix for loading checkpoint")
     # parser.add_argument("--ent_reg", type=float, default=0.0, help="entropy regularizer")
     parser.add_argument("--diff_coin_reward", type=float, default=1.0, help="changes problem setting (the reward for picking up coin of different colour)")
     parser.add_argument("--diff_coin_cost", type=float, default=-2.0, help="changes problem setting (the cost to the opponent when you pick up a coin of their colour)")
@@ -2439,57 +2446,62 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(args.seed)
     # key, subkey1, subkey2 = jax.random.split(key, 3)
 
-    if args.load_path is None:
+    # if args.load_path is None:
 
-        hidden_size = args.hidden_size
+    hidden_size = args.hidden_size
 
-        key, key_p1, key_v1, key_p2, key_v2 = jax.random.split(key, 5)
+    key, key_p1, key_v1, key_p2, key_v2 = jax.random.split(key, 5)
 
-        theta_p1 = RNN(num_outputs=action_size,
-                           num_hidden_units=hidden_size)
-        theta_v1 = RNN(num_outputs=1, num_hidden_units=hidden_size)
-
-        theta_p1_params = theta_p1.init(key_p1, jnp.ones(
-            [args.batch_size, input_size]), jnp.zeros(hidden_size))
-        theta_v1_params = theta_v1.init(key_v1, jnp.ones(
-            [args.batch_size, input_size]), jnp.zeros(hidden_size))
-
-        theta_p2 = RNN(num_outputs=action_size,
+    theta_p1 = RNN(num_outputs=action_size,
                        num_hidden_units=hidden_size)
-        theta_v2 = RNN(num_outputs=1, num_hidden_units=hidden_size)
+    theta_v1 = RNN(num_outputs=1, num_hidden_units=hidden_size)
 
-        theta_p2_params = theta_p2.init(key_p2, jnp.ones(
-            [args.batch_size, input_size]), jnp.zeros(hidden_size))
-        theta_v2_params = theta_v2.init(key_v2, jnp.ones(
-            [args.batch_size, input_size]), jnp.zeros(hidden_size))
+    theta_p1_params = theta_p1.init(key_p1, jnp.ones(
+        [args.batch_size, input_size]), jnp.zeros(hidden_size))
+    theta_v1_params = theta_v1.init(key_v1, jnp.ones(
+        [args.batch_size, input_size]), jnp.zeros(hidden_size))
 
-        if args.optim.lower() == 'adam':
-            theta_optimizer = optax.adam(learning_rate=args.lr_out)
-            value_optimizer = optax.adam(learning_rate=args.lr_v)
-        elif args.optim.lower() == 'sgd':
-            theta_optimizer = optax.sgd(learning_rate=args.lr_out)
-            value_optimizer = optax.sgd(learning_rate=args.lr_v)
-        else:
-            raise Exception("Unknown or Not Implemented Optimizer")
+    theta_p2 = RNN(num_outputs=action_size,
+                   num_hidden_units=hidden_size)
+    theta_v2 = RNN(num_outputs=1, num_hidden_units=hidden_size)
 
-        trainstate_th1 = TrainState.create(apply_fn=theta_p1.apply,
-                                               params=theta_p1_params,
-                                               tx=theta_optimizer)
-        trainstate_val1 = TrainState.create(apply_fn=theta_v1.apply,
-                                                params=theta_v1_params,
-                                                tx=value_optimizer)
-        trainstate_th2 = TrainState.create(apply_fn=theta_p2.apply,
-                                           params=theta_p2_params,
-                                           tx=theta_optimizer)
-        trainstate_val2 = TrainState.create(apply_fn=theta_v2.apply,
-                                            params=theta_v2_params,
-                                            tx=value_optimizer)
-        # agent1 = Agent(subkey1, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
-        # agent2 = Agent(subkey2, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
+    theta_p2_params = theta_p2.init(key_p2, jnp.ones(
+        [args.batch_size, input_size]), jnp.zeros(hidden_size))
+    theta_v2_params = theta_v2.init(key_v2, jnp.ones(
+        [args.batch_size, input_size]), jnp.zeros(hidden_size))
+
+    if args.optim.lower() == 'adam':
+        theta_optimizer = optax.adam(learning_rate=args.lr_out)
+        value_optimizer = optax.adam(learning_rate=args.lr_v)
+    elif args.optim.lower() == 'sgd':
+        theta_optimizer = optax.sgd(learning_rate=args.lr_out)
+        value_optimizer = optax.sgd(learning_rate=args.lr_v)
     else:
-        raise NotImplementedError("checkpointing not done yet")
+        raise Exception("Unknown or Not Implemented Optimizer")
+
+    trainstate_th1 = TrainState.create(apply_fn=theta_p1.apply,
+                                           params=theta_p1_params,
+                                           tx=theta_optimizer)
+    trainstate_val1 = TrainState.create(apply_fn=theta_v1.apply,
+                                            params=theta_v1_params,
+                                            tx=value_optimizer)
+    trainstate_th2 = TrainState.create(apply_fn=theta_p2.apply,
+                                       params=theta_p2_params,
+                                       tx=theta_optimizer)
+    trainstate_val2 = TrainState.create(apply_fn=theta_v2.apply,
+                                        params=theta_v2_params,
+                                        tx=value_optimizer)
+    # agent1 = Agent(subkey1, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
+    # agent2 = Agent(subkey2, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
+    if args.load_dir is not None:
+        assert args.load_prefix is not None
+        restored_tuple = checkpoints.restore_checkpoint(ckpt_dir=args.load_dir,
+                                                        target=(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2),
+                                                        prefix=args.load_prefix)
         # agent1, agent2, coins_collected_info, prev_scores, vs_fixed_strat_scores = load_from_checkpoint()
         # print(jnp.stack(prev_scores))
+        trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2 = restored_tuple
+
 
     use_baseline = True
     if args.no_baseline:
@@ -2498,7 +2510,6 @@ if __name__ == "__main__":
     assert args.inner_steps >= 1
     # Use 0 lr if you want no inner steps... TODO fix this?
     assert args.outer_steps >= 1
-
 
 
     joint_scores = play(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2,
