@@ -2081,10 +2081,10 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
             key, subkey = jax.random.split(key)
             self_pol_probs_ref = jax.lax.stop_gradient(
                 get_policies_for_states(subkey,
-                                        trainstate_th1_copy,
-                                        trainstate_th1_copy.params,
-                                        trainstate_val1_copy,
-                                        trainstate_val1_copy.params,
+                                        trainstate_th1_ref,
+                                        trainstate_th1_ref.params,
+                                        trainstate_val1_ref,
+                                        trainstate_val1_ref.params,
                                         self_state_history_ref))
 
             if args.outer_steps > 1:
@@ -2165,10 +2165,10 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
             key, subkey = jax.random.split(key)
             self_pol_probs_ref = jax.lax.stop_gradient(
                 get_policies_for_states(subkey,
-                                        trainstate_th2_copy,
-                                        trainstate_th2_copy.params,
-                                        trainstate_val2_copy,
-                                        trainstate_val2_copy.params,
+                                        trainstate_th2_ref,
+                                        trainstate_th2_ref.params,
+                                        trainstate_val2_ref,
+                                        trainstate_val2_ref.params,
                                         self_state_history_ref))
 
             if args.outer_steps > 1:
