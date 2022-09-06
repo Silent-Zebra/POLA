@@ -1736,44 +1736,61 @@ def first_outer_step_update_selfagent2(stuff, unused):
 
 @partial(jit, static_argnums=(3, 4))
 def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", self_agent=1):
-    if args.env == 'coin':
-        print("eval vs fixed not yet implemented")
-        return (None, None), None
-    key, env_subkey = jax.random.split(key) # batch size of 1 here works fine
-    env_state, obsv = vec_env_reset(env_subkey) # note this works only with the same obs, otherwise you would have to switch things up a bit here
+    # if args.env == 'coin':
+    #     print("eval vs fixed not yet implemented")
+    #     return (None, None), None
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
 
-    h_p = jnp.zeros((1, args.hidden_size))
+    env_state, obsv = vec_env_reset(env_subkeys) # note this works only with the same obs, otherwise you would have to switch things up a bit here
+
+    h_p = jnp.zeros((args.batch_size, args.hidden_size))
     h_v = None
     if use_baseline:
-        h_v = jnp.zeros((1, args.hidden_size))
-
-    key, subkey = jax.random.split(key)
+        h_v = jnp.zeros((args.batch_size, args.hidden_size))
 
     score1, score2 = 0., 0.
 
+    # TODO lax scan here... perhaps a separate lax scan for each strat
     for t in range(args.rollout_len):
         if t > 0:
             prev_a = a
 
-        act_args = (key, env_state, trainstate_th, trainstate_th.params, trainstate_val, trainstate_val.params, h_p, h_v)
+        key, subkey = jax.random.split(key)
+
+        act_args = (subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val, trainstate_val.params, h_p, h_v)
 
         stuff, aux = act(act_args, None)
         a, lp, v, h_p, h_v, cat_act_probs, logits = aux
 
-        key, subkey = jax.random.split(key)
+        keys = jax.random.split(key, args.batch_size + 1)
+        key, env_subkeys = keys[0], keys[1:]
+
+        if args.env == 'coin':
+            if self_agent == 1:
+                i_am_red_agent = True
+                opp_is_red_agent = False
+            else: # if I am agent 2 (blue), then opponent is agent 1 (red)
+                i_am_red_agent = False
+                opp_is_red_agent = True
 
 
         if strat == "alld":
             if args.env == "ipd":
                 # Always defect
                 a_opp = jnp.zeros_like(a)
+            elif args.env == "coin":
+                a_opp = env.get_moves_shortest_path_to_coin(env_state, opp_is_red_agent)
+
             else:
-                print("Eval vs fixed not yet implemented")
+                raise NotImplementedError
 
         elif strat == "allc":
             if args.env == "ipd":
                 # Always cooperate
                 a_opp = jnp.ones_like(a)
+            elif args.env == "coin":
+                a_opp = env.get_coop_action(env_state, opp_is_red_agent)
             else:
                 print("Eval vs fixed not yet implemented")
 
@@ -1785,6 +1802,30 @@ def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", sel
                 else:
                     # otherwise copy the last move of the other agent
                     a_opp = prev_a
+            elif args.env == "coin":
+                if t == 0:
+                    a_opp = env.get_coop_action(env_state, opp_is_red_agent)
+                    prev_agent_coin_collected_same_col = jnp.ones_like(a)  # 0 = defect, collect other agent coin
+                else:
+                    if i_am_red_agent:
+                        r_opp = r2
+                    else:
+                        r_opp = r1
+                    # Agent here means me, the agent we are testing
+                    prev_agent_coin_collected_same_col = jnp.where(r_opp < 0, 0, prev_agent_coin_collected_same_col)
+                    prev_agent_coin_collected_same_col = jnp.where(r_opp > 0, 1, prev_agent_coin_collected_same_col)
+
+                    # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+                    #     r_opp < 0].set(0)  # opp got negative reward from other agent collecting opp's coin
+                    # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+                    #     r_opp > 0].set(1)  # opp is allowed to get positive reward from collecting own coin
+
+                    a_opp_defect = env.get_moves_shortest_path_to_coin(env_state, opp_is_red_agent)
+                    a_opp_coop = env.get_coop_action(env_state, opp_is_red_agent)
+
+                    a_opp = jax.lax.stop_gradient(a_opp_coop)
+                    # a_opp = a_opp.at[prev_agent_coin_collected_same_col == 0].set(a_opp_defect[prev_agent_coin_collected_same_col == 0])
+                    a_opp = jnp.where(prev_agent_coin_collected_same_col == 0, a_opp_defect, a_opp)
             else:
                 print("Eval vs fixed not yet implemented")
 
@@ -1795,7 +1836,13 @@ def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", sel
             a1 = a_opp
             a2 = a
 
-        env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2, subkey)
+        # print(strat)
+        # print(env_state)
+        # print(a1)
+        # print(a2)
+        # print(env_subkeys)
+
+        env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2, env_subkeys)
 
         score1 += r1.mean()
         score2 += r2.mean()
@@ -1907,26 +1954,26 @@ def eval_progress(subkey, trainstate_th1, trainstate_val1, trainstate_th2, train
     score1rec = []
     score2rec = []
 
-    if args.env == 'coin':
-        print("Eval vs Fixed strats not yet implemented")
-    else:
-        print("Eval vs Fixed Strategies:")
-        for strat in ["alld", "allc", "tft"]:
-            # print(f"Playing against strategy: {strat.upper()}")
-            key, subkey = jax.random.split(key)
-            score1, _ = eval_vs_fixed_strategy(subkey, trainstate_th1, trainstate_val1, strat, self_agent=1)
-            score1rec.append(score1[0])
-            # print(f"Agent 1 score: {score1[0]}")
-            key, subkey = jax.random.split(key)
-            score2, _ = eval_vs_fixed_strategy(subkey, trainstate_th2, trainstate_val2, strat, self_agent=2)
-            score2rec.append(score2[1])
-            # print(f"Agent 2 score: {score2[1]}")
+    # if args.env == 'coin':
+    #     print("Eval vs Fixed strats not yet implemented")
+    # else:
+    print("Eval vs Fixed Strategies:")
+    for strat in ["alld", "allc", "tft"]:
+        # print(f"Playing against strategy: {strat.upper()}")
+        key, subkey = jax.random.split(key)
+        score1, _ = eval_vs_fixed_strategy(subkey, trainstate_th1, trainstate_val1, strat, self_agent=1)
+        score1rec.append(score1[0])
+        # print(f"Agent 1 score: {score1[0]}")
+        key, subkey = jax.random.split(key)
+        score2, _ = eval_vs_fixed_strategy(subkey, trainstate_th2, trainstate_val2, strat, self_agent=2)
+        score2rec.append(score2[1])
+        # print(f"Agent 2 score: {score2[1]}")
 
-            # print(score1)
-            # print(score2)
+        # print(score1)
+        # print(score2)
 
-        score1rec = jnp.stack(score1rec)
-        score2rec = jnp.stack(score2rec)
+    score1rec = jnp.stack(score1rec)
+    score2rec = jnp.stack(score2rec)
 
     # TODO the score in the old file had another division by the rollout length
     # But score is only used for eval and doesn't affect gradients
@@ -2354,10 +2401,14 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
                 print("BR coins {}".format(br_matches_amount))
                 print("BB coins {}".format(bb_matches_amount))
 
+            print("Scores vs fixed strats ALLD, ALLC, TFT:")
+            print(score1rec)
+            print(score2rec)
+
             if args.env == 'ipd':
-                print("Scores vs fixed strats ALLD, ALLC, TFT:")
-                print(score1rec)
-                print(score2rec)
+                # print("Scores vs fixed strats ALLD, ALLC, TFT:")
+                # print(score1rec)
+                # print(score2rec)
                 if args.inspect_ipd:
                     inspect_ipd(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 

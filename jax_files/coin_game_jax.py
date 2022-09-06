@@ -28,6 +28,9 @@ MOVES = jax.device_put(
 class CoinGame:
     def __init__(self, grid_size=3):
         self.grid_size = grid_size
+        # self.v_get_moves_shortest_path_to_coin = jax.vmap(
+        #     self.get_moves_shortest_path_to_coin)
+        # self.v_get_coop_action = jax.vmap(self.get_coop_action)
 
     def generate_coins(self, subkey, red_pos_flat, blue_pos_flat):
         # if red_pos_flat == blue_pos_flat:
@@ -220,54 +223,84 @@ class CoinGame:
 
         return new_state, obs, (red_reward, blue_reward), (red_red_matches, red_blue_matches, blue_red_matches, blue_blue_matches)
 
-
-    def get_moves_shortest_path_to_coin(self, red_agent_perspective=True):
+    def get_moves_shortest_path_to_coin(self, state, red_agent_perspective=True):
         # Ties broken arbitrarily, in this case, since I check the vertical distance later
         # priority is given to closing vertical distance (making up or down moves)
         # before horizontal moves
         if red_agent_perspective:
-            agent_pos = self.red_pos
+            agent_pos = state.red_pos
         else:
-            agent_pos = self.blue_pos
+            agent_pos = state.blue_pos
         actions = jax.random.randint(jax.random.PRNGKey(0), shape=(1,), minval=0, maxval=0)
 
+        # print(state.coin_pos)
+
         # assumes red agent perspective
-        horiz_dist_right = (self.coin_pos[1] - agent_pos[1]) % self.grid_size
-        horiz_dist_left = (agent_pos[1] - self.coin_pos[1]) % self.grid_size
+        horiz_dist_right = (state.coin_pos[:,1] - agent_pos[:,1]) % self.grid_size
+        horiz_dist_left = (agent_pos[:,1] - state.coin_pos[:,1]) % self.grid_size
 
-        vert_dist_down = (self.coin_pos[0] - agent_pos[0]) % self.grid_size
-        vert_dist_up = (agent_pos[0] - self.coin_pos[0]) % self.grid_size
-        actions.at[horiz_dist_right < horiz_dist_left].set(0)
-        actions.at[horiz_dist_left < horiz_dist_right].set(1)
-        actions.at[vert_dist_down < vert_dist_up].set(2)
-        actions.at[vert_dist_up < vert_dist_down].set(3)
+        # print(horiz_dist_right)
+
+        vert_dist_down = (state.coin_pos[:,0] - agent_pos[:,0]) % self.grid_size
+        vert_dist_up = (agent_pos[:,0] - state.coin_pos[:,0]) % self.grid_size
+        actions = jnp.where(horiz_dist_right < horiz_dist_left, 0, actions)
+        actions = jnp.where(horiz_dist_left < horiz_dist_right, 1, actions)
+        actions = jnp.where(vert_dist_down < vert_dist_up, 2, actions)
+        actions = jnp.where(vert_dist_up < vert_dist_down, 3, actions)
+
+        # actions = actions.at[horiz_dist_right < horiz_dist_left].set(0)
+        # actions = actions.at[horiz_dist_left < horiz_dist_right].set(1)
+        # actions = actions.at[vert_dist_down < vert_dist_up].set(2)
+        # actions = actions.at[vert_dist_up < vert_dist_down].set(3)
         # Assumes no coin spawns under agent
-        assert jnp.logical_and(horiz_dist_right == horiz_dist_left, vert_dist_down == vert_dist_up).sum() == 0
+        # assert jnp.logical_and(horiz_dist_right == horiz_dist_left, vert_dist_down == vert_dist_up).sum() == 0
 
-        print(actions)
-        1/0
+        # print(actions)
+        # 1/0
 
         return actions
 
     def get_moves_away_from_coin(self, moves_towards_coin):
         opposite_moves = jnp.zeros_like(moves_towards_coin)
-        opposite_moves.at[moves_towards_coin == 0].set(1)
-        opposite_moves.at[moves_towards_coin == 1].set(0)
-        opposite_moves.at[moves_towards_coin == 2].set(3)
-        opposite_moves.at[moves_towards_coin == 3].set(2)
+        opposite_moves = jnp.where(moves_towards_coin == 0, 1, opposite_moves)
+        opposite_moves = jnp.where(moves_towards_coin == 1, 0, opposite_moves)
+        opposite_moves = jnp.where(moves_towards_coin == 2, 3, opposite_moves)
+        opposite_moves = jnp.where(moves_towards_coin == 3, 2, opposite_moves)
+
+        # opposite_moves = opposite_moves.at[moves_towards_coin == 0].set(1)
+        # opposite_moves = opposite_moves.at[moves_towards_coin == 1].set(0)
+        # opposite_moves = opposite_moves.at[moves_towards_coin == 2].set(3)
+        # opposite_moves = opposite_moves.at[moves_towards_coin == 3].set(2)
         return opposite_moves
 
-    def get_coop_action(self, red_agent_perspective=True):
+    def get_coop_action(self, state, red_agent_perspective=True):
         # move toward coin if same colour, away if opposite colour
         # An agent that always does this is considered to 'always cooperate'
-        moves_towards_coin = self.get_moves_shortest_path_to_coin(red_agent_perspective=red_agent_perspective)
+        moves_towards_coin = self.get_moves_shortest_path_to_coin(state, red_agent_perspective=red_agent_perspective)
         moves_away_from_coin = self.get_moves_away_from_coin(moves_towards_coin)
+
+        # print('hi')
+
+        # print(moves_towards_coin)
+        # print(moves_away_from_coin)
+
         coop_moves = jnp.zeros_like(moves_towards_coin) - 1
         if red_agent_perspective:
-            is_my_coin = self.is_red_coin
+            is_my_coin = state.is_red_coin
         else:
-            is_my_coin = 1 - self.is_red_coin
+            is_my_coin = 1 - state.is_red_coin
 
-        coop_moves.at[is_my_coin == 1].set(moves_towards_coin[is_my_coin == 1])
-        coop_moves.at[is_my_coin == 0].set(moves_away_from_coin[is_my_coin == 0])
+        is_my_coin = is_my_coin.squeeze(-1)
+
+        # print(coop_moves)
+
+        # print(is_my_coin)
+
+        coop_moves = jnp.where(is_my_coin == 1, moves_towards_coin, coop_moves)
+        coop_moves = jnp.where(is_my_coin == 0, moves_away_from_coin, coop_moves)
+
+        # print(coop_moves)
+
+        # coop_moves = coop_moves.at[is_my_coin == 1].set(moves_towards_coin[is_my_coin == 1])
+        # coop_moves = coop_moves.at[is_my_coin == 0].set(moves_away_from_coin[is_my_coin == 0])
         return coop_moves
