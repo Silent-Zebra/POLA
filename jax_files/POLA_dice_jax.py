@@ -299,17 +299,22 @@ class RNN(nn.Module):
     num_hidden_units: int
 
     def setup(self):
-        if args.layer_before_gru:
+        if args.layers_before_gru >= 1:
             self.linear1 = nn.Dense(features=self.num_hidden_units)
+        if args.layers_before_gru >= 2:
+            self.linear2 = nn.Dense(features=self.num_hidden_units)
         self.GRUCell = nn.GRUCell()
-        self.linear2 = nn.Dense(features=self.num_outputs)
+        self.linear_end = nn.Dense(features=self.num_outputs)
 
     def __call__(self, x, carry):
-        if args.layer_before_gru:
+        if args.layers_before_gru >= 1:
             x = self.linear1(x)
             x = nn.relu(x)
+        if args.layers_before_gru >= 2:
+            x = self.linear2(x)
+
         carry, x = self.GRUCell(carry, x)
-        outputs = self.linear2(x)
+        outputs = self.linear_end(x)
         return carry, outputs
 
     # def initialize_carry(self):
@@ -2416,8 +2421,9 @@ if __name__ == "__main__":
     parser.add_argument("--val_update_after_loop", action="store_true", help="Update values only after outer POLA loop finishes, not during the POLA loop")
     parser.add_argument("--std", type=float, default=0.1, help="standard deviation for initialization of policy/value parameters")
     parser.add_argument("--old_kl_div", action="store_true", help="Use the old version of KL div relative to just one batch of states at the beginning")
-    parser.add_argument("--layer_before_gru", action="store_true", help="Have a linear layer with ReLU before GRU")
+    # parser.add_argument("--layer_before_gru", action="store_true", help="Have a linear layer with ReLU before GRU")
     parser.add_argument("--inspect_ipd", action="store_true", help="Detailed (2 steps + start state) policy information in the IPD with full history")
+    parser.add_argument("--layers_before_gru", type=int, default=2, choices=[0, 1, 2], help="Number of linear layers (with ReLU activation) before GRU, supported up to 2 for now")
 
 
     args = parser.parse_args()
