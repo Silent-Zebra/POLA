@@ -1734,6 +1734,288 @@ def first_outer_step_update_selfagent2(stuff, unused):
 #
 #     return agent_opp.theta_p, agent_opp.theta_v
 
+@jit
+def eval_vs_alld_selfagent1(stuff, unused):
+    key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v = stuff
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (
+    subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val,
+    trainstate_val.params, h_p, h_v)
+
+    stuff, aux = act(act_args, None)
+    a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+
+    i_am_red_agent = True
+    opp_is_red_agent = False
+
+    if args.env == "ipd":
+        # Always defect
+        a_opp = jnp.zeros_like(a)
+    elif args.env == "coin":
+        a_opp = env.get_moves_shortest_path_to_coin(env_state,
+                                                    opp_is_red_agent)
+
+    a1 = a
+    a2 = a_opp
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2,
+                                                          env_subkeys)
+    obsv = new_obs
+
+    score1 = r1.mean()
+    score2 = r2.mean()
+
+    stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v)
+    aux = (score1, score2)
+
+    return stuff, aux
+
+
+@jit
+def eval_vs_alld_selfagent2(stuff, unused):
+    key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v = stuff
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (
+    subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val,
+    trainstate_val.params, h_p, h_v)
+
+    stuff, aux = act(act_args, None)
+    a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+
+    i_am_red_agent = False
+    opp_is_red_agent = True
+
+    if args.env == "ipd":
+        # Always defect
+        a_opp = jnp.zeros_like(a)
+    elif args.env == "coin":
+        a_opp = env.get_moves_shortest_path_to_coin(env_state,
+                                                    opp_is_red_agent)
+
+    a2 = a
+    a1 = a_opp
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2,
+                                                          env_subkeys)
+    obsv = new_obs
+
+    score1 = r1.mean()
+    score2 = r2.mean()
+
+    stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v)
+    aux = (score1, score2)
+
+    return stuff, aux
+
+@jit
+def eval_vs_allc_selfagent1(stuff, unused):
+    key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v = stuff
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (
+    subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val,
+    trainstate_val.params, h_p, h_v)
+
+    stuff, aux = act(act_args, None)
+    a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+
+    i_am_red_agent = True
+    opp_is_red_agent = False
+
+    if args.env == "ipd":
+        # Always cooperate
+        a_opp = jnp.ones_like(a)
+    elif args.env == "coin":
+        a_opp = env.get_coop_action(env_state, opp_is_red_agent)
+
+    a1 = a
+    a2 = a_opp
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2,
+                                                          env_subkeys)
+    obsv = new_obs
+
+    score1 = r1.mean()
+    score2 = r2.mean()
+
+    stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v)
+    aux = (score1, score2)
+
+    return stuff, aux
+
+
+@jit
+def eval_vs_allc_selfagent2(stuff, unused):
+    key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v = stuff
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (
+    subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val,
+    trainstate_val.params, h_p, h_v)
+
+    stuff, aux = act(act_args, None)
+    a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+
+    i_am_red_agent = False
+    opp_is_red_agent = True
+
+    if args.env == "ipd":
+    # Always cooperate
+        a_opp = jnp.ones_like(a)
+    elif args.env == "coin":
+        a_opp = env.get_coop_action(env_state, opp_is_red_agent)
+
+    a2 = a
+    a1 = a_opp
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2,
+                                                          env_subkeys)
+    obsv = new_obs
+
+    score1 = r1.mean()
+    score2 = r2.mean()
+
+    stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v)
+    aux = (score1, score2)
+
+    return stuff, aux
+
+
+@jit
+def eval_vs_tft_selfagent1(stuff, unused):
+    key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v, prev_a, prev_agent_coin_collected_same_col, r1, r2 = stuff
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (
+    subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val,
+    trainstate_val.params, h_p, h_v)
+
+    stuff, aux = act(act_args, None)
+    a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+
+
+
+    if args.env == "ipd":
+        # Copy last move of agent; assumes prev_a = all coop
+        a_opp = prev_a
+        prev_agent_coin_collected_same_col = None
+    elif args.env == "coin":
+        r_opp = r2
+        # Agent here means me, the agent we are testing
+        prev_agent_coin_collected_same_col = jnp.where(r_opp < 0, 0, prev_agent_coin_collected_same_col)
+        prev_agent_coin_collected_same_col = jnp.where(r_opp > 0, 1, prev_agent_coin_collected_same_col)
+
+        # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+        #     r_opp < 0].set(0)  # opp got negative reward from other agent collecting opp's coin
+        # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+        #     r_opp > 0].set(1)  # opp is allowed to get positive reward from collecting own coin
+
+        a_opp_defect = env.get_moves_shortest_path_to_coin(env_state, False)
+        a_opp_coop = env.get_coop_action(env_state, False)
+
+        a_opp = jax.lax.stop_gradient(a_opp_coop)
+        # a_opp = a_opp.at[prev_agent_coin_collected_same_col == 0].set(a_opp_defect[prev_agent_coin_collected_same_col == 0])
+        a_opp = jnp.where(prev_agent_coin_collected_same_col == 0, a_opp_defect, a_opp)
+
+    a1 = a
+    a2 = a_opp
+
+    # print(env_state)
+    # print(a1)
+    # print(a2)
+    # print(env_subkeys)
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2,
+                                                          env_subkeys)
+    obsv = new_obs
+
+    score1 = r1.mean()
+    score2 = r2.mean()
+
+    stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v, a, prev_agent_coin_collected_same_col, r1, r2)
+    aux = (score1, score2)
+
+    return stuff, aux
+
+
+@jit
+def eval_vs_tft_selfagent2(stuff, unused):
+    key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v, prev_a, prev_agent_coin_collected_same_col, r1, r2 = stuff
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (
+    subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val,
+    trainstate_val.params, h_p, h_v)
+
+    stuff, aux = act(act_args, None)
+    a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+
+    keys = jax.random.split(key, args.batch_size + 1)
+    key, env_subkeys = keys[0], keys[1:]
+
+    if args.env == "ipd":
+        # Copy last move of agent; assumes prev_a = all coop
+        a_opp = prev_a
+        prev_agent_coin_collected_same_col = None
+    elif args.env == "coin":
+
+        r_opp = r1
+        # Agent here means me, the agent we are testing
+        prev_agent_coin_collected_same_col = jnp.where(r_opp < 0, 0, prev_agent_coin_collected_same_col)
+        prev_agent_coin_collected_same_col = jnp.where(r_opp > 0, 1, prev_agent_coin_collected_same_col)
+
+        # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+        #     r_opp < 0].set(0)  # opp got negative reward from other agent collecting opp's coin
+        # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+        #     r_opp > 0].set(1)  # opp is allowed to get positive reward from collecting own coin
+
+        a_opp_defect = env.get_moves_shortest_path_to_coin(env_state, True)
+        a_opp_coop = env.get_coop_action(env_state, True)
+
+        a_opp = jax.lax.stop_gradient(a_opp_coop)
+        # a_opp = a_opp.at[prev_agent_coin_collected_same_col == 0].set(a_opp_defect[prev_agent_coin_collected_same_col == 0])
+        a_opp = jnp.where(prev_agent_coin_collected_same_col == 0, a_opp_defect, a_opp)
+
+    a1 = a_opp
+    a2 = a
+
+    env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2,
+                                                          env_subkeys)
+    obsv = new_obs
+
+    score1 = r1.mean()
+    score2 = r2.mean()
+
+    stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v, a, prev_agent_coin_collected_same_col, r1, r2)
+    aux = (score1, score2)
+
+    return stuff, aux
+
+
+
 @partial(jit, static_argnums=(3, 4))
 def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", self_agent=1):
     # if args.env == 'coin':
@@ -1751,105 +2033,174 @@ def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", sel
 
     score1, score2 = 0., 0.
 
-    # TODO lax scan here... perhaps a separate lax scan for each strat
-    for t in range(args.rollout_len):
-        if t > 0:
-            prev_a = a
-
-        key, subkey = jax.random.split(key)
-
-        act_args = (subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val, trainstate_val.params, h_p, h_v)
-
-        stuff, aux = act(act_args, None)
-        a, lp, v, h_p, h_v, cat_act_probs, logits = aux
-
-        keys = jax.random.split(key, args.batch_size + 1)
-        key, env_subkeys = keys[0], keys[1:]
-
-        if args.env == 'coin':
-            if self_agent == 1:
-                i_am_red_agent = True
-                opp_is_red_agent = False
-            else: # if I am agent 2 (blue), then opponent is agent 1 (red)
-                i_am_red_agent = False
-                opp_is_red_agent = True
-
-
-        if strat == "alld":
-            if args.env == "ipd":
-                # Always defect
-                a_opp = jnp.zeros_like(a)
-            elif args.env == "coin":
-                a_opp = env.get_moves_shortest_path_to_coin(env_state, opp_is_red_agent)
-
-            else:
-                raise NotImplementedError
-
-        elif strat == "allc":
-            if args.env == "ipd":
-                # Always cooperate
-                a_opp = jnp.ones_like(a)
-            elif args.env == "coin":
-                a_opp = env.get_coop_action(env_state, opp_is_red_agent)
-            else:
-                print("Eval vs fixed not yet implemented")
-
-        elif strat == "tft":
-            if args.env == "ipd":
-                if t == 0:
-                    # start with coop
-                    a_opp = jnp.ones_like(a)
-                else:
-                    # otherwise copy the last move of the other agent
-                    a_opp = prev_a
-            elif args.env == "coin":
-                if t == 0:
-                    a_opp = env.get_coop_action(env_state, opp_is_red_agent)
-                    prev_agent_coin_collected_same_col = jnp.ones_like(a)  # 0 = defect, collect other agent coin
-                else:
-                    if i_am_red_agent:
-                        r_opp = r2
-                    else:
-                        r_opp = r1
-                    # Agent here means me, the agent we are testing
-                    prev_agent_coin_collected_same_col = jnp.where(r_opp < 0, 0, prev_agent_coin_collected_same_col)
-                    prev_agent_coin_collected_same_col = jnp.where(r_opp > 0, 1, prev_agent_coin_collected_same_col)
-
-                    # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
-                    #     r_opp < 0].set(0)  # opp got negative reward from other agent collecting opp's coin
-                    # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
-                    #     r_opp > 0].set(1)  # opp is allowed to get positive reward from collecting own coin
-
-                    a_opp_defect = env.get_moves_shortest_path_to_coin(env_state, opp_is_red_agent)
-                    a_opp_coop = env.get_coop_action(env_state, opp_is_red_agent)
-
-                    a_opp = jax.lax.stop_gradient(a_opp_coop)
-                    # a_opp = a_opp.at[prev_agent_coin_collected_same_col == 0].set(a_opp_defect[prev_agent_coin_collected_same_col == 0])
-                    a_opp = jnp.where(prev_agent_coin_collected_same_col == 0, a_opp_defect, a_opp)
-            else:
-                print("Eval vs fixed not yet implemented")
+    if strat == "alld":
+        stuff = key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v
 
         if self_agent == 1:
-            a1 = a
-            a2 = a_opp
+            stuff, aux = jax.lax.scan(eval_vs_alld_selfagent1, stuff, None, args.rollout_len)
         else:
-            a1 = a_opp
-            a2 = a
+            stuff, aux = jax.lax.scan(eval_vs_alld_selfagent2, stuff, None, args.rollout_len)
+    elif strat == "allc":
+        stuff = key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v
 
-        # print(strat)
-        # print(env_state)
-        # print(a1)
-        # print(a2)
-        # print(env_subkeys)
+        if self_agent == 1:
+            stuff, aux = jax.lax.scan(eval_vs_allc_selfagent1, stuff, None, args.rollout_len)
+        else:
+            stuff, aux = jax.lax.scan(eval_vs_allc_selfagent2, stuff, None, args.rollout_len)
+    elif strat == "tft":
+        if args.env == "ipd":
+            prev_a = jnp.ones(
+                args.batch_size, dtype=int)  # assume agent (self) cooperated for the init time step when the opponent is using TFT
+            r1 = jnp.zeros(args.batch_size, dtype=int)  # these don't matter for IPD,
+            r2 = jnp.zeros(args.batch_size, dtype=int)
+            prev_agent_coin_collected_same_col = None
+        elif args.env == "coin":
+            if self_agent == 1:
+                prev_a = env.get_coop_action(env_state,
+                                             red_agent_perspective=False)  # doesn't matter for coin
+            else:
+                prev_a = env.get_coop_action(env_state,
+                                             red_agent_perspective=True)  # doesn't matter for coin
+            prev_agent_coin_collected_same_col = jnp.ones(
+                args.batch_size, dtype=int)  # 0 = defect, collect other agent coin. Init with 1 (coop)
+            r1 = jnp.zeros(args.batch_size, dtype=int)
+            r2 = jnp.zeros(args.batch_size, dtype=int)
+        else:
+            raise NotImplementedError
+        stuff = (
+        key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v, prev_a,
+        prev_agent_coin_collected_same_col, r1, r2)
+        if self_agent == 1:
+            stuff, aux = jax.lax.scan(eval_vs_tft_selfagent1, stuff, None,
+                                      args.rollout_len)
+        else:
+            stuff, aux = jax.lax.scan(eval_vs_tft_selfagent2, stuff, None,
+                                      args.rollout_len)
 
-        env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2, env_subkeys)
-        obsv = new_obs
+        # if self_agent == 1:
+        #     # Opponent is Blue agent
+        #     if args.env == "ipd":
+        #         prev_a = jnp.ones(args.batch_size) # assume agent (self) cooperated for the init time step when the opponent is using TFT
+        #         r1 = jnp.zeros(args.batch_size) # these don't matter for IPD,
+        #         r2 = jnp.zeros(args.batch_size)
+        #         prev_agent_coin_collected_same_col = None
+        #     elif args.env == "coin":
+        #         prev_a = env.get_coop_action(env_state, red_agent_perspective=False) # doesn't matter for coin
+        #         prev_agent_coin_collected_same_col = jnp.ones(args.batch_size)  # 0 = defect, collect other agent coin. Init with 1 (coop)
+        #         r1 = jnp.zeros(args.batch_size)
+        #         r2 = jnp.zeros(args.batch_size)
+        #     else:
+        #         raise NotImplementedError
+        #     stuff = (key, trainstate_th, trainstate_val, env_state, obsv, h_p, h_v, prev_a, prev_agent_coin_collected_same_col, r1, r2)
+        #     stuff, aux = jax.lax.scan(eval_vs_tft_selfagent1, stuff, None, args.rollout_len)
+        # else:
+        #     a_opp = env.get_coop_action(env_state, red_agent_perspective=True)
+        #     prev_agent_coin_collected_same_col = jnp.ones(args.batch_size)
+        #     stuff, aux = jax.lax.scan(eval_vs_tft_selfagent2, stuff, None, args.rollout_len)
 
-        score1 += r1.mean()
-        score2 += r2.mean()
+    score1, score2 = aux
+    score1 = score1.mean()
+    score2 = score2.mean()
 
-    score1 /= args.rollout_len
-    score2 /= args.rollout_len
+    # TODO lax scan here... perhaps a separate lax scan for each strat
+    # for t in range(args.rollout_len):
+    #     if t > 0:
+    #         prev_a = a
+    #
+    #     key, subkey = jax.random.split(key)
+    #
+    #     act_args = (subkey, obsv, trainstate_th, trainstate_th.params, trainstate_val, trainstate_val.params, h_p, h_v)
+    #
+    #     stuff, aux = act(act_args, None)
+    #     a, lp, v, h_p, h_v, cat_act_probs, logits = aux
+    #
+    #     keys = jax.random.split(key, args.batch_size + 1)
+    #     key, env_subkeys = keys[0], keys[1:]
+    #
+    #     if args.env == 'coin':
+    #         if self_agent == 1:
+    #             i_am_red_agent = True
+    #             opp_is_red_agent = False
+    #         else: # if I am agent 2 (blue), then opponent is agent 1 (red)
+    #             i_am_red_agent = False
+    #             opp_is_red_agent = True
+    #
+    #
+    #     if strat == "alld":
+    #         if args.env == "ipd":
+    #             # Always defect
+    #             a_opp = jnp.zeros_like(a)
+    #         elif args.env == "coin":
+    #             a_opp = env.get_moves_shortest_path_to_coin(env_state, opp_is_red_agent)
+    #
+    #         else:
+    #             raise NotImplementedError
+    #
+    #     elif strat == "allc":
+    #         if args.env == "ipd":
+    #             # Always cooperate
+    #             a_opp = jnp.ones_like(a)
+    #         elif args.env == "coin":
+    #             a_opp = env.get_coop_action(env_state, opp_is_red_agent)
+    #         else:
+    #             print("Eval vs fixed not yet implemented")
+    #
+    #     elif strat == "tft":
+    #         if args.env == "ipd":
+    #             if t == 0:
+    #                 # start with coop
+    #                 a_opp = jnp.ones_like(a)
+    #             else:
+    #                 # otherwise copy the last move of the other agent
+    #                 a_opp = prev_a
+    #         elif args.env == "coin":
+    #             if t == 0:
+    #                 a_opp = env.get_coop_action(env_state, opp_is_red_agent)
+    #                 prev_agent_coin_collected_same_col = jnp.ones_like(a)  # 0 = defect, collect other agent coin
+    #             else:
+    #                 if i_am_red_agent:
+    #                     r_opp = r2
+    #                 else:
+    #                     r_opp = r1
+    #                 # Agent here means me, the agent we are testing
+    #                 prev_agent_coin_collected_same_col = jnp.where(r_opp < 0, 0, prev_agent_coin_collected_same_col)
+    #                 prev_agent_coin_collected_same_col = jnp.where(r_opp > 0, 1, prev_agent_coin_collected_same_col)
+    #
+    #                 # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+    #                 #     r_opp < 0].set(0)  # opp got negative reward from other agent collecting opp's coin
+    #                 # prev_agent_coin_collected_same_col = prev_agent_coin_collected_same_col.at[
+    #                 #     r_opp > 0].set(1)  # opp is allowed to get positive reward from collecting own coin
+    #
+    #                 a_opp_defect = env.get_moves_shortest_path_to_coin(env_state, opp_is_red_agent)
+    #                 a_opp_coop = env.get_coop_action(env_state, opp_is_red_agent)
+    #
+    #                 a_opp = jax.lax.stop_gradient(a_opp_coop)
+    #                 # a_opp = a_opp.at[prev_agent_coin_collected_same_col == 0].set(a_opp_defect[prev_agent_coin_collected_same_col == 0])
+    #                 a_opp = jnp.where(prev_agent_coin_collected_same_col == 0, a_opp_defect, a_opp)
+    #         else:
+    #             print("Eval vs fixed not yet implemented")
+    #
+    #     if self_agent == 1:
+    #         a1 = a
+    #         a2 = a_opp
+    #     else:
+    #         a1 = a_opp
+    #         a2 = a
+    #
+    #     # print(strat)
+    #     # print(env_state)
+    #     # print(a1)
+    #     # print(a2)
+    #     # print(env_subkeys)
+    #
+    #     env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2, env_subkeys)
+    #     obsv = new_obs
+    #
+    #     score1 += r1.mean()
+    #     score2 += r2.mean()
+
+    # score1 /= args.rollout_len
+    # score2 /= args.rollout_len
 
     return (score1, score2), None
 
@@ -2017,6 +2368,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
     print("start iterations with", args.inner_steps, "inner steps and", args.outer_steps, "outer steps:")
     same_colour_coins_record = []
     diff_colour_coins_record = []
+    coins_collected_info = (same_colour_coins_record, diff_colour_coins_record)
 
     agent2_theta_p_model, agent1_theta_p_model = None, None
     agent2_theta_v_model, agent1_theta_v_model = None, None
@@ -2363,30 +2715,17 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         # print(bb_matches_amount)
 
 
-        # print("Eval vs Fixed Strategies:")
-        # score1rec = []
-        # score2rec = []
-        # for strat in ["alld", "allc", "tft"]:
-        #     print(f"Playing against strategy: {strat.upper()}")
-        #     score1, _ = eval_vs_fixed_strategy(agent1.theta_p, agent1.theta_v, strat, i_am_red_agent=True)
-        #     score1rec.append(score1[0])
-        #     print(f"Agent 1 score: {score1[0]}")
-        #     score2, _ = eval_vs_fixed_strategy(agent2.theta_p, agent2.theta_v, strat, i_am_red_agent=False)
-        #     score2rec.append(score2[1])
-        #     print(f"Agent 2 score: {score2[1]}")
-        #
-        #     print(score1)
-        #     print(score2)
-        #
-        # score1rec = jnp.stack(score1rec)
-        # score2rec = jnp.stack(score2rec)
-        # vs_fixed_strats_score_record[0].append(score1rec)
-        # vs_fixed_strats_score_record[1].append(score2rec)
 
+        if args.env == "coin":
+            same_colour_coins = rr_matches_amount + bb_matches_amount
+            diff_colour_coins = rb_matches_amount + br_matches_amount
+            same_colour_coins_record.append(same_colour_coins)
+            diff_colour_coins_record.append(diff_colour_coins)
 
-        # joint_scores.append(0.5 * (score[0] + score[1]))
-        # score = jnp.stack(score)
-        # score_record.append(score)
+        vs_fixed_strats_score_record[0].append(score1rec)
+        vs_fixed_strats_score_record[1].append(score2rec)
+
+        score_record.append(jnp.stack((score1, score2)))
 
         # print
         if update % args.print_every == 0:
@@ -2415,7 +2754,17 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
 
         if update % args.checkpoint_every == 0:
             now = datetime.datetime.now()
-            checkpoints.save_checkpoint(ckpt_dir=args.save_dir, target=(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2),
+
+            # print(coins_collected_info)
+            # print(score_record)
+            # print(vs_fixed_strats_score_record)
+
+            checkpoints.save_checkpoint(ckpt_dir=args.save_dir,
+                                        target=(trainstate_th1, trainstate_val1,
+                                                trainstate_th2, trainstate_val2,
+                                                coins_collected_info,
+                                                score_record,
+                                                vs_fixed_strats_score_record),
                                         step=update + 1, prefix=f"checkpoint_{now.strftime('%Y-%m-%d_%H-%M')}_seed{args.seed}_epoch")
 
 
@@ -2552,9 +2901,19 @@ if __name__ == "__main__":
     # agent1 = Agent(subkey1, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     # agent2 = Agent(subkey2, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     if args.load_dir is not None:
+        score_record = []
+        vs_fixed_strats_score_record = [[], []]
+        same_colour_coins_record = []
+        diff_colour_coins_record = []
+        coins_collected_info = (
+        same_colour_coins_record, diff_colour_coins_record)
+
         assert args.load_prefix is not None
         restored_tuple = checkpoints.restore_checkpoint(ckpt_dir=args.load_dir,
-                                                        target=(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2),
+                                                        target=(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2,
+                                                                coins_collected_info,
+                                                                score_record,
+                                                                vs_fixed_strats_score_record),
                                                         prefix=args.load_prefix)
         # agent1, agent2, coins_collected_info, prev_scores, vs_fixed_strat_scores = load_from_checkpoint()
         # print(jnp.stack(prev_scores))
@@ -2569,6 +2928,48 @@ if __name__ == "__main__":
     # Use 0 lr if you want no inner steps... TODO fix this?
     assert args.outer_steps >= 1
 
+
+    # # TODO REMOVE LATER TESTING ONLY
+    #
+    # key, subkey = jax.random.split(jax.random.PRNGKey(0))
+    # score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount, score1rec, score2rec = \
+    #     eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2,
+    #                   trainstate_val2)
+    #
+    # now = datetime.datetime.now()
+    #
+    # score_record = []
+    # vs_fixed_strats_score_record = [[], []]
+    # same_colour_coins_record = []
+    # diff_colour_coins_record = []
+    # coins_collected_info = (
+    #     same_colour_coins_record, diff_colour_coins_record)
+    #
+    # if args.env == "coin":
+    #     same_colour_coins = rr_matches_amount + bb_matches_amount
+    #     diff_colour_coins = rb_matches_amount + br_matches_amount
+    #     same_colour_coins_record.append(same_colour_coins)
+    #     diff_colour_coins_record.append(diff_colour_coins)
+    #
+    # vs_fixed_strats_score_record[0].append(score1rec)
+    # vs_fixed_strats_score_record[1].append(score2rec)
+    #
+    # score_record.append(jnp.stack((score1, score2)))
+    #
+    # print(coins_collected_info)
+    # print(score_record)
+    # print(vs_fixed_strats_score_record)
+    #
+    # checkpoints.save_checkpoint(ckpt_dir=args.save_dir,
+    #                             target=(trainstate_th1, trainstate_val1,
+    #                                     trainstate_th2, trainstate_val2,
+    #                                     coins_collected_info,
+    #                                     score_record,
+    #                                     vs_fixed_strats_score_record),
+    #                             step=1,
+    #                             prefix=f"checkpoint_{now.strftime('%Y-%m-%d_%H-%M')}_seed{args.seed}_epoch")
+    #
+    # 1/0
 
     joint_scores = play(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2,
                         args.opp_model)
