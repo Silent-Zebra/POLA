@@ -1843,6 +1843,7 @@ def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", sel
         # print(env_subkeys)
 
         env_state, new_obs, (r1, r2), aux_info = vec_env_step(env_state, a1, a2, env_subkeys)
+        obsv = new_obs
 
         score1 += r1.mean()
         score2 += r2.mean()
