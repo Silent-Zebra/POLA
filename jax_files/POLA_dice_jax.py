@@ -2051,8 +2051,8 @@ def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", sel
         if args.env == "ipd":
             prev_a = jnp.ones(
                 args.batch_size, dtype=int)  # assume agent (self) cooperated for the init time step when the opponent is using TFT
-            r1 = jnp.zeros(args.batch_size, dtype=int)  # these don't matter for IPD,
-            r2 = jnp.zeros(args.batch_size, dtype=int)
+            r1 = jnp.zeros(args.batch_size)  # these don't matter for IPD,
+            r2 = jnp.zeros(args.batch_size)
             prev_agent_coin_collected_same_col = None
         elif args.env == "coin":
             if self_agent == 1:
@@ -2063,8 +2063,8 @@ def eval_vs_fixed_strategy(key, trainstate_th, trainstate_val, strat="alld", sel
                                              red_agent_perspective=True)  # doesn't matter for coin
             prev_agent_coin_collected_same_col = jnp.ones(
                 args.batch_size, dtype=int)  # 0 = defect, collect other agent coin. Init with 1 (coop)
-            r1 = jnp.zeros(args.batch_size, dtype=int)
-            r2 = jnp.zeros(args.batch_size, dtype=int)
+            r1 = jnp.zeros(args.batch_size)
+            r2 = jnp.zeros(args.batch_size)
         else:
             raise NotImplementedError
         stuff = (

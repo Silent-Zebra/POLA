@@ -6,7 +6,7 @@ class IPD:
     Possible actions for each agent are (C)ooperate and (D)efect.
     """
     def __init__(self, init_state_coop=False):
-        self.payout_mat = jnp.array([[-2,0],[-3,-1]])
+        self.payout_mat = jnp.array([[-2.0,0.0],[-3.0,-1.0]])
         # One hot state representation because this would scale to n agents
         self.states = jnp.array([[[1, 0, 0, 1, 0, 0], #DD (WE ARE BACK TO THE REPR OF FIRST AGENT, SECOND AGENT)
                                           [1, 0, 0, 0, 1, 0]], #DC
