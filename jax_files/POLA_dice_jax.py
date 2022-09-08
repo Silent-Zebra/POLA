@@ -297,20 +297,21 @@ def act(stuff, unused ):
 class RNN(nn.Module):
     num_outputs: int
     num_hidden_units: int
+    layers_before_gru: int
 
     def setup(self):
-        if args.layers_before_gru >= 1:
+        if self.layers_before_gru >= 1:
             self.linear1 = nn.Dense(features=self.num_hidden_units)
-        if args.layers_before_gru >= 2:
+        if self.layers_before_gru >= 2:
             self.linear2 = nn.Dense(features=self.num_hidden_units)
         self.GRUCell = nn.GRUCell()
         self.linear_end = nn.Dense(features=self.num_outputs)
 
     def __call__(self, x, carry):
-        if args.layers_before_gru >= 1:
+        if self.layers_before_gru >= 1:
             x = self.linear1(x)
             x = nn.relu(x)
-        if args.layers_before_gru >= 2:
+        if self.layers_before_gru >= 2:
             x = self.linear2(x)
 
         carry, x = self.GRUCell(carry, x)
@@ -2860,8 +2861,8 @@ if __name__ == "__main__":
     key, key_p1, key_v1, key_p2, key_v2 = jax.random.split(key, 5)
 
     theta_p1 = RNN(num_outputs=action_size,
-                       num_hidden_units=hidden_size)
-    theta_v1 = RNN(num_outputs=1, num_hidden_units=hidden_size)
+                       num_hidden_units=hidden_size, layers_before_gru=args.layers_before_gru )
+    theta_v1 = RNN(num_outputs=1, num_hidden_units=hidden_size, layers_before_gru=args.layers_before_gru)
 
     theta_p1_params = theta_p1.init(key_p1, jnp.ones(
         [args.batch_size, input_size]), jnp.zeros(hidden_size))
@@ -2869,8 +2870,8 @@ if __name__ == "__main__":
         [args.batch_size, input_size]), jnp.zeros(hidden_size))
 
     theta_p2 = RNN(num_outputs=action_size,
-                   num_hidden_units=hidden_size)
-    theta_v2 = RNN(num_outputs=1, num_hidden_units=hidden_size)
+                   num_hidden_units=hidden_size, layers_before_gru=args.layers_before_gru)
+    theta_v2 = RNN(num_outputs=1, num_hidden_units=hidden_size, layers_before_gru=args.layers_before_gru)
 
     theta_p2_params = theta_p2.init(key_p2, jnp.ones(
         [args.batch_size, input_size]), jnp.zeros(hidden_size))
