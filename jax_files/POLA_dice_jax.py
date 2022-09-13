@@ -2902,12 +2902,14 @@ if __name__ == "__main__":
     # agent1 = Agent(subkey1, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     # agent2 = Agent(subkey2, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     if args.load_dir is not None:
-        score_record = []
-        vs_fixed_strats_score_record = [[], []]
-        same_colour_coins_record = []
-        diff_colour_coins_record = []
+        epoch_num = int(args.load_prefix.split("epoch")[-1])
+        score_record = [jnp.zeros((2,))] * epoch_num
+        vs_fixed_strats_score_record = [[jnp.zeros((3,))] * epoch_num,
+                                        [jnp.zeros((3,))] * epoch_num]
+        same_colour_coins_record = [jnp.zeros((1,))] * epoch_num
+        diff_colour_coins_record = [jnp.zeros((1,))] * epoch_num
         coins_collected_info = (
-        same_colour_coins_record, diff_colour_coins_record)
+            same_colour_coins_record, diff_colour_coins_record)
 
         assert args.load_prefix is not None
         restored_tuple = checkpoints.restore_checkpoint(ckpt_dir=args.load_dir,
@@ -2918,7 +2920,7 @@ if __name__ == "__main__":
                                                         prefix=args.load_prefix)
         # agent1, agent2, coins_collected_info, prev_scores, vs_fixed_strat_scores = load_from_checkpoint()
         # print(jnp.stack(prev_scores))
-        trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2 = restored_tuple
+        trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2, coins_collected_info, score_record, vs_fixed_strats_score_record = restored_tuple
 
 
     use_baseline = True
