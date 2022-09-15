@@ -2906,8 +2906,12 @@ if __name__ == "__main__":
         score_record = [jnp.zeros((2,))] * epoch_num
         vs_fixed_strats_score_record = [[jnp.zeros((3,))] * epoch_num,
                                         [jnp.zeros((3,))] * epoch_num]
-        same_colour_coins_record = [jnp.zeros((1,))] * epoch_num
-        diff_colour_coins_record = [jnp.zeros((1,))] * epoch_num
+        if args.env == 'coin':
+            same_colour_coins_record = [jnp.zeros((1,))] * epoch_num
+            diff_colour_coins_record = [jnp.zeros((1,))] * epoch_num
+        else:
+            same_colour_coins_record = []
+            diff_colour_coins_record = []
         coins_collected_info = (
             same_colour_coins_record, diff_colour_coins_record)
 
