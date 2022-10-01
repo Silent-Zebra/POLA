@@ -3018,7 +3018,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         score_record.append(jnp.stack((score1, score2)))
 
         # print
-        if update % args.print_every == 0:
+        if (update + 1) % args.print_every == 0:
             print("*" * 10)
             print("Epoch: {}".format(update + 1), flush=True)
             print(f"Score for Agent 1: {score1}")
@@ -3042,7 +3042,7 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
                 if args.inspect_ipd:
                     inspect_ipd(trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
 
-        if update % args.checkpoint_every == 0:
+        if (update + 1) % args.checkpoint_every == 0:
             now = datetime.datetime.now()
 
             # print(coins_collected_info)
