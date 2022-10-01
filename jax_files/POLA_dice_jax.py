@@ -2637,9 +2637,25 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
         key, subkey = jax.random.split(key)
         agent1_om_of_th2, agent1_om_of_val2, agent2_om_of_th1, agent2_om_of_val1 = get_init_trainstates(subkey, action_size, input_size)
 
-    # key, subkey = jax.random.split(key)
-    # score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount = \
-    #     eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2, trainstate_val2)
+
+
+    key, subkey = jax.random.split(key)
+    score1, score2, rr_matches_amount, rb_matches_amount, br_matches_amount, bb_matches_amount, score1rec, score2rec = \
+        eval_progress(key, trainstate_th1, trainstate_val1, trainstate_th2,
+                      trainstate_val2)
+
+    if args.env == "coin":
+        same_colour_coins = rr_matches_amount + bb_matches_amount
+        diff_colour_coins = rb_matches_amount + br_matches_amount
+        same_colour_coins_record.append(same_colour_coins)
+        diff_colour_coins_record.append(diff_colour_coins)
+
+    vs_fixed_strats_score_record[0].append(score1rec)
+    vs_fixed_strats_score_record[1].append(score2rec)
+
+    score_record.append(jnp.stack((score1, score2)))
+
+
 
 
     for update in range(args.n_update):
