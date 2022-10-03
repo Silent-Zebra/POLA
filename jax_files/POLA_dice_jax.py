@@ -3195,6 +3195,11 @@ if __name__ == "__main__":
     # agent2 = Agent(subkey2, input_size, args.hidden_size, action_size, lr_p=args.lr_out, lr_v = args.lr_v)
     if args.load_dir is not None:
         epoch_num = int(args.load_prefix.split("epoch")[-1])
+        if epoch_num % 10 == 0:
+            epoch_num += 1  # Kind of an ugly temporary fix to allow for the updated checkpointing system which now has
+            # record of rewards/eval vs fixed strat before the first training - important for IPD plots. Should really be applied to
+            # all checkpoints with the new updated code I have, but the coin checkpoints above are from old code
+
         score_record = [jnp.zeros((2,))] * epoch_num
         vs_fixed_strats_score_record = [[jnp.zeros((3,))] * epoch_num,
                                         [jnp.zeros((3,))] * epoch_num]
