@@ -5,8 +5,13 @@ class IPD:
     A two-agent vectorized environment.
     Possible actions for each agent are (C)ooperate and (D)efect.
     """
-    def __init__(self, init_state_coop=False):
-        self.payout_mat = jnp.array([[-2.0,0.0],[-3.0,-1.0]])
+    def __init__(self, init_state_coop=False, contrib_factor=1.33):
+        cc = contrib_factor - 1.
+        dd = 0.
+        dc = contrib_factor / 2. # I defect when opp coop
+        cd = contrib_factor / 2. - 1 # I coop when opp defect
+        self.payout_mat = jnp.array([[dd, dc],[cd, cc]])
+        # self.payout_mat = jnp.array([[-2.0,0.0],[-3.0,-1.0]])
         # One hot state representation because this would scale to n agents
         self.states = jnp.array([[[1, 0, 0, 1, 0, 0], #DD (WE ARE BACK TO THE REPR OF FIRST AGENT, SECOND AGENT)
                                           [1, 0, 0, 0, 1, 0]], #DC

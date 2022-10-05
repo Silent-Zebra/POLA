@@ -3115,7 +3115,7 @@ if __name__ == "__main__":
     # parser.add_argument("--layer_before_gru", action="store_true", help="Have a linear layer with ReLU before GRU")
     parser.add_argument("--inspect_ipd", action="store_true", help="Detailed (2 steps + start state) policy information in the IPD with full history")
     parser.add_argument("--layers_before_gru", type=int, default=2, choices=[0, 1, 2], help="Number of linear layers (with ReLU activation) before GRU, supported up to 2 for now")
-
+    parser.add_argument("--contrib_factor", type=float, default=1.33, help="contribution factor to vary difficulty of IPD")
 
     args = parser.parse_args()
 
@@ -3132,7 +3132,7 @@ if __name__ == "__main__":
     elif args.env == 'ipd':
         input_size = 6 # 3 * n_agents
         action_size = 2
-        env = IPD(init_state_coop=args.init_state_coop)
+        env = IPD(init_state_coop=args.init_state_coop, contrib_factor=args.contrib_factor)
     else:
         raise NotImplementedError("unknown env")
     vec_env_reset = jax.vmap(env.reset)
