@@ -151,15 +151,15 @@ Change the --seed parameter for different seeds.
 
 ### LOLA-DiCE
 
-python LOLA_dice.py  --env ogcoin --val_update_after_loop   --n_update 15000 --gae_lambda 1.0  --inner_steps 2 --outer_steps 1 --lr_in 0.03 --lr_out 0.005 --lr_v 0.00005 --batch_size 4000 --len_rollout 50  --print_every 50 --checkpoint_every 3000 --seed 1 
+python ./jax_files/POLA_dice_jax.py --env coin  --n_update 50001 --gae_lambda 1.0  --inner_steps 1 --outer_steps 1 --lr_in 0.003 --lr_out 0.003 --lr_v 0.0005 --batch_size 2000 --rollout_len 50  --print_every 10 --outer_beta 0 --inner_beta 0 --seed 1 --layers_before_gru 1 --checkpoint_every 2000 --hidden_size 64
 
 ### POLA-DiCE
 
-python LOLA_dice.py  --env ogcoin --val_update_after_loop   --n_update 200 --gae_lambda 1.0  --inner_steps 1 --outer_steps 100 --lr_in 0.03 --lr_out 0.005 --lr_v 0.00005 --batch_size 4000 --len_rollout 50  --print_every 1 --outer_beta 4 --checkpoint_every 50 --seed 10 
+python ./jax_files/POLA_dice_jax.py --env coin  --n_update 251 --gae_lambda 1.0  --inner_steps 2 --outer_steps 200 --lr_in 0.02 --lr_out 0.003 --lr_v 0.0005 --batch_size 2000 --rollout_len 50  --print_every 1 --outer_beta 150 --inner_beta 5 --seed 1 --layers_before_gru 1 --checkpoint_every 25 --hidden_size 64
 
 ### POLA-OM
 
-python LOLA_dice.py --env ogcoin --val_update_after_loop --zero_vals --n_update 200 --gae_lambda 1.0  --inner_steps 1 --outer_steps 100 --lr_in 0.03 --lr_out 0.005 --lr_v 0.0 --batch_size 4000 --len_rollout 50  --print_every 1 --outer_beta 4 --checkpoint_every 25  --seed 8 --opp_model --opp_model_steps 1 --opp_model_data_batches 200 --om_lr_p 0.005 --om_lr_v 0.0
+python ./jax_files/POLA_dice_jax.py --env coin  --n_update 251 --gae_lambda 1.0  --inner_steps 4 --outer_steps 200 --lr_in 0.01 --lr_out 0.003 --lr_v 0.0005 --batch_size 1000 --rollout_len 50  --print_every 1 --outer_beta 150 --inner_beta 10 --seed 1 --layers_before_gru 1 --checkpoint_every 25 --hidden_size 64 --opp_model --opp_model_steps 1 --opp_model_data_batches 200 --om_lr_p 0.005 --om_lr_v 0.0005
 
 ## Commands for additional experiments with varying parameterizations of the opponent model
 
