@@ -8,7 +8,7 @@ For the plots (Figures 4 and 5), the workflow is to run the commands, then paste
 
 higher (for LOLA_exact.py) (https://github.com/facebookresearch/higher)
 
-If using the JAX files: flax
+flax (if using the JAX files, which I now recommend for LOLA-DiCE and POLA-DiCE experiments)
 
 ## Commands used for Figure 1
 
