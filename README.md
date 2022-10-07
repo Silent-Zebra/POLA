@@ -8,7 +8,7 @@ For the plots (Figures 4 and 5), the workflow is to run the commands, then paste
 
 higher (for LOLA_exact.py) (https://github.com/facebookresearch/higher)
 
-flax (if using the JAX files, which I strongly recommend for LOLA-DiCE and POLA-DiCE experiments (faster at least 2x, and more so with more inner steps))
+flax (if using the JAX files, which I strongly recommend for LOLA-DiCE and POLA-DiCE experiments (faster at least 2x, and more so with more inner steps; also has what I consider to be a better implementation of KL divergence for use in POLA based on new rollouts))
 
 ## Commands used for Figure 1
 
