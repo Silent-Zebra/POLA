@@ -12,6 +12,8 @@ flax (if using the JAX files, which I strongly recommend for LOLA-DiCE and POLA-
 
 ## Commands used for Figure 1
 
+Init state representation 2 means the start state is different from the other states (0 = defect, 1 = cooperate)
+
 ### LOLA:
 
 Neural Net 1:
