@@ -538,7 +538,7 @@ def inner_step_get_grad_otheragent2(stuff, unused):
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
     # Note the dot here (on agent 2) because we want to return the updated params
     stuff = (key, trainstate_th1_, trainstate_th1_params, trainstate_val1_, trainstate_val1_params,
-             trainstate_th2_, trainstate_th2.params, trainstate_val2_, trainstate_val2.params,
+             trainstate_th2_, trainstate_th2_.params, trainstate_val2_, trainstate_val2_.params,
              old_trainstate_th, old_trainstate_val, inner_agent_pol_probs_old, inner_agent_state_history_ref)
     aux = None
 
@@ -1058,7 +1058,7 @@ def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1
                                   trainstate_th2_copy,
                                   trainstate_th2_copy_params,
                                   trainstate_val2_copy,
-                                  trainstate_val2_copy.params,
+                                  trainstate_val2_copy_params,
                                   trainstate_th_ref,
                                   trainstate_val_ref,
                                   self_agent=self_agent,
