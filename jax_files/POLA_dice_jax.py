@@ -1047,7 +1047,7 @@ def one_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_th1
                                 trainstate_th2_copy, trainstate_th2_copy_params,
                                 trainstate_val2_copy,
                                 trainstate_val2_copy_params,
-                                trainstate_th2_copy, trainstate_val2_copy)
+                                trainstate_th1_copy, trainstate_val1_copy)
 
 
     if use_baseline:
@@ -1094,7 +1094,7 @@ def first_outer_step_objective_selfagent2(key, trainstate_th1_copy, trainstate_t
                                 trainstate_th2_copy, trainstate_th2_copy_params,
                                 trainstate_val2_copy,
                                 trainstate_val2_copy_params,
-                                trainstate_th2_copy, trainstate_val2_copy)
+                                trainstate_th1_copy, trainstate_val1_copy)
 
 
     if use_baseline:
