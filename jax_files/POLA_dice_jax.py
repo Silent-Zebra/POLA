@@ -570,19 +570,13 @@ def inner_steps_plus_update_otheragent2(key, trainstate_th1, trainstate_th1_para
                                          tx=optax.sgd(
                                              learning_rate=args.lr_v))
 
-    key, reused_subkey = jax.random.split(key)
-    # reuse the subkey to get consistent trajectories for the first batch
-    # This is only needed so I can be consistent with my previous pytorch code for old kl div, should not affect the new code
-    # And does not really have a theoretical or logical grounding really
-    # Recommend not to use the old kl div... I don't think I got it entirely working in the way that I would expect
-
 
     key, subkey = jax.random.split(key)
 
 
 
     # preserving the params we want to diff through on the outer loop (th1)
-    stuff = (reused_subkey, trainstate_th1, trainstate_th1_params,
+    stuff = (subkey, trainstate_th1, trainstate_th1_params,
              trainstate_val1, trainstate_val1_params,
              trainstate_th2_, trainstate_th2_.params,
              trainstate_val2_, trainstate_val2_.params, other_old_trainstate_th,
@@ -625,17 +619,11 @@ def inner_steps_plus_update_otheragent1(key, trainstate_th1, trainstate_th1_para
                                          tx=optax.sgd(
                                              learning_rate=args.lr_v))
 
-    key, reused_subkey = jax.random.split(key)
-    # reuse the subkey to get consistent trajectories for the first batch
-    # This is only needed so I can be consistent with my previous pytorch code
-    # And does not really have a theoretical or logical grounding really
-
-
     key, subkey = jax.random.split(key)
 
 
     # preserving the params we want to diff through on the outer loop (th2)
-    stuff = (reused_subkey, trainstate_th1_, trainstate_th1_.params,
+    stuff = (subkey, trainstate_th1_, trainstate_th1_.params,
              trainstate_val1_, trainstate_val1_.params,
              trainstate_th2, trainstate_th2_params,
              trainstate_val2, trainstate_val2_params, other_old_trainstate_th,
