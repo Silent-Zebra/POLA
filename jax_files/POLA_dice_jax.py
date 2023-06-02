@@ -1,6 +1,9 @@
 # Some parts adapted from https://github.com/alexis-jacq/LOLA_DiCE/blob/master/ipd_DiCE.py
 # Some parts adapted from Chris Lu's MOFOS repo
 
+
+# TODO: FULL CODE REVIEW AND COMMENT EVERYTHING THAT IS HAPPENING.
+
 import numpy as np
 import argparse
 import datetime
@@ -130,6 +133,11 @@ def value_loss(rewards, values, final_state_vals):
 
     gamma_t_r_ts = rewards * discounts
 
+    # sum of discounted rewards (discounted to the first time step); first entry has all the future discounted rewards,
+    # second entry has all the rewards from the second step onwards, but discounted to the first time step!
+    # Thus, dividing by the cumulative discount brings the discounted rewards to the appropriate time step
+    # e.g. after dividing by discounts, you now have the rewards from time step 2 onwards discounted
+    # only up to time step 2
     G_ts = reverse_cumsum(gamma_t_r_ts, axis=0)
     R_ts = G_ts / discounts
 
@@ -194,6 +202,8 @@ class RNN(nn.Module):
             self.linear1 = nn.Dense(features=self.num_hidden_units)
         if self.layers_before_gru >= 2:
             self.linear2 = nn.Dense(features=self.num_hidden_units)
+            # Right now only supports 1 or 2, obviously can add more. Also obviously can put into a list
+            # and use a loop
         self.GRUCell = nn.GRUCell()
         self.linear_end = nn.Dense(features=self.num_outputs)
 
@@ -223,7 +233,7 @@ def get_policies_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_t
                 th_v_trainstate, th_v_trainstate_params, h_p, h_v)
     # Note that I am scanning using xs = obs_hist. Then the scan should work through the
     # array of obs.
-    obs_hist_for_scan = jnp.stack(obs_hist[:args.rollout_len], axis=0)
+    obs_hist_for_scan = jnp.stack(obs_hist[:args.rollout_len], axis=0) # skips final obs (but includes init/start state/obs)
 
     act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, args.rollout_len)
     # act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, obs_hist_for_scan.shape[0])
@@ -234,6 +244,7 @@ def get_policies_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_t
     return cat_act_probs_list
 
 
+# Same as above except just also return values
 @jit
 def get_policies_and_values_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, obs_hist):
 
@@ -248,7 +259,7 @@ def get_policies_and_values_for_states(key, th_p_trainstate, th_p_trainstate_par
                 th_v_trainstate, th_v_trainstate_params, h_p, h_v)
     # Note that I am scanning using xs = obs_hist. Then the scan should work through the
     # array of obs.
-    obs_hist_for_scan = jnp.stack(obs_hist[:args.rollout_len], axis=0)
+    obs_hist_for_scan = jnp.stack(obs_hist[:args.rollout_len], axis=0) # skips final obs (but includes init/start state/obs)
 
     act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, args.rollout_len)
     # act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, obs_hist_for_scan.shape[0])
@@ -258,7 +269,31 @@ def get_policies_and_values_for_states(key, th_p_trainstate, th_p_trainstate_par
 
     return cat_act_probs_list, v_list
 
+# Same as before again, but now returning the h_p and h_v. Only used for OM right now
+def get_policies_and_h_for_states(key, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, obs_hist):
 
+    h_p = jnp.zeros((args.batch_size, args.hidden_size))
+    h_v = None
+    if use_baseline:
+        h_v = jnp.zeros((args.batch_size, args.hidden_size))
+
+    key, subkey = jax.random.split(key)
+
+    act_args = (subkey, th_p_trainstate, th_p_trainstate_params,
+                th_v_trainstate, th_v_trainstate_params, h_p, h_v)
+    # Note that I am scanning using xs = obs_hist. Then the scan should work through the
+    # array of obs.
+    obs_hist_for_scan = jnp.stack(obs_hist[:args.rollout_len], axis=0) # skips final obs (but includes init/start state/obs)
+
+    act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, args.rollout_len)
+    # act_args, aux_lists = jax.lax.scan(act_w_iter_over_obs, act_args, obs_hist_for_scan, obs_hist_for_scan.shape[0])
+
+    a_list, lp_list, v_list, h_p_list, h_v_list, cat_act_probs_list, logits_list = aux_lists
+
+
+    return cat_act_probs_list, h_p_list, h_v_list
+
+# Do for only a single batch; only used for testing/inspection
 @jit
 def get_policies_for_states_onebatch(key, th_p_trainstate, th_p_trainstate_params, th_v_trainstate, th_v_trainstate_params, obs_hist):
 
@@ -352,8 +387,12 @@ def do_env_rollout(key, trainstate_th1, trainstate_th1_params, trainstate_val1,
 
     stuff, aux = jax.lax.scan(env_step, stuff, None, args.rollout_len)
 
+    # unfinished_state_history contains just a single starting obs/state at this point
+    # THen the additional observations during the rollout are added on later
+    # This seems a bit weird but I guess it works. Not exactly sure why I structured it this way
     return stuff, aux, unfinished_state_history
 
+# Do rollouts and calculate objectives for the inner agent (the other_agent)
 @partial(jit, static_argnums=(11))
 def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
                  trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params,
@@ -434,6 +473,12 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
                                                         trainstate_val1,
                                                         trainstate_val1_params,
                                                         inner_agent_state_history)
+    # NOTE the distinction between .params and _params... really confusing, and I
+    # definitely should not ever do confusing notation like that again - use something that is more obviously distinct
+    # But the key point is that the _params is a separate variable
+    # Which I used for the grad calculations
+    # But the old_trainstate (the reference for KL div) should not have a grad on it
+    # so I just use the . to access its trainstate params here
     inner_agent_pol_probs_old = get_policies_for_states(sk2,
                                                         old_trainstate_th,
                                                         old_trainstate_th.params,
@@ -463,6 +508,9 @@ def in_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, tr
     return inner_agent_objective + args.inner_beta * kl_div  # we want to min kl div
 
 
+# We have D_KL(p || q) = E [p (log p - log q)]
+# The forward formulation is p = target, q = curr (target * (log target - log curr))
+# The reverse formulation is p = curr, q = target (curr * (log curr - log target))
 @jit
 def kl_div_jax(curr, target):
     kl_div = (target * (jnp.log(target) - jnp.log(curr))).sum(axis=-1).mean()
@@ -473,6 +521,7 @@ def rev_kl_div_jax(curr, target):
     kl_div = (curr * (jnp.log(curr) - jnp.log(target))).sum(axis=-1).mean()
     return kl_div
 
+# This is a single step of update (inner loop)
 @jit
 def inner_step_get_grad_otheragent2(stuff, unused):
     key, trainstate_th1_, trainstate_th1_params, trainstate_val1_, trainstate_val1_params, \
@@ -499,8 +548,6 @@ def inner_step_get_grad_otheragent2(stuff, unused):
 
     # In old code I didn't update value function on inner loop but also I only used 1 inner step in most experiments
     if use_baseline:
-        # Now this should be correct because I am using dice_objective_plus_value_loss
-        # which has both the policy and the value loss together
         trainstate_val2_ = trainstate_val2_.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
@@ -512,6 +559,7 @@ def inner_step_get_grad_otheragent2(stuff, unused):
 
     return stuff, aux
 
+# This is a single step of update (inner loop)
 @jit
 def inner_step_get_grad_otheragent1(stuff, unused):
     key, trainstate_th1_, trainstate_th1_params, trainstate_val1_, trainstate_val1_params, \
@@ -539,8 +587,6 @@ def inner_step_get_grad_otheragent1(stuff, unused):
 
     # In old code I didn't update value function on inner loop but also I only used 1 inner step in most experiments
     if use_baseline:
-        # Now this should be correct because I am using dice_objective_plus_value_loss
-        # which has both the policy and the value loss together
         trainstate_val1_ = trainstate_val1_.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
@@ -552,7 +598,7 @@ def inner_step_get_grad_otheragent1(stuff, unused):
 
     return stuff, aux
 
-
+# This does all the inner steps + updates (for one outer step)
 @jit
 def inner_steps_plus_update_otheragent2(key, trainstate_th1, trainstate_th1_params,
                             trainstate_val1, trainstate_val1_params,
@@ -561,11 +607,11 @@ def inner_steps_plus_update_otheragent2(key, trainstate_th1, trainstate_th1_para
                             other_old_trainstate_th, other_old_trainstate_val):
 
 
-    trainstate_th2_ = TrainState.create(apply_fn=trainstate_th2.apply_fn,
+    trainstate_th2_prime = TrainState.create(apply_fn=trainstate_th2.apply_fn,
                                         params=trainstate_th2_params,
                                         tx=optax.sgd(
                                             learning_rate=args.lr_in))
-    trainstate_val2_ = TrainState.create(apply_fn=trainstate_val2.apply_fn,
+    trainstate_val2_prime = TrainState.create(apply_fn=trainstate_val2.apply_fn,
                                          params=trainstate_val2_params,
                                          tx=optax.sgd(
                                              learning_rate=args.lr_v))
@@ -578,31 +624,37 @@ def inner_steps_plus_update_otheragent2(key, trainstate_th1, trainstate_th1_para
     # preserving the params we want to diff through on the outer loop (th1)
     stuff = (subkey, trainstate_th1, trainstate_th1_params,
              trainstate_val1, trainstate_val1_params,
-             trainstate_th2_, trainstate_th2_.params,
-             trainstate_val2_, trainstate_val2_.params, other_old_trainstate_th,
+             trainstate_th2_prime, trainstate_th2_prime.params,
+             trainstate_val2_prime, trainstate_val2_prime.params, other_old_trainstate_th,
              other_old_trainstate_val)
 
     stuff, aux = inner_step_get_grad_otheragent2(stuff, None)
 
-    _, _, _, _, _, trainstate_th2_, _, trainstate_val2_, _, _, _ = stuff
+    _, _, _, _, _, trainstate_th2_prime, _, trainstate_val2_prime, _, _, _ = stuff
 
     key, subkey = jax.random.split(key)
 
     if args.inner_steps > 1:
         stuff = (subkey, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
-                 trainstate_th2_, trainstate_th2_.params,
-                 trainstate_val2_, trainstate_val2_.params,
+                 trainstate_th2_prime, trainstate_th2_prime.params,
+                 trainstate_val2_prime, trainstate_val2_prime.params,
                  other_old_trainstate_th, other_old_trainstate_val)
+        # The way this scan loop works: each time the trainstate_th2 (and val) is updated in each loop iter
+        # And its .params are returned after each loop iteration as well
+        # so each new loop takes the gradient using the .params of the previous iteration
+        # while updating the trainstate itself to have the new .params
+        # In this way the loop iterates updating the inner agent
         stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent2, stuff,
                                   None, args.inner_steps - 1)
-        _, _, _, _, _, trainstate_th2_, _, trainstate_val2_, _, _, _ = stuff
+        _, _, _, _, _, trainstate_th2_prime, _, trainstate_val2_prime, _, _, _ = stuff
 
     if use_baseline:
-        return trainstate_th2_, trainstate_val2_
+        return trainstate_th2_prime, trainstate_val2_prime
     else:
-        return trainstate_th2_, None
+        return trainstate_th2_prime, None
 
 
+# This does all the inner steps + updates (for one outer step)
 @jit
 def inner_steps_plus_update_otheragent1(key, trainstate_th1, trainstate_th1_params,
                             trainstate_val1, trainstate_val1_params,
@@ -610,11 +662,11 @@ def inner_steps_plus_update_otheragent1(key, trainstate_th1, trainstate_th1_para
                             trainstate_val2, trainstate_val2_params,
                             other_old_trainstate_th, other_old_trainstate_val):
 
-    trainstate_th1_ = TrainState.create(apply_fn=trainstate_th1.apply_fn,
+    trainstate_th1_prime = TrainState.create(apply_fn=trainstate_th1.apply_fn,
                                         params=trainstate_th1_params,
                                         tx=optax.sgd(
                                             learning_rate=args.lr_in))
-    trainstate_val1_ = TrainState.create(apply_fn=trainstate_val1.apply_fn,
+    trainstate_val1_prime = TrainState.create(apply_fn=trainstate_val1.apply_fn,
                                          params=trainstate_val1_params,
                                          tx=optax.sgd(
                                              learning_rate=args.lr_v))
@@ -623,34 +675,35 @@ def inner_steps_plus_update_otheragent1(key, trainstate_th1, trainstate_th1_para
 
 
     # preserving the params we want to diff through on the outer loop (th2)
-    stuff = (subkey, trainstate_th1_, trainstate_th1_.params,
-             trainstate_val1_, trainstate_val1_.params,
+    stuff = (subkey, trainstate_th1_prime, trainstate_th1_prime.params,
+             trainstate_val1_prime, trainstate_val1_prime.params,
              trainstate_th2, trainstate_th2_params,
              trainstate_val2, trainstate_val2_params, other_old_trainstate_th,
              other_old_trainstate_val)
 
     stuff, aux = inner_step_get_grad_otheragent1(stuff, None)
 
-    _, trainstate_th1_, _, trainstate_val1_, _, _, _, _, _, _, _ = stuff
+    _, trainstate_th1_prime, _, trainstate_val1_prime, _, _, _, _, _, _, _ = stuff
 
     key, subkey = jax.random.split(key)
 
     if args.inner_steps > 1:
-        stuff = (subkey, trainstate_th1_, trainstate_th1_.params, trainstate_val1_, trainstate_val1_.params,
+        stuff = (subkey, trainstate_th1_prime, trainstate_th1_prime.params,
+                 trainstate_val1_prime, trainstate_val1_prime.params,
                  trainstate_th2, trainstate_th2_params,
                  trainstate_val2, trainstate_val2_params,
                  other_old_trainstate_th, other_old_trainstate_val)
         stuff, aux = jax.lax.scan(inner_step_get_grad_otheragent1, stuff,
                                   None, args.inner_steps - 1)
-        _, trainstate_th1_, _, trainstate_val1_, _, _, _, _, _, _, _ = stuff
+        _, trainstate_th1_prime, _, trainstate_val1_prime, _, _, _, _, _, _, _ = stuff
 
     if use_baseline:
-        return trainstate_th1_, trainstate_val1_
+        return trainstate_th1_prime, trainstate_val1_prime
     else:
-        return trainstate_th1_, None
+        return trainstate_th1_prime, None
 
 
-
+# Do rollouts and calculate objectives for the outer agent (the self_agent)
 @partial(jit, static_argnums=(11))
 def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,
                   trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params,
@@ -669,7 +722,9 @@ def out_lookahead(key, trainstate_th1, trainstate_th1_params, trainstate_val1, t
     aux1, aux2, aux_info = aux
     state_history_for_kl_div = unfinished_state_history_for_kl_div
 
-
+    # This is equivalent to just redeclaring stuff like trainstate_th1_params = trainstate_th1_params
+    # Because it is unmodified from the env rollouts.
+    # So this redeclaration is unnecessary (but also shouldn't have any effect)
     key, env_state, obs1, obs2, \
     trainstate_th1, trainstate_th1_params, trainstate_val1, trainstate_val1_params,\
     trainstate_th2, trainstate_th2_params, trainstate_val2, trainstate_val2_params,\
@@ -766,6 +821,11 @@ def one_outer_step_objective_selfagent1(key, trainstate_th1_copy, trainstate_th1
                                 trainstate_val2_copy_params,
                                 trainstate_th2_copy, trainstate_val2_copy
                                 )
+    # It's a bit weird to have trainstate_th2_copy show up twice in the above,
+    # but I believe it ends up all working out fine because inner_steps_plus_update
+    # makes a copy of trainstate_th2_copy before taking updates on it
+    # so that won't affect the second trainstate_th2_copy which is used as the reference
+    # point for KL div.
 
     if use_baseline:
         objective, state_hist_from_rollout = out_lookahead(key, trainstate_th1_copy,
@@ -856,18 +916,13 @@ def one_outer_step_update_selfagent1(stuff, unused):
                                   trainstate_val2_copy.params,
                                   trainstate_th_ref, trainstate_val_ref)
 
-    # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
     trainstate_th1_copy = trainstate_th1_copy.apply_gradients(grads=grad_th)
 
-    # TODO when value update the inner model? Do it at all?
     if use_baseline:
-        # Now this should be correct because I am using dice_objective_plus_value_loss
-        # which has both the policy and the value loss together
         trainstate_val1_copy = trainstate_val1_copy.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
-    stuff = (
-    key, trainstate_th1_copy,  trainstate_val1_copy, trainstate_th2_copy,  trainstate_val2_copy,
+    stuff = (key, trainstate_th1_copy,  trainstate_val1_copy, trainstate_th2_copy,  trainstate_val2_copy,
     trainstate_th_ref, trainstate_val_ref)
     aux = state_hist_from_rollout
 
@@ -895,13 +950,9 @@ def one_outer_step_update_selfagent2(stuff, unused):
                                   trainstate_val2_copy.params,
                                   trainstate_th_ref, trainstate_val_ref)
 
-    # update other's theta: NOTE HERE THIS IS JUST AN SGD UPDATE
     trainstate_th2_copy = trainstate_th2_copy.apply_gradients(grads=grad_th)
 
-    # TODO when value update the inner model? Do it at all?
     if use_baseline:
-        # Now this should be correct because I am using dice_objective_plus_value_loss
-        # which has both the policy and the value loss together
         trainstate_val2_copy = trainstate_val2_copy.apply_gradients(grads=grad_v)
 
     # Since we only need the final trainstate, and not every trainstate every step of the way, no need for aux here
@@ -1402,7 +1453,7 @@ def get_init_trainstates(key, action_size, input_size):
 @jit
 def get_c_e_for_om(key, om_trainstate_th, om_trainstate_th_params, om_trainstate_val, om_trainstate_val_params, other_state_history, other_act_history):
     key, subkey = jax.random.split(key)
-    curr_pol_probs = get_policies_for_states(subkey, om_trainstate_th,
+    curr_pol_probs, h_p_list, h_v_list = get_policies_and_h_for_states(subkey, om_trainstate_th,
                                              om_trainstate_th_params,
                                              om_trainstate_val,
                                              om_trainstate_val_params,
@@ -1419,8 +1470,10 @@ def get_c_e_for_om(key, om_trainstate_th, om_trainstate_th_params, om_trainstate
         axis=-1).mean()
 
 
-    return c_e_loss
+    return c_e_loss, (h_p_list, h_v_list)
 
+# This is just the same value loss as normal
+# For OM we are assuming ability to observe other agents' actions and rewards (or alternatively, you assume the rewards are symmetrical to yours)
 @jit
 def get_val_loss_for_om(key, om_trainstate_th, om_trainstate_th_params, om_trainstate_val, om_trainstate_val_params,
                         other_state_history, other_act_history, rewards, end_state_v):
@@ -1470,25 +1523,35 @@ def opp_model_selfagent1_single_batch(inputstuff, unused ):
 
     other_act_history = jax.nn.one_hot(other_act_history, action_size)
 
-    om_grad_fn = jax.grad(get_c_e_for_om, argnums=2)
+    om_grad_fn = jax.grad(get_c_e_for_om, argnums=2, has_aux=True)
     if use_baseline:
         om_val_grad_fn = jax.grad(get_val_loss_for_om, argnums=4)
 
+    # This repeats training on one batch (one set of rollouts)
     for opp_model_iter in range(args.opp_model_steps_per_batch):
 
         key, subkey = jax.random.split(key)
-        grad_th = om_grad_fn(subkey, om_trainstate_th, om_trainstate_th.params,
+        grad_th, h_lists = om_grad_fn(subkey, om_trainstate_th, om_trainstate_th.params,
                              om_trainstate_val, om_trainstate_val.params,
                              other_state_history, other_act_history)
+        h_p_list, h_v_list = h_lists
 
         om_trainstate_th = om_trainstate_th.apply_gradients(grads=grad_th)
+
+
+        # TODO MAY 31 REMOVE LATER
+        print(h_p_list.shape)
+        print(h_p_list[-1].shape)
 
         if use_baseline:
             # act just to get the final state values
             key, subkey = jax.random.split(key)
+
+            # For OM we should not be using the hidden states of the other agent's RNN
+            # This only affects the OM value function though, so shouldn't make a huge difference in terms of the actual policies learned.
             act_args2 = (
                 subkey, obs2, om_trainstate_th, om_trainstate_th.params,
-                om_trainstate_val, om_trainstate_val.params, h_p2, h_v2)
+                om_trainstate_val, om_trainstate_val.params, h_p_list[-1], h_v_list[-1])
             stuff2, aux2 = act(act_args2, None)
             a2, lp2, v2, h_p2, h_v2, cat_act_probs2, logits2 = aux2
 
@@ -1543,16 +1606,17 @@ def opp_model_selfagent2_single_batch(inputstuff, unused ):
 
     other_act_history = jax.nn.one_hot(other_act_history, action_size)
 
-    om_grad_fn = jax.grad(get_c_e_for_om, argnums=2)
+    om_grad_fn = jax.grad(get_c_e_for_om, argnums=2, has_aux=True)
     if use_baseline:
         om_val_grad_fn = jax.grad(get_val_loss_for_om, argnums=4)
 
     for opp_model_iter in range(args.opp_model_steps_per_batch):
 
         key, subkey = jax.random.split(key)
-        grad_th = om_grad_fn(subkey, om_trainstate_th, om_trainstate_th.params,
+        grad_th, h_lists = om_grad_fn(subkey, om_trainstate_th, om_trainstate_th.params,
                              om_trainstate_val, om_trainstate_val.params,
                              other_state_history, other_act_history)
+        h_p_list, h_v_list = h_lists
 
         om_trainstate_th = om_trainstate_th.apply_gradients(grads=grad_th)
 
@@ -1561,7 +1625,7 @@ def opp_model_selfagent2_single_batch(inputstuff, unused ):
             key, subkey = jax.random.split(key)
             act_args1 = (
                 subkey, obs1, om_trainstate_th, om_trainstate_th.params,
-                om_trainstate_val, om_trainstate_val.params, h_p1, h_v1)
+                om_trainstate_val, om_trainstate_val.params, h_p_list[-1], h_v_list[-1])
             stuff1, aux1 = act(act_args1, None)
             a1, lp1, v1, h_p1, h_v1, cat_act_probs1, logits1 = aux1
 
@@ -1590,6 +1654,9 @@ def opp_model_selfagent1(key, trainstate_th1, trainstate_val1, true_other_trains
     # Essentially when using OM, we are now no longer doing dice update on the trajectories collected directly (which requires parameter access)
     # instead we collect the trajectories first, then build an OM, then rollout using OM and make DiCE/LOLA/POLA update based on that OM
     # Instead of direct rollout using opponent true parameters and update based on that.
+
+    # not sure why I created copies of the om instead of directly using it but I don't think it hurts...
+    # TODO May 31; try a few epochs with no copy and see if it's the same
 
     # Here have prev_om trainstates be the get_init_trainstates on the first iter before the first opp model
     om_trainstate_th = TrainState.create(apply_fn=prev_om_trainstate_th.apply_fn,
@@ -1742,7 +1809,6 @@ def play(key, init_trainstate_th1, init_trainstate_val1, init_trainstate_th2, in
 
         key, subkey = jax.random.split(key)
 
-        key, subkey = jax.random.split(key)
         stuff = (subkey, trainstate_th1_copy, trainstate_val1_copy,
                  trainstate_th2_copy, trainstate_val2_copy,
                  trainstate_th1_ref, trainstate_val1_ref)
@@ -2001,7 +2067,7 @@ if __name__ == "__main__":
         use_baseline = False
 
     assert args.inner_steps >= 1
-    # Use 0 lr if you want no inner steps... TODO allow for this functionality (naive learning)?
+    # Use 0 lr if you want no inner steps... TODO allow for 0 inner steps? Might save computation for naive learning instead of 0 lr
     assert args.outer_steps >= 1
 
 
