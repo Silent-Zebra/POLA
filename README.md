@@ -159,6 +159,8 @@ python LOLA_exact.py --n_agents 2 --print_every 10 --repeats 10 --num_epochs 50 
 
 ## Commands used for Figure 4 (IPD with full history)
 
+![IPD (Figure 4)](figs/fig_ipd.png)
+
 Change the --seed parameter for different seeds.
 
 ### LOLA-DiCE
@@ -174,6 +176,8 @@ python ./jax_files/POLA_dice_jax.py --env ipd  --n_update 101 --gae_lambda 1.0  
 python ./jax_files/POLA_dice_jax.py --env ipd  --n_update 101 --gae_lambda 1.0  --inner_steps 2 --outer_steps 200 --lr_in 0.005 --lr_out 0.003 --lr_v 0.0005 --batch_size 2000 --rollout_len 50  --print_every 1 --inner_beta 10 --outer_beta 100 --seed 10 --layers_before_gru 1 --checkpoint_every 10 --hidden_size 64 --opp_model --opp_model_steps 1 --opp_model_data_batches 200 --om_lr_p 0.005 --om_lr_v 0.0005
 
 ## Commands used for Figure 5 (coin game)
+
+![Coin Game (Figure 5)](figs/fig_coin.png)
 
 Change the --seed parameter for different seeds.
 
