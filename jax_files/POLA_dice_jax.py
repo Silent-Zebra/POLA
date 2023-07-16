@@ -1539,10 +1539,6 @@ def opp_model_selfagent1_single_batch(inputstuff, unused ):
         om_trainstate_th = om_trainstate_th.apply_gradients(grads=grad_th)
 
 
-        # TODO MAY 31 REMOVE LATER
-        print(h_p_list.shape)
-        print(h_p_list[-1].shape)
-
         if use_baseline:
             # act just to get the final state values
             key, subkey = jax.random.split(key)
