@@ -1,0 +1,10 @@
+# Python 3.10
+tensorflow==2.9.0
+tensorflow_probability
+numpy==1.24.1
+scipy==1.9.0
+flax==0.6.3
+jax==0.3.25
+https://storage.googleapis.com/jax-releases/nocuda/jaxlib-0.3.25-cp310-cp310-manylinux2014_x86_64.whl
+orbax==0.1.0
+tensorflow_probability==0.17.0
