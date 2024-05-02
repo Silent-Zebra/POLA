@@ -1,0 +1,14 @@
+*.py[co]
+__pycache__/
+.tox/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+*.bak
+.coverage
+pytest_report*.html
+.ipynb_checkpoints
+*.zip
+checkpoint_*
